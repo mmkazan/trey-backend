@@ -40,9 +40,9 @@ OUTPUT FORMAT: Return ONLY raw JSON:
 }
 `;
 
-    // Direct REST API Call using stable gemini-1.5-flash
+    // Updated directly for Gemini 3.6 Flash
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
