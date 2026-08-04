@@ -44,7 +44,7 @@ STRICT RULES FOR THE REPLY DRAFT:
 4. Sign-off: Always end the response strictly with "- ${signOffName}".
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     const result = await model.generateContent(prompt);
     const replyDraft = result.response.text().trim();
 
