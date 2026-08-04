@@ -1,16 +1,14 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Initialize Gemini API with your key stored in Netlify environment variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Custom sign-off mapping for specific business owners
 const signOffMap = {
-  "Raven Holistics": "Naomi",
-  "Salt Therapy Room": "Matthew"
+  "raven holistics": "Naomi",
+  "salt therapy room": "Matthew",
+  "salt room": "Matthew"
 };
 
 exports.handler = async (event, context) => {
-  // Only allow POST requests
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
@@ -18,17 +16,24 @@ exports.handler = async (event, context) => {
   try {
     const data = JSON.parse(event.body);
 
-    // Extract dynamic fields from payload (with sensible defaults)
     const businessName = data.businessName || "Raven Holistics";
-    const businessType = data.businessType || "holistic health & wellness";
+    const businessType = data.businessType || "business";
     const reviewer = data.reviewer || "Valued Customer";
     const rating = data.rating || 5;
     const reviewText = data.reviewText || "";
+    
+    // Onboarding settings: "individual" vs "company"
+    const perspective = (data.perspective || "individual").toLowerCase();
+    
+    // Determine sign-off name
+    const lookupKey = businessName.toLowerCase().trim();
+    const signOffName = signOffMap[lookupKey] || data.signOff || businessName;
 
-    // Determine sign-off: Uses signOffMap first, then custom payload signOff, or defaults to businessName
-    const signOffName = signOffMap[businessName] || data.signOff || businessName;
+    // Set voice instructions based on perspective choice
+    const voiceGuidance = perspective === "company"
+      ? 'Use plural voice/pronouns ("we", "our", "us") representing the team.'
+      : 'Use first-person singular voice/pronouns ("I", "my", "I\'m") representing an individual owner.';
 
-    // Construct the strict, dynamic prompt for Gemini
     const prompt = `
 You are an AI assistant drafting Google Review replies for ${businessName}, a ${businessType} business.
 
@@ -38,25 +43,27 @@ REVIEW DETAILS:
 - Review Text: "${reviewText}"
 
 STRICT RULES FOR THE REPLY DRAFT:
-1. Grounding: NEVER invent specific services, treatments, products, or staff members that are NOT explicitly mentioned in the review text above.
-2. Short/Generic Reviews: If the review text is brief or generic (e.g., "Great service!"), keep the reply short, warm, and broad (e.g., "Thank you for taking the time to leave us a review! We're so glad you had a great experience.").
-3. Tone: Warm, professional, and appreciative.
-4. Sign-off: Always end the response strictly with "- ${signOffName}".
+1. Perspective: ${voiceGuidance}
+2. Grounding: NEVER invent specific services, treatments, products, or staff members NOT explicitly mentioned in the review text.
+3. Short/Generic Reviews: If the review text is brief (e.g., "Great service!"), keep the reply short, warm, and broad.
+4. Tone: Friendly, appreciative, and professional.
+5. Sign-off: Always end the response strictly with "- ${signOffName}".
     `;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-3.6-flash",
+      generationConfig: { temperature: 0.0 }
+    });
+    
     const result = await model.generateContent(prompt);
     const replyDraft = result.response.text().trim();
 
-    // Return structured payload ready for Make.com / Twilio
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         businessName,
-        reviewer,
-        rating,
-        reviewText,
+        perspective,
         signOffName,
         replyDraft
       }),
