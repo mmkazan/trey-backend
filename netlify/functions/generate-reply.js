@@ -45,7 +45,9 @@ Rules for the reply:
 5. Specificity: MANDATORY. Address specific details mentioned in the comment.
 6. Length: Keep it concise (2–3 sentences max).
 7. Sign-off: Do NOT add closing words like "Warmly," or "Best,". Simply end with a clean double line break, followed strictly by "${publicSignOffName}" on its own line.`;
-
+8. Language: Use UK English spelling strictly (e.g., use "centre" not "center", "apologise" not "apologize").
+9. Business Location Reference: If referring to the venue, use "${businessType}" or "${businessName}" instead of generic terms like "the centre".
+  
     if (!process.env.GEMINI_API_KEY) {
       throw new Error("GEMINI_API_KEY environment variable is missing in Netlify.");
     }
