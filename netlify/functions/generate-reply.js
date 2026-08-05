@@ -1,5 +1,4 @@
 exports.handler = async (event, context) => {
-  // Only allow POST requests
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
@@ -19,16 +18,16 @@ exports.handler = async (event, context) => {
       reviewerName = "there",
       rating = 5,
       comment = "",
+      businessPhone = "",
+      source = "Google Direct",
     } = body;
 
-    // Determine pronoun style based on voice perspective
     const pronounRule =
       voicePerspective.toLowerCase() === "individual"
         ? "Write in the first-person singular ('I', 'my', 'me')."
         : "Write in the first-person plural ('we', 'our', 'us').";
 
-    // System prompt tailored for Gemini 3.6 Flash
-    const systemPrompt = `You are writing an authentic reply to a Google review for ${businessName} (a ${businessType} business).
+    const systemPrompt = `You are writing an authentic reply to a review for ${businessName} (a ${businessType} business) received via ${source}.
 
 Review Details:
 - Reviewer: ${reviewerName}
@@ -39,7 +38,7 @@ Rules for the reply:
 1. Greeting: Always start with a polite greeting (e.g., "Hi ${reviewerName}," or "Dear ${reviewerName},").
 2. Tone: 
    - For 4-5 star reviews: Warm, enthusiastic, personal, and appreciative.
-   - For 1-3 star reviews: Serious, empathetic, professional, and urgent. Never use bracketed placeholders like [phone/email].
+   - For 1-3 star reviews: Serious, empathetic, professional, and urgent. Never use bracketed placeholders like [phone/email]. Express immediate concern and offer to connect offline.
 3. Contact Info (Low Ratings):
    ${businessPhone ? `- Direct customer to call ${businessPhone}` : '- Invite them to reach out directly to your team offline without using placeholders like [insert email].'}
 4. Perspective: ${pronounRule}
@@ -51,7 +50,7 @@ Rules for the reply:
       throw new Error("GEMINI_API_KEY environment variable is missing in Netlify.");
     }
 
-    // Call Gemini 3.6 Flash API directly via fetch
+    // Call Gemini 3.6 Flash API
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
@@ -78,6 +77,7 @@ Rules for the reply:
         replyDraft: replyDraft,
         publicSignOffName: publicSignOffName,
         businessName: businessName,
+        source: source,
       }),
     };
   } catch (error) {
