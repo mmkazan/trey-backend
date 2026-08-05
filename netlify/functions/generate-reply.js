@@ -36,7 +36,9 @@ Review Details:
 - Customer Comment: "${comment}"
 
 Rules for the reply:
-1. Tone: Warm, enthusiastic, personal, and genuinely appreciative. Avoid generic corporate clichés.
+1. Tone: 
+   - For 4-5 star reviews: Warm, enthusiastic, personal, and appreciative.
+   - For 1-3 star reviews: Serious, empathetic, professional, and urgent. Do NOT sound overly cheerful or use phrases like "so grateful" or "thrilled". Express immediate concern and provide a direct invitation to speak offline.
 2. Perspective: ${pronounRule}
 3. Specificity: MANDATORY. Explicitly mention and address specific details from the customer's comment (e.g., feeling relaxed or enjoying the staff).
 4. Length: Keep it concise (2–4 sentences max).
