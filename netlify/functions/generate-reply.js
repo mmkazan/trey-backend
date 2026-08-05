@@ -37,8 +37,7 @@ Rules for the reply:
 2. Perspective: ${pronounRule}
 3. Specificity: MANDATORY. Explicitly mention and address specific details from the customer's comment (e.g. feeling relaxed or enjoying the staff).
 4. Length: Keep it concise (2–4 sentences max).
-5. Sign-off: MUST end with a warm closing line on its own line, followed strictly by "${publicSignOffName}".`;
-
+5. Sign-off: Do NOT add closing words like "Warmly," or "Best,". Simply end with a clean double line break, followed strictly by "${publicSignOffName}".
     if (!process.env.GEMINI_API_KEY) {
       throw new Error("GEMINI_API_KEY environment variable is missing in Netlify.");
     }
