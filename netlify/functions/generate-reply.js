@@ -1,4 +1,5 @@
 exports.handler = async (event, context) => {
+  // Only allow POST requests
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
@@ -20,11 +21,13 @@ exports.handler = async (event, context) => {
       comment = "",
     } = body;
 
+    // Determine pronoun style based on voice perspective
     const pronounRule =
       voicePerspective.toLowerCase() === "individual"
         ? "Write in the first-person singular ('I', 'my', 'me')."
         : "Write in the first-person plural ('we', 'our', 'us').";
 
+    // System prompt tailored for Gemini 3.6 Flash
     const systemPrompt = `You are writing an authentic reply to a Google review for ${businessName} (a ${businessType} business).
 
 Review Details:
@@ -35,14 +38,15 @@ Review Details:
 Rules for the reply:
 1. Tone: Warm, enthusiastic, personal, and genuinely appreciative. Avoid generic corporate clichés.
 2. Perspective: ${pronounRule}
-3. Specificity: MANDATORY. Explicitly mention and address specific details from the customer's comment (e.g. feeling relaxed or enjoying the staff).
+3. Specificity: MANDATORY. Explicitly mention and address specific details from the customer's comment (e.g., feeling relaxed or enjoying the staff).
 4. Length: Keep it concise (2–4 sentences max).
-5. Sign-off: Do NOT add closing words like "Warmly," or "Best,". Simply end with a clean double line break, followed strictly by "${publicSignOffName}".
+5. Sign-off: Do NOT add closing words like "Warmly," or "Best,". Simply end with a clean double line break, followed strictly by "${publicSignOffName}" on its own line.`;
+
     if (!process.env.GEMINI_API_KEY) {
       throw new Error("GEMINI_API_KEY environment variable is missing in Netlify.");
     }
 
-    // Call Gemini API directly via fetch
+    // Call Gemini 3.6 Flash API directly via fetch
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
