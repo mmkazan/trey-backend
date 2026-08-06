@@ -1,11 +1,14 @@
 exports.handler = async (event, context) => {
   const { accountId, locationId, reviewId, replyText, token } = event.queryStringParameters || {};
 
+  // TOGGLE: Set to true while waiting for Google ticket approval
+  const MOCK_MODE = true; 
+
   // 1. Security Check
   if (!token || token !== process.env.TREY_TAPPY_SECRET_TOKEN) {
     return {
       statusCode: 403,
-      headers: { 'Content-Type': 'text/html' },
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
       body: `
         <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #f8fafc;">
           <h1 style="color: #ef4444; font-size: 48px; margin-bottom: 10px;">⛔ Unauthorized</h1>
@@ -16,47 +19,43 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    // 2. Fetch fresh Access Token from Google using OAuth credentials
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-        grant_type: 'refresh_token',
-      })
-    });
+    if (!MOCK_MODE) {
+      // Live Google API Execution (Runs when Google approves access)
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: process.env.GOOGLE_CLIENT_ID,
+          client_secret: process.env.GOOGLE_CLIENT_SECRET,
+          refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+          grant_type: 'refresh_token',
+        })
+      });
 
-    const tokenData = await tokenResponse.json();
+      const tokenData = await tokenResponse.json();
+      if (!tokenResponse.ok) throw new Error(tokenData.error_description || 'Token refresh failed');
 
-    if (!tokenResponse.ok) {
-      throw new Error(tokenData.error_description || 'Failed to refresh access token');
+      const googleApiUrl = `https://mybusiness.googleapis.com/v4/accounts/${accountId}/locations/${locationId}/reviews/${reviewId}/reply`;
+
+      const replyResponse = await fetch(googleApiUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${tokenData.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ comment: replyText })
+      });
+
+      if (!replyResponse.ok) {
+        const errorData = await replyResponse.json();
+        throw new Error(JSON.stringify(errorData));
+      }
     }
 
-    const accessToken = tokenData.access_token;
-
-    // 3. Post reply to Google Business Profile API
-    const googleApiUrl = `https://mybusiness.googleapis.com/v4/accounts/${accountId}/locations/${locationId}/reviews/${reviewId}/reply`;
-
-    const replyResponse = await fetch(googleApiUrl, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ comment: replyText })
-    });
-
-    if (!replyResponse.ok) {
-      const errorData = await replyResponse.json();
-      throw new Error(JSON.stringify(errorData));
-    }
-
-    // 4. Return Mobile Success UI
+    // 2. Return Mobile Success UI Screen
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'text/html' },
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
       body: `
         <!DOCTYPE html>
         <html>
@@ -84,15 +83,14 @@ exports.handler = async (event, context) => {
     };
 
   } catch (error) {
-    console.error("Google API Error:", error.message);
-    
+    console.error("API Error:", error.message);
     return {
       statusCode: 500,
-      headers: { 'Content-Type': 'text/html' },
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
       body: `
         <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #f8fafc;">
           <h1 style="color: #ef4444; font-size: 36px; margin-bottom: 10px;">⚠️ Posting Failed</h1>
-          <p style="color: #475569; font-size: 16px;">Could not connect to Google Business API. ${error.message}</p>
+          <p style="color: #475569; font-size: 16px;">Error: ${error.message}</p>
         </body>
       `
     };
