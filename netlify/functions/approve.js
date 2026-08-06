@@ -1,10 +1,7 @@
-const axios = require('axios');
-
 exports.handler = async (event, context) => {
-  // 1. Extract query parameters from WhatsApp click
-  const { accountId, locationId, reviewId, replyText, token } = event.queryStringParameters;
+  const { accountId, locationId, reviewId, replyText, token } = event.queryStringParameters || {};
 
-  // 2. Security Check (Validate secret token)
+  // 1. Security Check
   if (!token || token !== process.env.TREY_TAPPY_SECRET_TOKEN) {
     return {
       statusCode: 403,
@@ -19,26 +16,44 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    // 3. Obtain Google API Access Token (Stored in env or refreshed)
-    const googleAccessToken = process.env.GOOGLE_BUSINESS_ACCESS_TOKEN;
+    // 2. Fetch fresh Access Token from Google using OAuth credentials
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+        grant_type: 'refresh_token',
+      })
+    });
 
-    // 4. Construct Google Business Profile API endpoint
-    // Endpoint: accounts/{accountId}/locations/{locationId}/reviews/{reviewId}/reply
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok) {
+      throw new Error(tokenData.error_description || 'Failed to refresh access token');
+    }
+
+    const accessToken = tokenData.access_token;
+
+    // 3. Post reply to Google Business Profile API
     const googleApiUrl = `https://mybusiness.googleapis.com/v4/accounts/${accountId}/locations/${locationId}/reviews/${reviewId}/reply`;
 
-    // 5. Post the reply directly to Google
-    await axios.put(
-      googleApiUrl,
-      { comment: replyText },
-      {
-        headers: {
-          'Authorization': `Bearer ${googleAccessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    const replyResponse = await fetch(googleApiUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ comment: replyText })
+    });
 
-    // 6. Return mobile-friendly success confirmation screen
+    if (!replyResponse.ok) {
+      const errorData = await replyResponse.json();
+      throw new Error(JSON.stringify(errorData));
+    }
+
+    // 4. Return Mobile Success UI
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'text/html' },
@@ -69,7 +84,7 @@ exports.handler = async (event, context) => {
     };
 
   } catch (error) {
-    console.error("Google API Error:", error.response ? error.response.data : error.message);
+    console.error("Google API Error:", error.message);
     
     return {
       statusCode: 500,
@@ -77,7 +92,7 @@ exports.handler = async (event, context) => {
       body: `
         <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #f8fafc;">
           <h1 style="color: #ef4444; font-size: 36px; margin-bottom: 10px;">⚠️ Posting Failed</h1>
-          <p style="color: #475569; font-size: 16px;">Could not connect to Google Business API. Please check your credentials or try again later.</p>
+          <p style="color: #475569; font-size: 16px;">Could not connect to Google Business API. ${error.message}</p>
         </body>
       `
     };
