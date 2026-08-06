@@ -2,6 +2,7 @@
   "name": "trey-backend",
   "version": "1.0.0",
   "dependencies": {
-    "@google/generative-ai": "^0.21.0"
+    "@google/generative-ai": "^0.21.0",
+    "@netlify/blobs": "^8.1.0"
   }
 }
