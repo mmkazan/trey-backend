@@ -20,7 +20,7 @@ exports.handler = async (event) => {
   }
 
   const token = (event.queryStringParameters || {}).token || requestBody.token;
-  if (!token || token !== process.env.TREY_TAPPY_SECRET_TOKEN) {
+  if (!token || token !== process.env.CLIENT_ADMIN_TOKEN) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
