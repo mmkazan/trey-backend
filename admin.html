@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trey Admin | Clients</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --muted: #64748b;
+    --accent: #16a34a;
+    --accent-hover: #15803d;
+    --danger: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 {
+    font-size: 18px;
+    margin: 0;
+  }
+  header .sub {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 15px;
+    margin: 0 0 14px 0;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    margin-top: 10px;
+  }
+  input, select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 16px;
+  }
+  .actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+  }
+  button {
+    border: none;
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-secondary {
+    background: #f1f5f9;
+    color: var(--text);
+  }
+  .btn-danger {
+    background: #fef2f2;
+    color: var(--danger);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--muted); font-weight: 600; }
+  tr:hover { background: #f8fafc; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    background: #f0fdf4;
+    color: #166534;
+  }
+  #status {
+    font-size: 13px;
+    margin-top: 10px;
+    min-height: 18px;
+  }
+  #status.error { color: var(--danger); }
+  #status.success { color: var(--accent); }
+  #tokenGate {
+    max-width: 420px;
+    margin: 80px auto;
+    text-align: center;
+  }
+  .muted-link {
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+
+<div id="tokenGate" class="card">
+  <h2>Trey Admin</h2>
+  <label for="tokenInput">Admin token</label>
+  <input type="password" id="tokenInput" placeholder="Paste your CLIENT_ADMIN_TOKEN" />
+  <div class="actions">
+    <button class="btn-primary" onclick="saveToken()">Enter</button>
+  </div>
+  <p id="gateStatus" class="muted"></p>
+</div>
+
+<div id="app" style="display:none;">
+  <header>
+    <div>
+      <h1>Trey Admin — Clients</h1>
+      <div class="sub">Managed via Netlify Blobs</div>
+    </div>
+    <span class="muted-link" onclick="logout()">Sign out</span>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2 id="formTitle">Add a client</h2>
+      <div class="grid">
+        <div>
+          <label>Location ID *</label>
+          <input id="f_locationId" placeholder="e.g. loc_derby_101" />
+        </div>
+        <div>
+          <label>Business name</label>
+          <input id="f_businessName" placeholder="e.g. Mik'S Cars" />
+        </div>
+        <div>
+          <label>Business type</label>
+          <input id="f_businessType" placeholder="e.g. MOT" />
+        </div>
+        <div>
+          <label>WhatsApp number</label>
+          <input id="f_phone" placeholder="+447941052034" />
+        </div>
+        <div>
+          <label>Email</label>
+          <input id="f_email" placeholder="owner@business.com" />
+        </div>
+        <div>
+          <label>Google Account ID</label>
+          <input id="f_googleAccountId" placeholder="Google Business account ID" />
+        </div>
+        <div>
+          <label>Voice perspective</label>
+          <select id="f_voicePerspective">
+            <option value="Individual">Individual (I/my/me)</option>
+            <option value="Company">Company (we/our/us)</option>
+          </select>
+        </div>
+        <div>
+          <label>Public sign-off name</label>
+          <input id="f_publicSignOffName" placeholder="e.g. Mik" />
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn-primary" onclick="saveClient()">Save client</button>
+        <button class="btn-secondary" onclick="resetForm()">Clear form</button>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>All clients</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Location ID</th>
+            <th>Business</th>
+            <th>WhatsApp</th>
+            <th>Perspective</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="clientRows">
+          <tr><td colspan="5" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script>
+  const API = "/.netlify/functions/client";
+  let token = sessionStorage.getItem("treyAdminToken") || "";
+
+  function saveToken() {
+    const val = document.getElementById("tokenInput").value.trim();
+    if (!val) return;
+    token = val;
+    sessionStorage.setItem("treyAdminToken", val);
+    boot();
+  }
+
+  function logout() {
+    sessionStorage.removeItem("treyAdminToken");
+    token = "";
+    document.getElementById("app").style.display = "none";
+    document.getElementById("tokenGate").style.display = "block";
+  }
+
+  function setStatus(msg, type) {
+    const el = document.getElementById("status");
+    el.textContent = msg;
+    el.className = type || "";
+  }
+
+  function resetForm() {
+    ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName"]
+      .forEach((k) => document.getElementById("f_" + k).value = "");
+    document.getElementById("f_voicePerspective").value = "Individual";
+    document.getElementById("f_locationId").disabled = false;
+    document.getElementById("formTitle").textContent = "Add a client";
+    setStatus("", "");
+  }
+
+  async function loadClients() {
+    const rowsEl = document.getElementById("clientRows");
+    rowsEl.innerHTML = '<tr><td colspan="5" class="muted">Loading…</td></tr>';
+    try {
+      const res = await fetch(`${API}?token=${encodeURIComponent(token)}`);
+      if (res.status === 403) { logout(); return; }
+      const clients = await res.json();
+      if (!Array.isArray(clients) || clients.length === 0) {
+        rowsEl.innerHTML = '<tr><td colspan="5" class="muted">No clients yet.</td></tr>';
+        return;
+      }
+      rowsEl.innerHTML = clients.map((c) => `
+        <tr>
+          <td>${c.locationId || ""}</td>
+          <td>${c.businessName || ""}<br><span class="muted" style="font-size:11px;">${c.businessType || ""}</span></td>
+          <td>${c.phone || "<span class=\\"muted\\">—</span>"}</td>
+          <td><span class="pill">${c.voicePerspective || "Individual"}</span></td>
+          <td><span class="muted-link" onclick='editClient(${JSON.stringify(c).replace(/'/g, "&apos;")})'>Edit</span></td>
+        </tr>
+      `).join("");
+    } catch (err) {
+      rowsEl.innerHTML = `<tr><td colspan="5" class="muted">Failed to load: ${err.message}</td></tr>`;
+    }
+  }
+
+  function editClient(c) {
+    document.getElementById("f_locationId").value = c.locationId || "";
+    document.getElementById("f_locationId").disabled = true;
+    document.getElementById("f_businessName").value = c.businessName || "";
+    document.getElementById("f_businessType").value = c.businessType || "";
+    document.getElementById("f_phone").value = c.phone || "";
+    document.getElementById("f_email").value = c.email || "";
+    document.getElementById("f_googleAccountId").value = c.googleAccountId || "";
+    document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
+    document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
+    document.getElementById("formTitle").textContent = "Edit client";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveClient() {
+    const locationId = document.getElementById("f_locationId").value.trim();
+    if (!locationId) {
+      setStatus("Location ID is required.", "error");
+      return;
+    }
+    const payload = {
+      token,
+      locationId,
+      businessName: document.getElementById("f_businessName").value.trim(),
+      businessType: document.getElementById("f_businessType").value.trim(),
+      phone: document.getElementById("f_phone").value.trim(),
+      email: document.getElementById("f_email").value.trim(),
+      googleAccountId: document.getElementById("f_googleAccountId").value.trim(),
+      voicePerspective: document.getElementById("f_voicePerspective").value,
+      publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),
+    };
+    setStatus("Saving…", "");
+    try {
+      const res = await fetch(API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 403) { logout(); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      setStatus("Saved.", "success");
+      resetForm();
+      loadClients();
+    } catch (err) {
+      setStatus(`Failed to save: ${err.message}`, "error");
+    }
+  }
+
+  function boot() {
+    document.getElementById("tokenGate").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    loadClients();
+  }
+
+  if (token) {
+    boot();
+  }
+</script>
+
+</body>
+</html>
