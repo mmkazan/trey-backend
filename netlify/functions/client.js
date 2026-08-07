@@ -3,11 +3,20 @@ const { getStore } = require("@netlify/blobs");
 // Simple admin endpoint to add, update, and list client records in
 // Netlify Blobs. Protected by the same secret token used elsewhere.
 //
-// GET  /.netlify/functions/client?token=...&locationId=...   -> one client
-// GET  /.netlify/functions/client?token=...                  -> all clients
-// POST /.netlify/functions/client                             -> add/update
+// GET  /.netlify/functions/client?token=...&locationId=... -> one client
+// GET  /.netlify/functions/client?token=...                 -> all clients
+// POST /.netlify/functions/client                            -> add/update
 //      body: { token, locationId, businessName, businessType, phone,
-//               email, googleAccountId, voicePerspective, publicSignOffName }
+//               email, googleAccountId, voicePerspective, publicSignOffName,
+//               initialGoogleRating, initialReviewCount }
+//
+// GET responses are enriched with tapReviews / organicReviews counts
+// (tracked by review-webhook.js) so the admin UI can show review
+// volume broken down by source since sign-up.
+
+function blobsStore(name) {
+  return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+}
 
 exports.handler = async (event) => {
   let requestBody = {};
@@ -24,7 +33,18 @@ exports.handler = async (event) => {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
-  const clientsStore = getStore({ name: "clients", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+  const clientsStore = blobsStore("clients");
+  const statsStore = blobsStore("stats");
+
+  async function withStats(client) {
+    if (!client) return client;
+    const stats = (await statsStore.get(client.locationId, { type: "json" })) || {};
+    return {
+      ...client,
+      tapReviews: stats.tapReviews || 0,
+      organicReviews: stats.organicReviews || 0,
+    };
+  }
 
   if (event.httpMethod === "POST") {
     const { locationId } = requestBody;
@@ -48,11 +68,11 @@ exports.handler = async (event) => {
     if (locationId) {
       const client = await clientsStore.get(locationId, { type: "json" });
       if (!client) return { statusCode: 404, body: JSON.stringify({ error: "Not found" }) };
-      return { statusCode: 200, body: JSON.stringify(client) };
+      return { statusCode: 200, body: JSON.stringify(await withStats(client)) };
     }
     const { blobs } = await clientsStore.list();
     const clients = await Promise.all(
-      blobs.map((b) => clientsStore.get(b.key, { type: "json" }))
+      blobs.map(async (b) => withStats(await clientsStore.get(b.key, { type: "json" })))
     );
     return { statusCode: 200, body: JSON.stringify(clients) };
   }
