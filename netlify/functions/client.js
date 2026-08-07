@@ -35,14 +35,20 @@ exports.handler = async (event) => {
 
   const clientsStore = blobsStore("clients");
   const statsStore = blobsStore("stats");
+  const tapTallyStore = blobsStore("taptally");
 
   async function withStats(client) {
     if (!client) return client;
     const stats = (await statsStore.get(client.locationId, { type: "json" })) || {};
+    const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const tally = (await tapTallyStore.get(`${client.locationId}:${monthKey}`, { type: "json" })) || {};
+    const total = (await tapTallyStore.get(`${client.locationId}:total`, { type: "json" })) || {};
     return {
       ...client,
       tapReviews: stats.tapReviews || 0,
       organicReviews: stats.organicReviews || 0,
+      tapsThisMonth: tally.taps || 0,
+      tapsSinceSignup: total.taps || 0,
     };
   }
 
@@ -52,12 +58,19 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
     }
     const existing = (await clientsStore.get(locationId, { type: "json" })) || {};
+    const isNewClient = !existing.createdAt;
     const record = {
       ...existing,
       ...requestBody,
       updatedAt: new Date().toISOString(),
       createdAt: existing.createdAt || new Date().toISOString(),
     };
+    // Brand-new sign-ups start on the 14-day trial clock enforced by tap.js.
+    // Pre-existing clients keep whatever they have (no status = grandfathered
+    // active), so no live stand pauses unexpectedly when this ships.
+    if (isNewClient && !record.subscriptionStatus) {
+      record.subscriptionStatus = "trial";
+    }
     delete record.token;
     await clientsStore.setJSON(locationId, record);
     return { statusCode: 200, body: JSON.stringify({ success: true, client: record }) };
