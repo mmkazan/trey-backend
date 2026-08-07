@@ -2,9 +2,14 @@ const { getStore } = require("@netlify/blobs");
 
 // Replaces the old Make.com "02 - Review Webhook & Approval" scenario.
 // Matches an incoming Google review to a recent NFC tap, looks up the
-// client record, generates an AI reply draft, and sends a WhatsApp alert.
+// client record, generates an AI reply draft, stores it for approval,
+// and sends a short WhatsApp alert with a link to the approve page.
 
 const TAP_WINDOW_MINUTES = 10;
+
+function blobsStore(name) {
+  return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
@@ -18,15 +23,17 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON" }) };
   }
 
-  const { locationId, reviewId, reviewerName, rating, comment } = body;
+  const { locationId, reviewerName, rating, comment } = body;
+  const reviewId = body.reviewId || `rev_${Date.now()}`;
 
   if (!locationId) {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
   }
 
-  const tapsStore = getStore({ name: "taps", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
-  const clientsStore = getStore({ name: "clients", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
-  const statsStore = getStore({ name: "stats", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+  const tapsStore = blobsStore("taps");
+  const clientsStore = blobsStore("clients");
+  const statsStore = blobsStore("stats");
+  const reviewsStore = blobsStore("reviews");
 
   // 1. Check for a recent, unprocessed tap for this location.
   let source = "Organic Review";
@@ -48,7 +55,7 @@ exports.handler = async (event) => {
     return { statusCode: 404, body: JSON.stringify({ error: "Unknown location" }) };
   }
 
-  // 3. Update simple tap-vs-organic stats (used for weekly/monthly digests later).
+  // 3. Update simple tap-vs-organic stats.
   const stats = (await statsStore.get(locationId, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
   if (source.startsWith("Trey Tappy")) {
     stats.tapReviews += 1;
@@ -89,22 +96,40 @@ exports.handler = async (event) => {
     return { statusCode: 502, body: JSON.stringify({ error: "Failed to generate reply" }) };
   }
 
-  // 5. Send the WhatsApp alert via Twilio.
+  // 5. Save the pending approval (looked up by approve.js) and the
+  //    permanent review record (used by the monthly report page).
+  const reviewRecord = {
+    reviewId,
+    locationId,
+    accountId: client.googleAccountId || "",
+    businessName: client.businessName,
+    reviewerName,
+    rating,
+    comment,
+    source,
+    replyDraft,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+
+  await reviewsStore.setJSON(`pending:${reviewId}`, reviewRecord);
+
+  const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+  await reviewsStore.setJSON(`review:${locationId}:${monthKey}:${reviewId}`, reviewRecord);
+
+  // 6. Send the WhatsApp alert via Twilio — short message, link only.
   const approveUrl =
-    `${siteUrl}/.netlify/functions/approve?accountId=${encodeURIComponent(client.googleAccountId || "")}` +
-    `&locationId=${encodeURIComponent(locationId)}` +
-    `&reviewId=${encodeURIComponent(reviewId || "")}` +
-    `&replyText=${encodeURIComponent(replyDraft)}` +
+    `${siteUrl}/.netlify/functions/approve?reviewId=${encodeURIComponent(reviewId)}` +
     `&token=${encodeURIComponent(process.env.TREY_TAPPY_SECRET_TOKEN)}`;
 
   const messageBody =
-    `\u2b50 *New Google Review Received!* \u2b50\n` +
+    `\u2b50 *New review \u2014 ${client.businessName}* \u2b50\n` +
     `\ud83d\udccc *Via ${source}*\n\n` +
     `*Rating:* ${rating} \u2b50\n` +
     `*Reviewer:* ${reviewerName}\n` +
     `*Review:* "${comment}"\n\n` +
-    `*Draft AI Response:*\n"${replyDraft}"\n\n` +
-    `*To approve & post this reply, click below:*\n${approveUrl}`;
+    `\ud83d\udc49 View & approve reply:\n${approveUrl}\n\n` +
+    `\u2014 Trey`;
 
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
   const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
@@ -139,6 +164,6 @@ exports.handler = async (event) => {
   return {
     statusCode: 200,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ success: true, source }),
+    body: JSON.stringify({ success: true, source, reviewId }),
   };
 };
