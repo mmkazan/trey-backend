@@ -255,12 +255,11 @@
             <th>Location ID</th>
             <th>Business</th>
             <th>WhatsApp</th>
-            <th>Perspective</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="clientRows">
-          <tr><td colspan="5" class="muted">Loading…</td></tr>
+          <tr><td colspan="4" class="muted">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -326,6 +325,8 @@
     ["Business type", "businessType"],
     ["WhatsApp number", "phone"],
     ["Email", "email"],
+    ["Current Google rating", "googleRating"],
+    ["Total review count", "reviewCount"],
     ["Google Location ID", "locationId"],
     ["Google Account ID", "googleAccountId"],
     ["Voice perspective", "voicePerspective"],
@@ -354,14 +355,14 @@
 
   async function loadClients() {
     const rowsEl = document.getElementById("clientRows");
-    rowsEl.innerHTML = '<tr><td colspan="5" class="muted">Loading…</td></tr>';
+    rowsEl.innerHTML = '<tr><td colspan="4" class="muted">Loading…</td></tr>';
     try {
       const res = await fetch(`${API}?token=${encodeURIComponent(token)}`);
       if (res.status === 403) { logout(); return; }
       const clients = await res.json();
       clientsCache = Array.isArray(clients) ? clients : [];
       if (clientsCache.length === 0) {
-        rowsEl.innerHTML = '<tr><td colspan="5" class="muted">No clients yet.</td></tr>';
+        rowsEl.innerHTML = '<tr><td colspan="4" class="muted">No clients yet.</td></tr>';
         return;
       }
       rowsEl.innerHTML = clientsCache.map((c, i) => `
@@ -369,12 +370,11 @@
           <td>${c.locationId || ""}</td>
           <td>${c.businessName || ""}<br><span class="muted" style="font-size:11px;">${c.businessType || ""}</span></td>
           <td>${c.phone || '<span class="muted">—</span>'}</td>
-          <td><span class="pill">${c.voicePerspective || "Individual"}</span></td>
           <td><span class="muted-link" onclick='event.stopPropagation(); editClient(clientsCache[${i}])'>Edit</span></td>
         </tr>
       `).join("");
     } catch (err) {
-      rowsEl.innerHTML = `<tr><td colspan="5" class="muted">Failed to load: ${err.message}</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="4" class="muted">Failed to load: ${err.message}</td></tr>`;
     }
   }
 
