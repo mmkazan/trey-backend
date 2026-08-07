@@ -24,9 +24,9 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
   }
 
-  const tapsStore = getStore("taps");
-  const clientsStore = getStore("clients");
-  const statsStore = getStore("stats");
+  const tapsStore = getStore({ name: "taps", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+  const clientsStore = getStore({ name: "clients", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+  const statsStore = getStore({ name: "stats", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 
   // 1. Check for a recent, unprocessed tap for this location.
   let source = "Organic Review";
