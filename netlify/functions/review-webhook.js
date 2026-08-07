@@ -131,9 +131,31 @@ exports.handler = async (event) => {
     `\ud83d\udc49 View & approve reply:\n${approveUrl}\n\n` +
     `\u2014 Trey`;
 
+    const contentSid = process.env.TWILIO_APPROVAL_CONTENT_SID;
+    const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+
+    const clean = (v, max = 600) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+
+    const twilioParams = messagingServiceSid
+      ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
+          : { To: `whatsapp:${client.phone}`, From: process.env.TWILIO_WHATSAPP_FROM };
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
   const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
   const twilioFrom = process.env.TWILIO_WHATSAPP_FROM;
+
+    if (contentSid) {
+          twilioParams.ContentSid = contentSid;
+          twilioParams.ContentVariables = JSON.stringify({
+                  1: clean(client.businessName, 60),
+                  2: clean(source, 60),
+                  3: clean(rating, 12),
+                  4: clean(reviewerName, 60),
+                  5: clean(comment, 500) || "(no comment left)",
+                  6: encodeURIComponent(reviewId),
+          });
+    } else {
+          twilioParams.Body = messageBody;
+    }
 
   try {
     const twilioResp = await fetch(
@@ -144,11 +166,7 @@ exports.handler = async (event) => {
           Authorization: "Basic " + Buffer.from(`${twilioSid}:${twilioAuth}`).toString("base64"),
           "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: new URLSearchParams({
-          To: `whatsapp:${client.phone}`,
-          From: twilioFrom,
-          Body: messageBody,
-        }),
+                body: new URLSearchParams(twilioParams),
       }
     );
 
