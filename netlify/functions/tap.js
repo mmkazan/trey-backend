@@ -5,7 +5,7 @@ exports.handler = async (event) => {
 
   if (locationId) {
     try {
-      const tapsStore = getStore("taps");
+      const tapsStore = getStore({ name: "taps", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
       await tapsStore.setJSON(locationId, {
         timestamp: new Date().toISOString(),
         processed: false,
