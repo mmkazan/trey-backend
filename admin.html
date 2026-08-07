@@ -275,7 +275,7 @@
         <tr>
           <td>${c.locationId || ""}</td>
           <td>${c.businessName || ""}<br><span class="muted" style="font-size:11px;">${c.businessType || ""}</span></td>
-          <td>${c.phone || "<span class=\\"muted\\">—</span>"}</td>
+          <td>${c.phone || '<span class="muted">—</span>'}</td>
           <td><span class="pill">${c.voicePerspective || "Individual"}</span></td>
           <td><span class="muted-link" onclick='editClient(${JSON.stringify(c).replace(/'/g, "&apos;")})'>Edit</span></td>
         </tr>
