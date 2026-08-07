@@ -44,7 +44,30 @@
   button.submit:disabled { opacity: 0.6; cursor: default; }
   #status { font-size: 13px; margin-top: 10px; min-height: 18px; text-align: center; }
   #status.error { color: var(--danger); }
-  #status.success { color: var(--accent); }
+  #status.success { display: none; }
+
+  #successOverlay {
+    display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.5);
+    align-items: center; justify-content: center; padding: 20px; z-index: 100;
+  }
+  #successOverlay.show { display: flex; }
+  .successCard {
+    background: white; border-radius: 20px; padding: 36px 28px; max-width: 360px; width: 100%;
+    text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+  }
+  .successIcon {
+    width: 72px; height: 72px; border-radius: 50%; background: #dcfce7;
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; font-size: 36px;
+  }
+  .successCard h2 { margin: 0 0 6px; font-size: 20px; color: var(--text); }
+  .successCard p { margin: 0 0 26px; font-size: 14px; color: var(--muted); }
+  .successCard button {
+    width: 100%; padding: 13px; border-radius: 12px; font-size: 15px; font-weight: 600;
+    border: none; cursor: pointer; margin-bottom: 10px;
+  }
+  .btn-primary-lg { background: var(--accent); color: white; }
+  .btn-primary-lg:hover { background: var(--accent-hover); }
+  .btn-secondary-lg { background: #f1f5f9; color: var(--text); }
 </style>
 </head>
 <body>
@@ -234,6 +257,11 @@
     return ok;
   }
 
+  function addAnother() {
+    document.getElementById("successOverlay").classList.remove("show");
+    document.getElementById("f_firstName").focus();
+  }
+
   async function handleSave() {
     if (!validate()) return;
     const btn = document.getElementById("submitBtn");
@@ -274,7 +302,8 @@
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
-      setStatus(`✓ ${payload.businessName} added`, "success");
+      document.getElementById("successSub").textContent = `${payload.businessName} has been added to Trey.`;
+      document.getElementById("successOverlay").classList.add("show");
       document.getElementById("onboardForm").reset();
       document.getElementById("f_phone").value = "+44 ";
       setVoice("Individual");
@@ -285,6 +314,16 @@
     }
   }
 </script>
+
+<div id="successOverlay">
+  <div class="successCard">
+    <div class="successIcon">✅</div>
+    <h2 id="successTitle">Client added</h2>
+    <p id="successSub">has been added to Trey.</p>
+    <button class="btn-primary-lg" onclick="addAnother()">Add another client</button>
+    <button class="btn-secondary-lg" onclick="location.href='/admin.html'">Return to Trey Admin</button>
+  </div>
+</div>
 
 </body>
 </html>
