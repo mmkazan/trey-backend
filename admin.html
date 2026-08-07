@@ -54,6 +54,13 @@
     font-size: 15px;
     margin: 0 0 14px 0;
   }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .card-header h2 { margin: 0; }
   label {
     display: block;
     font-size: 12px;
@@ -109,7 +116,7 @@
     border-bottom: 1px solid var(--border);
   }
   th { color: var(--muted); font-weight: 600; }
-  tr:hover { background: #f8fafc; }
+  tr:hover { background: #f8fafc; cursor: pointer; }
   .pill {
     display: inline-block;
     padding: 2px 8px;
@@ -136,6 +143,23 @@
     cursor: pointer;
     text-decoration: underline;
   }
+
+  /* Detail view */
+  .detailGrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 24px;
+    margin-bottom: 16px;
+  }
+  .detailGrid .field label {
+    margin-top: 0;
+    margin-bottom: 2px;
+  }
+  .detailGrid .field .val {
+    font-size: 14px;
+    color: var(--text);
+  }
+  .detailGrid .field .val.empty { color: #cbd5e1; }
 </style>
 </head>
 <body>
@@ -160,8 +184,11 @@
   </header>
 
   <main>
-    <div class="card">
-      <h2 id="formTitle">Add a client</h2>
+    <div class="card" id="formCard" style="display:none;">
+      <div class="card-header">
+        <h2 id="formTitle">Add a client</h2>
+        <span class="muted-link" onclick="hideForm()">Close</span>
+      </div>
       <div class="grid">
         <div>
           <label>Location ID *</label>
@@ -206,8 +233,22 @@
       <div id="status"></div>
     </div>
 
+    <div class="card" id="detailCard" style="display:none;">
+      <div class="card-header">
+        <h2 id="detailTitle">Client details</h2>
+        <span class="muted-link" onclick="hideDetail()">Close</span>
+      </div>
+      <div class="detailGrid" id="detailGrid"></div>
+      <div class="actions">
+        <button class="btn-primary" onclick="editFromDetail()">Edit client</button>
+      </div>
+    </div>
+
     <div class="card">
-      <h2>All clients</h2>
+      <div class="card-header">
+        <h2>All clients</h2>
+        <button class="btn-primary" onclick="openAddForm()">+ Add new client</button>
+      </div>
       <table>
         <thead>
           <tr>
@@ -229,6 +270,7 @@
 <script>
   const API = "/.netlify/functions/client";
   let token = sessionStorage.getItem("treyAdminToken") || "";
+  let clientsCache = [];
 
   function saveToken() {
     const val = document.getElementById("tokenInput").value.trim();
@@ -260,6 +302,56 @@
     setStatus("", "");
   }
 
+  function showForm() {
+    document.getElementById("detailCard").style.display = "none";
+    document.getElementById("formCard").style.display = "block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function hideForm() {
+    document.getElementById("formCard").style.display = "none";
+  }
+
+  function openAddForm() {
+    resetForm();
+    showForm();
+  }
+
+  function hideDetail() {
+    document.getElementById("detailCard").style.display = "none";
+  }
+
+  const DETAIL_FIELDS = [
+    ["Business name", "businessName"],
+    ["Business type", "businessType"],
+    ["WhatsApp number", "phone"],
+    ["Email", "email"],
+    ["Google Location ID", "locationId"],
+    ["Google Account ID", "googleAccountId"],
+    ["Voice perspective", "voicePerspective"],
+    ["Public sign-off name", "publicSignOffName"],
+  ];
+
+  function showDetail(c) {
+    document.getElementById("formCard").style.display = "none";
+    document.getElementById("detailTitle").textContent = c.businessName || c.locationId;
+    document.getElementById("detailGrid").innerHTML = DETAIL_FIELDS.map(([label, key]) => `
+      <div class="field">
+        <label>${label}</label>
+        <div class="val ${c[key] ? "" : "empty"}">${c[key] || "Not set"}</div>
+      </div>
+    `).join("");
+    document.getElementById("detailCard").dataset.locationId = c.locationId;
+    document.getElementById("detailCard").style.display = "block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function editFromDetail() {
+    const locationId = document.getElementById("detailCard").dataset.locationId;
+    const c = clientsCache.find((x) => x.locationId === locationId);
+    if (c) editClient(c);
+  }
+
   async function loadClients() {
     const rowsEl = document.getElementById("clientRows");
     rowsEl.innerHTML = '<tr><td colspan="5" class="muted">Loading…</td></tr>';
@@ -267,17 +359,18 @@
       const res = await fetch(`${API}?token=${encodeURIComponent(token)}`);
       if (res.status === 403) { logout(); return; }
       const clients = await res.json();
-      if (!Array.isArray(clients) || clients.length === 0) {
+      clientsCache = Array.isArray(clients) ? clients : [];
+      if (clientsCache.length === 0) {
         rowsEl.innerHTML = '<tr><td colspan="5" class="muted">No clients yet.</td></tr>';
         return;
       }
-      rowsEl.innerHTML = clients.map((c) => `
-        <tr>
+      rowsEl.innerHTML = clientsCache.map((c, i) => `
+        <tr onclick="showDetail(clientsCache[${i}])">
           <td>${c.locationId || ""}</td>
           <td>${c.businessName || ""}<br><span class="muted" style="font-size:11px;">${c.businessType || ""}</span></td>
           <td>${c.phone || '<span class="muted">—</span>'}</td>
           <td><span class="pill">${c.voicePerspective || "Individual"}</span></td>
-          <td><span class="muted-link" onclick='editClient(${JSON.stringify(c).replace(/'/g, "&apos;")})'>Edit</span></td>
+          <td><span class="muted-link" onclick='event.stopPropagation(); editClient(clientsCache[${i}])'>Edit</span></td>
         </tr>
       `).join("");
     } catch (err) {
@@ -296,7 +389,7 @@
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
     document.getElementById("formTitle").textContent = "Edit client";
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    showForm();
   }
 
   async function saveClient() {
@@ -328,8 +421,8 @@
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
-      setStatus("Saved.", "success");
       resetForm();
+      hideForm();
       loadClients();
     } catch (err) {
       setStatus(`Failed to save: ${err.message}`, "error");
