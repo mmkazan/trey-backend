@@ -24,7 +24,7 @@ exports.handler = async (event) => {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
-  const clientsStore = getStore("clients");
+  const clientsStore = getStore({ name: "clients", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 
   if (event.httpMethod === "POST") {
     const { locationId } = requestBody;
