@@ -5,10 +5,18 @@ const { getStore } = require("@netlify/blobs");
 // client record, generates an AI reply draft, stores it for approval,
 // and sends a short WhatsApp alert with a link to the approve page.
 
-const TAP_WINDOW_MINUTES = 10;
+const TAP_WINDOW_MINUTES = 60;
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+}
+
+// Monday (UTC) of the given date's week, as YYYY-MM-DD — the weekly key.
+function weekKey(d) {
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = date.getUTCDay(); // 0=Sun .. 6=Sat
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? -6 : 1 - day));
+  return date.toISOString().slice(0, 10);
 }
 
 exports.handler = async (event) => {
@@ -63,6 +71,27 @@ exports.handler = async (event) => {
     stats.organicReviews += 1;
   }
   await statsStore.setJSON(locationId, stats);
+
+  // 3b. Period buckets by source (this week Mon-Sun + this month) for the
+  //     weekly and monthly reports. Wrapped so a tally hiccup never blocks the
+  //     actual review reply + WhatsApp alert below.
+  try {
+    const reviewTallyStore = blobsStore("reviewtally");
+    const isTap = source.startsWith("Trey Tappy");
+    const now = new Date();
+    const periodKeys = [
+      `${locationId}:week:${weekKey(now)}`,
+      `${locationId}:${now.toISOString().slice(0, 7)}`,
+    ];
+    for (const pKey of periodKeys) {
+      const bucket = (await reviewTallyStore.get(pKey, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
+      if (isTap) bucket.tapReviews += 1;
+      else bucket.organicReviews += 1;
+      await reviewTallyStore.setJSON(pKey, bucket);
+    }
+  } catch (err) {
+    console.error("Review tally error:", err);
+  }
 
   // 4. Generate the AI reply draft by calling the existing generate-reply function.
   const siteUrl = process.env.URL || "https://treyv1.netlify.app";
@@ -131,31 +160,42 @@ exports.handler = async (event) => {
     `\ud83d\udc49 View & approve reply:\n${approveUrl}\n\n` +
     `\u2014 Trey`;
 
-    const contentSid = process.env.TWILIO_APPROVAL_CONTENT_SID;
-    const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-
-    const clean = (v, max = 600) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
-
-    const twilioParams = messagingServiceSid
-      ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
-          : { To: `whatsapp:${client.phone}`, From: process.env.TWILIO_WHATSAPP_FROM };
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
   const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
   const twilioFrom = process.env.TWILIO_WHATSAPP_FROM;
+  const contentSid = process.env.TWILIO_APPROVAL_CONTENT_SID;
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
 
-    if (contentSid) {
-          twilioParams.ContentSid = contentSid;
-          twilioParams.ContentVariables = JSON.stringify({
-                  1: clean(client.businessName, 60),
-                  2: clean(source, 60),
-                  3: clean(rating, 12),
-                  4: clean(reviewerName, 60),
-                  5: clean(comment, 500) || "(no comment left)",
-                  6: encodeURIComponent(reviewId),
-          });
-    } else {
-          twilioParams.Body = messageBody;
-    }
+  // WhatsApp template variables must be single-line (no newlines/tabs, no runs
+  // of 4+ spaces) and reasonably short, or Twilio rejects the send.
+  const clean = (v, max = 600) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+
+  // Choose sender: a Messaging Service (if configured) or the WhatsApp number.
+  // From and MessagingServiceSid are mutually exclusive.
+  const twilioParams = messagingServiceSid
+    ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
+    : { To: `whatsapp:${client.phone}`, From: twilioFrom };
+
+  if (contentSid) {
+    // Approved template path — delivers reliably outside the 24h session
+    // window and renders the "View & approve" CTA button. Variable order must
+    // match the template definition in whatsapp-template.json.
+    twilioParams.ContentSid = contentSid;
+    twilioParams.ContentVariables = JSON.stringify({
+      1: clean(client.businessName, 60),
+      2: clean(source, 60),
+      3: clean(rating, 12),
+      4: clean(reviewerName, 60),
+      5: clean(comment, 500) || "(no comment left)",
+      // Appended verbatim to the button URL's ?reviewId= — pre-encode so any
+      // special characters in a Google review id survive the round-trip.
+      6: encodeURIComponent(reviewId),
+    });
+  } else {
+    // Fallback: freeform session message. Only delivers if the client has
+    // messaged the Trey number within the last 24 hours.
+    twilioParams.Body = messageBody;
+  }
 
   try {
     const twilioResp = await fetch(
@@ -166,7 +206,7 @@ exports.handler = async (event) => {
           Authorization: "Basic " + Buffer.from(`${twilioSid}:${twilioAuth}`).toString("base64"),
           "Content-Type": "application/x-www-form-urlencoded",
         },
-                body: new URLSearchParams(twilioParams),
+        body: new URLSearchParams(twilioParams),
       }
     );
 
