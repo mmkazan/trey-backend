@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trey Leads</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  :root{--bg:#f8fafc;--card:#fff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--accent:#16a34a;--accent2:#059669;--danger:#dc2626;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);}
+  header{padding:18px 24px;border-bottom:1px solid var(--border);background:var(--card);display:flex;align-items:center;justify-content:space-between;}
+  header h1{font-size:18px;margin:0;}
+  header .sub{color:var(--muted);font-size:13px;}
+  a.nav,.muted-link{color:var(--muted);font-size:13px;text-decoration:none;cursor:pointer;}
+  a.nav:hover{color:var(--text);}
+  main{max-width:1000px;margin:0 auto;padding:22px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:18px;}
+  h2{font-size:15px;margin:0 0 12px;}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px;}
+  input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;}
+  textarea{min-height:60px;resize:vertical;}
+  button{border:none;border-radius:6px;padding:9px 16px;font-size:14px;cursor:pointer;}
+  .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#15803d;}
+  .btn-secondary{background:#f1f5f9;color:var(--text);}
+  .btn-danger{background:#fef2f2;color:var(--danger);}
+  .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap;}
+  .row>div{flex:1;min-width:160px;}
+  .counts{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 18px;}
+  .count{background:var(--card);border:1px solid var(--border);border-radius:999px;padding:6px 14px;font-size:13px;}
+  .count b{margin-right:5px;}
+  .lead{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;}
+  .lead-head{display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;}
+  .lead-head:hover{background:#f8fafc;}
+  .tier{font-weight:800;font-size:12px;padding:3px 8px;border-radius:6px;white-space:nowrap;}
+  .t1{background:#dcfce7;color:#166534;}.t2{background:#fef9c3;color:#854d0e;}.t3{background:#f1f5f9;color:#475569;}
+  .score{font-weight:800;font-size:16px;width:34px;text-align:center;}
+  .lead-main{flex:1;min-width:0;}
+  .lead-name{font-weight:600;font-size:15px;}
+  .lead-sub{color:var(--muted);font-size:12px;}
+  .pill{font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;border:none;cursor:pointer;white-space:nowrap;}
+  .s-New{background:#e2e8f0;color:#334155;}.s-Contacted{background:#dbeafe;color:#1e40af;}
+  .s-Ontrial{background:#fef9c3;color:#854d0e;}.s-Converted{background:#dcfce7;color:#166534;}.s-Lost{background:#fee2e2;color:#991b1b;}
+  .badge{font-size:10px;font-weight:700;padding:3px 7px;border-radius:5px;}
+  .b-client{background:#dcfce7;color:#166534;}.b-flag{background:#fee2e2;color:#991b1b;}.b-thin{background:#f1f5f9;color:#64748b;}
+  .lead-detail{padding:0 16px 16px;border-top:1px solid var(--border);display:none;}
+  .hook{background:#f8fafc;border-left:3px solid var(--accent2);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;margin:12px 0;color:#334155;}
+  .reasons{font-size:12px;color:var(--muted);margin:6px 0 12px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
+  .statusbtns{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0;}
+  .statusbtns .pill{opacity:.55;}.statusbtns .pill.active{opacity:1;outline:2px solid rgba(0,0,0,.12);}
+  #status{font-size:13px;margin-top:8px;min-height:16px;}
+  #status.error{color:var(--danger);}#status.success{color:var(--accent);}
+  .gate{max-width:420px;margin:80px auto;text-align:center;}
+  .muted{color:var(--muted);font-size:13px;}
+  a{color:var(--accent2);}
+</style>
+</head>
+<body>
+
+<div id="gate" class="card gate">
+  <h2>Trey Leads</h2>
+  <label for="tokenInput">Admin token</label>
+  <input type="password" id="tokenInput" placeholder="Your CLIENT_ADMIN_TOKEN" />
+  <div style="margin-top:12px;"><button class="btn-primary" onclick="saveToken()">Enter</button></div>
+</div>
+
+<div id="app" style="display:none;">
+  <header>
+    <div><h1>Trey Leads</h1><div class="sub">Scored prospects &amp; outreach pipeline</div></div>
+    <div><a class="nav" href="admin.html">← Clients</a> &nbsp;·&nbsp; <span class="muted-link" onclick="logout()">Sign out</span></div>
+  </header>
+  <main>
+    <div class="card">
+      <h2>Add leads</h2>
+      <div class="row">
+        <div style="flex:2;">
+          <label>Quick add — business name</label>
+          <input id="q_name" placeholder="e.g. Smith's Garage" onkeydown="if(event.key==='Enter')quickAdd()" />
+        </div>
+        <div style="flex:0;"><button class="btn-primary" onclick="quickAdd()">Add</button></div>
+      </div>
+      <label style="margin-top:16px;">Bulk upload — drop your Apify city export (or a Trey scored CSV)</label>
+      <div class="row">
+        <div style="flex:2;"><input type="file" id="csvFile" accept=".csv" /></div>
+        <div style="flex:0;"><button class="btn-primary" onclick="uploadCSV()">Upload &amp; score</button></div>
+        <div style="flex:0;"><button class="btn-secondary" onclick="exportCSV()">Export CSV</button></div>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div class="counts" id="counts"></div>
+    <div id="leadList"></div>
+  </main>
+</div>
+
+<script>
+  const API = "/.netlify/functions/leads";
+  const STATUSES = ["New","Contacted","On trial","Converted","Lost"];
+  let token = sessionStorage.getItem("treyAdminToken") || "";
+  let LEADS = [];
+
+  function saveToken(){ const v=document.getElementById("tokenInput").value.trim(); if(!v)return; token=v; sessionStorage.setItem("treyAdminToken",v); boot(); }
+  function logout(){ sessionStorage.removeItem("treyAdminToken"); token=""; document.getElementById("app").style.display="none"; document.getElementById("gate").style.display="block"; }
+  function setStatus(m,t){ const e=document.getElementById("status"); e.textContent=m; e.className=t||""; }
+
+  // ---------- helpers ----------
+  const fne=(row,keys)=>{ for(const k of keys){ const v=(row[k]||"").toString().trim(); if(v)return v; } return ""; };
+  const toNum=v=>{ const n=parseFloat(v); return isNaN(n)?null:n; };
+  const clsStatus=s=>"s-"+(s||"New").replace(/\s/g,"");
+  function fmtDate(d){ if(!d||isNaN(d))return""; const p=n=>String(n).padStart(2,"0"); return p(d.getDate())+"/"+p(d.getMonth()+1)+"/"+d.getFullYear(); }
+  const esc=v=>{ v=(v==null?"":String(v)); const d=document.createElement("div"); d.textContent=v; return d.innerHTML; };
+
+  // ---------- v2 scoring (mirrors docs/lead-scoring-spec.md) ----------
+  function scoreApify(row){
+    if((row["permanentlyClosed"]||"").toLowerCase()==="true"||(row["temporarilyClosed"]||"").toLowerCase()==="true") return null;
+    const rating=toNum(fne(row,["totalScore","rating","stars"]));
+    const rcRaw=toNum(fne(row,["reviewsCount","userRatingsCount"]));
+    const reviewCount=rcRaw==null?0:Math.round(rcRaw);
+    const revs=[]; let i=0;
+    while(("reviews/"+i+"/stars") in row){
+      const s=(row["reviews/"+i+"/stars"]||"").toString().trim();
+      if(s){ const d=new Date((row["reviews/"+i+"/publishedAtDate"]||"").trim());
+        revs.push({stars:Math.round(parseFloat(s)),dt:isNaN(d)?null:d,text:(row["reviews/"+i+"/text"]||"").trim(),resp:(row["reviews/"+i+"/responseFromOwnerText"]||"").trim()}); }
+      i++;
+    }
+    const responded=revs.filter(r=>r.resp).length;
+    const rate=revs.length?responded/revs.length:null;
+    const poor=revs.filter(r=>r.stars<=3&&!r.resp);
+    const REF=new Date();
+    const recent=poor.filter(r=>r.dt&&(REF-r.dt)/86400000<=365);
+    const phone=fne(row,["phone","phoneUnformatted"]);
+    const email=fne(row,Array.from({length:17},(_,n)=>"emails/"+n));
+    const website=(row["website"]||"").trim();
+    const R=[]; let A=0;
+    if(rate!==null){ if(rate===0){A=25;R.push("0% replies +25");} else if(rate<0.30){A=18;R.push(Math.round(rate*100)+"% replies +18");} else if(rate<0.60){A=8;R.push(Math.round(rate*100)+"% replies +8");} }
+    let B=0;
+    if(rating!==null){ if(rating>=4.0&&rating<=4.7){B=25;R.push(rating+"★ sweet spot +25");} else if((rating>=3.5&&rating<4.0)||(rating>4.7&&rating<=4.9)){B=15;R.push(rating+"★ +15");} else if(rating>4.9){B=12;R.push(rating+"★ near-perfect +12");} else if(rating>=3.0&&rating<3.5){B=8;R.push(rating+"★ +8");} }
+    const C=Math.min(recent.length*7,20); if(C)R.push(recent.length+" recent unanswered +"+C);
+    let D; if(reviewCount>=25&&reviewCount<=300)D=15; else if((reviewCount>=10&&reviewCount<25)||(reviewCount>300&&reviewCount<=800))D=10; else if(reviewCount>800)D=6; else D=4;
+    R.push(reviewCount+" reviews +"+D);
+    const E=(phone?6:0)+(email?6:0)+(website?3:0); if(E)R.push("contact +"+E);
+    const total=A+B+C+D+E;
+    const tier=total>=72?1:(total>=52?2:3);
+    const flag=(rating!==null&&rating<3.0)?"LOW RATING":(reviewCount<10?"THIN":"");
+    let hook=""; const pool=recent.length?recent:poor;
+    if(pool.length){ const L=pool.slice().sort((a,b)=>(b.dt||0)-(a.dt||0))[0]; const t=L.text.slice(0,120)+(L.text.length>120?"...":""); hook="["+L.stars+"★ "+fmtDate(L.dt)+"] \""+t+"\""; }
+    return {placeId:(row["placeId"]||"").trim(),businessName:(row["title"]||"").trim(),category:fne(row,["categoryName","categories/0"]),
+      email,phone,website,rating,reviewCount,ownerResponseRate:rate===null?"n/a":Math.round(rate*100)+"%",recentUnanswered:recent.length,
+      hook,scoreReasons:R.join(" · "),flag,reviewUrl:(row["placeId"]?"https://search.google.com/local/writereview?placeid="+row["placeId"]:""),
+      address:(row["address"]||"").trim(),tier,score:total,outreachStatus:"New"};
+  }
+  function fromScored(row){
+    return {businessName:(row["Business Name"]||"").trim(),category:(row["Category"]||"").trim(),email:(row["Primary Email"]||"").trim(),
+      phone:(row["Phone"]||"").replace(/^'/,"").trim(),rating:toNum(row["Google Rating"]),reviewCount:parseInt(row["Total Reviews"])||0,
+      ownerResponseRate:(row["Owner Response Rate"]||"").trim(),recentUnanswered:parseInt(row["Recent Unanswered Poor Reviews"]||row["Unanswered Poor Reviews Count"])||0,
+      hook:(row["Key Sales Hook / Review Sample"]||"").trim(),scoreReasons:(row["Score Reasons"]||"").trim(),flag:(row["Flag"]||"").trim(),
+      reviewUrl:(row["Direct Review URL"]||"").trim(),website:(row["Website"]||"").trim(),address:(row["Address"]||"").trim(),
+      tier:parseInt(row["Tier"])||null,score:parseInt(row["Score"]),outreachStatus:(row["Outreach Status"]||"New").trim()||"New"};
+  }
+
+  // ---------- upload ----------
+  function uploadCSV(){
+    const f=document.getElementById("csvFile").files[0];
+    if(!f){ setStatus("Choose a CSV file first.","error"); return; }
+    setStatus("Reading "+f.name+"…","");
+    Papa.parse(f,{header:true,skipEmptyLines:true,complete:async(res)=>{
+      const rows=res.data; if(!rows.length){ setStatus("No rows found.","error"); return; }
+      const first=rows[0]; let list=[];
+      if(("Business Name" in first)||("Tier" in first)){ list=rows.map(fromScored).filter(l=>l.businessName); }
+      else if("title" in first){ list=rows.map(scoreApify).filter(Boolean); }
+      else { setStatus("Unrecognised CSV — expected an Apify export or a Trey scored file.","error"); return; }
+      setStatus("Saving "+list.length+" leads…","");
+      try{ await bulkSave(list); setStatus("Added "+list.length+" leads.","success"); loadLeads(); }
+      catch(e){ setStatus("Upload failed: "+e.message,"error"); }
+    },error:(e)=>setStatus("Could not read file: "+e.message,"error")});
+  }
+  async function bulkSave(list){
+    for(let i=0;i<list.length;i+=50){
+      const batch=list.slice(i,i+50);
+      const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,leads:batch})});
+      if(r.status===403){ logout(); throw new Error("Unauthorized"); }
+      if(!r.ok) throw new Error("HTTP "+r.status);
+    }
+  }
+  async function quickAdd(){
+    const name=document.getElementById("q_name").value.trim(); if(!name)return;
+    await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,lead:{businessName:name,outreachStatus:"New"}})});
+    document.getElementById("q_name").value=""; loadLeads();
+  }
+
+  // ---------- actions ----------
+  async function post(payload){ const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,...payload})}); if(r.status===403){logout();return;} return r; }
+  async function cycleStatus(i){ const l=LEADS[i]; const idx=STATUSES.indexOf(l.outreachStatus); const next=STATUSES[(idx+1)%STATUSES.length]; await post({lead:{id:l.id,outreachStatus:next}}); loadLeads(); }
+  async function setStatusTo(i,s){ await post({lead:{id:LEADS[i].id,outreachStatus:s}}); loadLeads(); }
+  async function saveLead(i){ const l=LEADS[i]; const g=id=>document.getElementById(id+"_"+i).value.trim();
+    await post({lead:{id:l.id,businessType:g("bt"),contactName:g("cn"),phone:g("ph"),email:g("em"),notes:g("nt")}}); loadLeads(); }
+  async function delLead(i){ await post({delete:LEADS[i].id}); loadLeads(); }
+  function toggle(i){ const d=document.getElementById("detail_"+i); d.style.display=d.style.display==="block"?"none":"block"; }
+
+  // ---------- render ----------
+  async function loadLeads(){
+    const list=document.getElementById("leadList");
+    list.innerHTML='<div class="muted" style="padding:10px;">Loading…</div>';
+    try{
+      const r=await fetch(API+"?token="+encodeURIComponent(token)); if(r.status===403){logout();return;}
+      LEADS=await r.json(); if(!Array.isArray(LEADS))LEADS=[];
+      LEADS.sort((a,b)=>((a.tier||3)-(b.tier||3))||((b.score||-1)-(a.score||-1)));
+      render();
+    }catch(e){ list.innerHTML='<div class="muted" style="padding:10px;">Failed to load: '+esc(e.message)+'</div>'; }
+  }
+  function render(){
+    // counts
+    const c={}; STATUSES.forEach(s=>c[s]=0); LEADS.forEach(l=>{ c[l.outreachStatus]=(c[l.outreachStatus]||0)+1; });
+    document.getElementById("counts").innerHTML='<span class="count"><b>'+LEADS.length+'</b>total</span>'+
+      STATUSES.map(s=>'<span class="count"><b>'+(c[s]||0)+'</b>'+s+'</span>').join("");
+    // leads
+    if(!LEADS.length){ document.getElementById("leadList").innerHTML='<div class="card muted">No leads yet — add one above or upload a CSV.</div>'; return; }
+    document.getElementById("leadList").innerHTML=LEADS.map((l,i)=>leadCard(l,i)).join("");
+  }
+  function leadCard(l,i){
+    const tier=l.tier?("t"+l.tier):"t3";
+    const badges=(l.isClient?'<span class="badge b-client">Client ✓</span>':'')+
+      (l.flag==="LOW RATING"?'<span class="badge b-flag">LOW RATING</span>':'')+
+      (l.flag==="THIN"?'<span class="badge b-thin">THIN</span>':'');
+    const sub=[l.category,(l.rating!=null?l.rating+"★":""),(l.reviewCount!=null?l.reviewCount+" reviews":""),(l.ownerResponseRate?l.ownerResponseRate+" replies":"")].filter(Boolean).join(" · ");
+    return '<div class="lead">'+
+      '<div class="lead-head" onclick="toggle('+i+')">'+
+        '<span class="tier '+tier+'">'+(l.tier?("T"+l.tier):"—")+'</span>'+
+        '<span class="score">'+(l.score!=null?l.score:"—")+'</span>'+
+        '<span class="lead-main"><div class="lead-name">'+esc(l.businessName||"(no name)")+' '+badges+'</div><div class="lead-sub">'+esc(sub)+'</div></span>'+
+        '<button class="pill '+clsStatus(l.outreachStatus)+'" onclick="event.stopPropagation();cycleStatus('+i+')">'+esc(l.outreachStatus||"New")+'</button>'+
+      '</div>'+
+      '<div class="lead-detail" id="detail_'+i+'">'+
+        (l.hook?'<div class="hook">'+esc(l.hook)+'</div>':'')+
+        (l.scoreReasons?'<div class="reasons">'+esc(l.scoreReasons)+'</div>':'')+
+        '<div class="statusbtns">'+STATUSES.map(s=>'<button class="pill '+clsStatus(s)+(l.outreachStatus===s?' active':'')+'" onclick="setStatusTo('+i+',\''+s+'\')">'+s+'</button>').join("")+'</div>'+
+        '<div class="grid2">'+
+          '<div><label>Business type</label><input id="bt_'+i+'" value="'+esc(l.businessType||"")+'" /></div>'+
+          '<div><label>Contact name</label><input id="cn_'+i+'" value="'+esc(l.contactName||"")+'" /></div>'+
+          '<div><label>Phone</label><input id="ph_'+i+'" value="'+esc(l.phone||"")+'" /></div>'+
+          '<div><label>Email</label><input id="em_'+i+'" value="'+esc(l.email||"")+'" /></div>'+
+        '</div>'+
+        '<label>Notes</label><textarea id="nt_'+i+'">'+esc(l.notes||"")+'</textarea>'+
+        '<div style="margin-top:6px;font-size:12px;color:var(--muted);">'+
+          (l.website?'<a href="'+esc(l.website)+'" target="_blank" rel="noopener">Website</a> · ':'')+
+          (l.reviewUrl?'<a href="'+esc(l.reviewUrl)+'" target="_blank" rel="noopener">Review link</a> · ':'')+
+          esc(l.address||"")+'</div>'+
+        '<div style="margin-top:12px;display:flex;gap:8px;">'+
+          '<button class="btn-primary" onclick="saveLead('+i+')">Save</button>'+
+          '<button class="btn-danger" onclick="delLead('+i+')">Delete</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  }
+
+  // ---------- export ----------
+  function exportCSV(){
+    const cols=[["Tier","tier"],["Score","score"],["Business Name","businessName"],["Category","category"],["Primary Email","email"],["Phone","phone"],["Google Rating","rating"],["Total Reviews","reviewCount"],["Owner Response Rate","ownerResponseRate"],["Recent Unanswered Poor Reviews","recentUnanswered"],["Key Sales Hook / Review Sample","hook"],["Score Reasons","scoreReasons"],["Flag","flag"],["Direct Review URL","reviewUrl"],["Website","website"],["Address","address"],["Outreach Status","outreachStatus"]];
+    const q=v=>{ v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+    const lines=[cols.map(c=>c[0]).join(",")];
+    LEADS.forEach(l=>lines.push(cols.map(c=>{ let v=l[c[1]]; if(c[1]==="phone"&&v)v="'"+v; return q(v); }).join(",")));
+    const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trey-leads.csv"; a.click();
+  }
+
+  function boot(){ document.getElementById("gate").style.display="none"; document.getElementById("app").style.display="block"; loadLeads(); }
+  if(token) boot();
+</script>
+</body>
+</html>
