@@ -219,6 +219,10 @@
           <input id="f_placeId" placeholder="ChIJ… (for monthly rating sync)" />
         </div>
         <div>
+          <label>Business logo URL</label>
+          <input id="f_logoUrl" placeholder="https://… (thank-you screen &amp; reports)" />
+        </div>
+        <div>
           <label>Voice perspective</label>
           <select id="f_voicePerspective">
             <option value="Individual">Individual (I/my/me)</option>
@@ -323,7 +327,7 @@
 
   function resetForm() {
     ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName",
-     "placeId", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount"]
+     "placeId", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
     document.getElementById("f_subscriptionStatus").value = "trial";
@@ -365,13 +369,17 @@
     ["Google Location ID", "locationId"],
     ["Google Account ID", "googleAccountId"],
     ["Google Place ID", "placeId"],
+    ["Business logo URL", "logoUrl"],
     ["Voice perspective", "voicePerspective"],
     ["Public sign-off name", "publicSignOffName"],
     ["Subscription", "subscriptionStatus"],
     ["Taps since sign-up", "tapsSinceSignup"],
     ["Taps this month", "tapsThisMonth"],
-    ["Reviews via tap", "tapReviews"],
-    ["Reviews organic", "organicReviews"],
+    ["Taps this week", "tapsThisWeek"],
+    ["Reviews via Trey (this week)", "tapReviewsThisWeek"],
+    ["Reviews direct (this week)", "organicReviewsThisWeek"],
+    ["Reviews via tap (all time)", "tapReviews"],
+    ["Reviews organic (all time)", "organicReviews"],
   ];
 
   function num(v) {
@@ -392,13 +400,15 @@
       const d = nc - ic;
       cc._reviewChange = (d > 0 ? "+" : "") + d;
     }
+    const STAR_KEYS = new Set(["initialGoogleRating", "googleRating"]);
     document.getElementById("detailGrid").innerHTML = DETAIL_FIELDS.map(([label, key]) => {
       const v = cc[key];
       const has = v !== undefined && v !== null && v !== "";
+      const display = has ? (STAR_KEYS.has(key) ? `${v} ★` : v) : "Not set";
       return `
       <div class="field">
         <label>${label}</label>
-        <div class="val ${has ? "" : "empty"}">${has ? v : "Not set"}</div>
+        <div class="val ${has ? "" : "empty"}">${display}</div>
       </div>`;
     }).join("");
     document.getElementById("detailCard").dataset.locationId = c.locationId;
@@ -447,6 +457,7 @@
     document.getElementById("f_email").value = c.email || "";
     document.getElementById("f_googleAccountId").value = c.googleAccountId || "";
     document.getElementById("f_placeId").value = c.placeId || "";
+    document.getElementById("f_logoUrl").value = c.logoUrl || "";
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
     // No status recorded = grandfathered active; show that so a save keeps them on.
@@ -478,6 +489,7 @@
       email: document.getElementById("f_email").value.trim(),
       googleAccountId: document.getElementById("f_googleAccountId").value.trim(),
       placeId: document.getElementById("f_placeId").value.trim(),
+      logoUrl: document.getElementById("f_logoUrl").value.trim(),
       voicePerspective: document.getElementById("f_voicePerspective").value,
       publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),
       subscriptionStatus: document.getElementById("f_subscriptionStatus").value,
