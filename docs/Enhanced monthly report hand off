@@ -1,0 +1,98 @@
+# Enhanced Monthly Report — build notes & handoff
+
+Implements `docs/enhanced-monthly-report-spec.md`, build-order steps 1–3.
+
+## What shipped
+
+| File | Purpose |
+|---|---|
+| `netlify/functions/report.js` | Server-renders the full, self-contained, mobile-first report page (one request in, finished HTML out — same pattern as `tap.js`'s pause page). Includes the HMAC access gate and an admin-only key generator. |
+| `scripts/report-key.js` | Standalone Node helper to mint a signed report link offline (e.g. when wiring the monthly send). |
+| `netlify/functions/refresh-google-stats.js` | **Modified** — also writes a monthly Google-rating snapshot to the new `ratinghistory` store on each sync, powering the hero's month-over-month change. |
+
+No new dependencies — uses `@netlify/blobs` (already installed) and Node's built-in `crypto`.
+
+## Step 2 — the one thing you must do on Netlify
+
+Add a new environment variable:
+
+```
+TREY_REPORT_SECRET = <a long random string>
+```
+
+Generate one with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+
+Everything else (`NETLIFY_SITE_ID`, `NETLIFY_BLOBS_TOKEN`, `CLIENT_ADMIN_TOKEN`, `URL`) already exists and is reused.
+
+## How the link is secured
+
+Each link carries a per-client key so a competitor can't swap in another `locationId`:
+
+```
+k = HMAC-SHA256(locationId, TREY_REPORT_SECRET), first 32 hex chars
+```
+
+`report.js` recomputes it and compares in constant time. No login, safe to send over WhatsApp. (Truncation length lives in `KEY_LEN` in both files — keep them in sync.)
+
+## URLs
+
+Report page (what the WhatsApp button points at):
+
+```
+/.netlify/functions/report?loc=<locationId>&m=<YYYY-MM>&k=<key>
+```
+
+`m` is optional — it defaults to the **last complete calendar month**.
+
+The **green theme is the default** on every page — the report and the notice/error pages (bad key, unknown client, etc.). Add `&bg=light` to fall back to the light theme for comparison.
+
+### Header & logos
+
+- **Trey logo:** the official "trey" logo (from `docs/trey_logo_2.svg`) is inlined as a single-colour vector that recolours per theme — white on green, slate on the light theme — so it's crisp at any size and needs no external fetch. To swap in a different hosted logo, set env var `TREY_LOGO_URL` (it takes precedence; use a white/reversed variant since it sits on green).
+- **Client logo:** the client's own `logoUrl` renders in a white chip under their business name.
+- **Trey badge:** the "Trey's brought you … reviews in total" line carries the Trey WhatsApp mark (from `docs/trey_whatsapp_avatar.png`, downscaled to 64px and inlined as a data URI).
+- **Rating breakdown:** an Amazon-style 5→1 star bar chart in Trey green, tallied from every review record in the `reviews` store for that client (`review:${loc}:*`, all months). It sharpens each month as more reviews come through the webhook. Note: this reflects **Trey-tracked reviews**, not the client's entire Google history — the Places API doesn't expose a per-star histogram, so a full all-time breakdown would need us to keep accumulating (which the `reviews` store already does going forward). The card is hidden until at least one review is tracked.
+
+## Step 3 — generate a key & test
+
+Two ways to get a signed link. Both produce the same key.
+
+**A) Live, via the function (uses the secret already on Netlify):**
+
+```
+/.netlify/functions/report?loc=<locationId>&gen=1&token=<CLIENT_ADMIN_TOKEN>&m=<YYYY-MM>
+```
+
+Returns JSON: `{ loc, month, key, url }`. Open the `url` on your phone to see the page.
+
+**B) Offline, via the script:**
+
+```
+TREY_REPORT_SECRET=<same value as Netlify> node scripts/report-key.js <locationId> [YYYY-MM]
+```
+
+To test end-to-end on a fake client, POST one to the existing `client` endpoint first (needs `businessName`, `placeId`, `initialGoogleRating`, `initialReviewCount`, and — after a `refresh-google-stats` run — `googleRating`/`reviewCount`), then generate a key for its `locationId`.
+
+## Two rating timeframes (hero vs "Since you joined")
+
+- **Hero (top):** the **month-over-month** change — this month's Google rating vs last month's. This needs a monthly rating snapshot, so a new `ratinghistory` store was added: `refresh-google-stats.js` now writes `${loc}:${YYYY-MM} → { rating }` on each monthly sync (write-if-absent, keyed to the just-ended month), and `report.js` backfills the current month from the live rating if a snapshot isn't there yet. History builds forward: the **first** report shows the current rating with "your month-on-month change appears from next month"; from the next month on it shows a real `4.5★ → 4.6★ · +0.1 this month`.
+- **"Since you joined" (bottom):** the **lifetime** climb — `initialGoogleRating` (at sign-up) → current `googleRating`, plus total reviews gained. Distinct from the hero so the two boxes no longer duplicate each other.
+
+## Data sources
+
+- `clients` → `businessName`, `logoUrl`, `placeId`, `initialGoogleRating`, `initialReviewCount`, `googleRating`, `reviewCount`, `createdAt`
+- `taptally` → `${loc}:${YYYY-MM}` (taps that month)
+- `reviewtally` → `${loc}:${YYYY-MM}` → `{ tapReviews, organicReviews }`
+- `stats` → cumulative `{ tapReviews, organicReviews }`
+- `reviews` → `review:${loc}:${YYYY-MM}:*` (optional 5★ highlight; when the picked review has an approved `finalReply`, Trey's reply is shown beneath it. The highlight prefers a glowing review that already has an approved reply.)
+- `ratinghistory` → `${loc}:${YYYY-MM}` → `{ rating }` (**new** — monthly rating snapshot for the hero; written by `refresh-google-stats.js`, backfilled by `report.js`)
+
+Graceful fallbacks throughout: missing/flat/down rating shows neutral wording (no fake hype); a month with no taps or reviews renders zeros and drops the contribution card; no `placeId` drops the footer link; unknown client → friendly 404; bad/missing key → friendly 403.
+
+## Local render check (optional)
+
+`scripts/_test-report.js` stubs the blob stores with sample data and runs the handler across scenarios (rating climb, flat, empty) plus the security cases, writing HTML to `_preview/`. Handy for eyeballing changes before deploying.
+
+## Not done yet (spec step 4 — "later")
+
+The v2 monthly WhatsApp template with the "View your full report" URL button, and wiring the signed URL into the send. The current `trey_monthly_report` template is text-only and immutable, so this needs a new template version.
