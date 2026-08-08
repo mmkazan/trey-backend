@@ -18,6 +18,57 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// Monday (UTC) of the given date's week, as YYYY-MM-DD — used as the weekly key.
+function weekKey(d) {
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = date.getUTCDay(); // 0=Sun .. 6=Sat
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? -6 : 1 - day));
+  return date.toISOString().slice(0, 10);
+}
+
+// A quick branded "thank you" screen shown for ~1.6s before we send the
+// customer on to Google. Uses the client's saved logoUrl when present.
+function thankYouPage(client, target) {
+  const name = escapeHtml((client && client.businessName) || displayName(client) || "");
+  const logoUrl = client && client.logoUrl ? escapeHtml(client.logoUrl) : "";
+  const safeTarget = escapeHtml(target);
+  const greeting = name ? `Thanks for visiting ${name}!` : "Thanks for visiting!";
+  const logoImg = logoUrl
+    ? `<img src="${logoUrl}" alt="${name}" style="max-height:88px;max-width:220px;margin:0 auto 22px;display:block;object-fit:contain;">`
+    : "";
+  const body = `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="2;url=${safeTarget}">
+<title>Thank you</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+  .card{max-width:420px;width:100%;text-align:center}
+  h1{font-size:24px;margin:0 0 10px;letter-spacing:-0.4px}
+  p{font-size:16px;color:#475569;margin:0 0 24px;line-height:1.55}
+  .spinner{width:32px;height:32px;border:4px solid #d1fae5;border-top-color:#059669;border-radius:50%;margin:0 auto 20px;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  a.go{color:#059669;font-size:14px;text-decoration:none}
+  .foot{margin-top:32px;font-size:12px;color:#94a3b8}
+</style></head>
+<body>
+  <div class="card">
+    ${logoImg}
+    <h1>${greeting}</h1>
+    <p>Taking you to Google to leave a quick review &mdash; it only takes a moment and really helps other customers find us.</p>
+    <div class="spinner"></div>
+    <a class="go" id="go" href="${safeTarget}">Not redirected? Tap here</a>
+    <div class="foot">Powered by Trey</div>
+  </div>
+  <script>setTimeout(function(){var g=document.getElementById('go');if(g){window.location.replace(g.href);}},1600);</script>
+</body></html>`;
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+    body,
+  };
+}
+
 function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -122,6 +173,12 @@ exports.handler = async (event) => {
     const total = (await tallyStore.get(totalKey, { type: "json" })) || { taps: 0 };
     total.taps += 1;
     await tallyStore.setJSON(totalKey, total);
+
+    // Weekly bucket (Mon-Sun) for the weekly report.
+    const weekTallyKey = `${locationId}:week:${weekKey(new Date())}`;
+    const weekTally = (await tallyStore.get(weekTallyKey, { type: "json" })) || { taps: 0 };
+    weekTally.taps += 1;
+    await tallyStore.setJSON(weekTallyKey, weekTally);
   } catch (err) {
     console.error("Tap logging error:", err);
   }
@@ -130,8 +187,5 @@ exports.handler = async (event) => {
     ? decodeURIComponent(googleUrl)
     : `https://search.google.com/local/writereview?placeid=${encodeURIComponent(locationId)}`;
 
-  return {
-    statusCode: 302,
-    headers: { Location: target, "Cache-Control": "no-store" },
-  };
+  return thankYouPage(client, target);
 };
