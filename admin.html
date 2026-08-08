@@ -178,7 +178,7 @@
   <header>
     <div>
       <h1>Trey Admin — Clients</h1>
-      <div class="sub">Managed via Netlify Blobs</div>
+      <div class="sub">Clients, trials &amp; monthly tap activity</div>
     </div>
     <span class="muted-link" onclick="logout()">Sign out</span>
   </header>
@@ -215,6 +215,10 @@
           <input id="f_googleAccountId" placeholder="Google Business account ID" />
         </div>
         <div>
+          <label>Google Place ID</label>
+          <input id="f_placeId" placeholder="ChIJ… (for monthly rating sync)" />
+        </div>
+        <div>
           <label>Voice perspective</label>
           <select id="f_voicePerspective">
             <option value="Individual">Individual (I/my/me)</option>
@@ -224,6 +228,30 @@
         <div>
           <label>Public sign-off name</label>
           <input id="f_publicSignOffName" placeholder="e.g. Mik" />
+        </div>
+        <div>
+          <label>Subscription status</label>
+          <select id="f_subscriptionStatus">
+            <option value="trial">Trial (14-day)</option>
+            <option value="active">Active (paid)</option>
+            <option value="paused">Paused</option>
+          </select>
+        </div>
+        <div>
+          <label>Google rating at sign-up</label>
+          <input id="f_initialGoogleRating" type="number" step="0.1" min="0" max="5" placeholder="e.g. 4.3" />
+        </div>
+        <div>
+          <label>Review count at sign-up</label>
+          <input id="f_initialReviewCount" type="number" min="0" placeholder="e.g. 118" />
+        </div>
+        <div>
+          <label>Google rating now</label>
+          <input id="f_googleRating" type="number" step="0.1" min="0" max="5" placeholder="auto-syncs monthly" />
+        </div>
+        <div>
+          <label>Review count now</label>
+          <input id="f_reviewCount" type="number" min="0" placeholder="auto-syncs monthly" />
         </div>
       </div>
       <div class="actions">
@@ -255,11 +283,12 @@
             <th>Location ID</th>
             <th>Business</th>
             <th>WhatsApp</th>
+            <th>Taps</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="clientRows">
-          <tr><td colspan="4" class="muted">Loading…</td></tr>
+          <tr><td colspan="5" class="muted">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -293,9 +322,11 @@
   }
 
   function resetForm() {
-    ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName"]
+    ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName",
+     "placeId", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
+    document.getElementById("f_subscriptionStatus").value = "trial";
     document.getElementById("f_locationId").disabled = false;
     document.getElementById("formTitle").textContent = "Add a client";
     setStatus("", "");
@@ -325,23 +356,51 @@
     ["Business type", "businessType"],
     ["WhatsApp number", "phone"],
     ["Email", "email"],
-    ["Current Google rating", "googleRating"],
-    ["Total review count", "reviewCount"],
+    ["Google rating at sign-up", "initialGoogleRating"],
+    ["Google rating now", "googleRating"],
+    ["Rating change", "_ratingChange"],
+    ["Reviews at sign-up", "initialReviewCount"],
+    ["Reviews now", "reviewCount"],
+    ["New reviews since sign-up", "_reviewChange"],
     ["Google Location ID", "locationId"],
     ["Google Account ID", "googleAccountId"],
+    ["Google Place ID", "placeId"],
     ["Voice perspective", "voicePerspective"],
     ["Public sign-off name", "publicSignOffName"],
+    ["Subscription", "subscriptionStatus"],
+    ["Taps since sign-up", "tapsSinceSignup"],
+    ["Taps this month", "tapsThisMonth"],
+    ["Reviews via tap", "tapReviews"],
+    ["Reviews organic", "organicReviews"],
   ];
+
+  function num(v) {
+    return v === "" || v === null || v === undefined || isNaN(Number(v)) ? null : Number(v);
+  }
 
   function showDetail(c) {
     document.getElementById("formCard").style.display = "none";
     document.getElementById("detailTitle").textContent = c.businessName || c.locationId;
-    document.getElementById("detailGrid").innerHTML = DETAIL_FIELDS.map(([label, key]) => `
+    const cc = { ...c };
+    const ir = num(c.initialGoogleRating), nr = num(c.googleRating);
+    if (ir !== null && nr !== null) {
+      const d = nr - ir;
+      cc._ratingChange = (d > 0 ? "+" : "") + d.toFixed(2) + " ★";
+    }
+    const ic = num(c.initialReviewCount), nc = num(c.reviewCount);
+    if (ic !== null && nc !== null) {
+      const d = nc - ic;
+      cc._reviewChange = (d > 0 ? "+" : "") + d;
+    }
+    document.getElementById("detailGrid").innerHTML = DETAIL_FIELDS.map(([label, key]) => {
+      const v = cc[key];
+      const has = v !== undefined && v !== null && v !== "";
+      return `
       <div class="field">
         <label>${label}</label>
-        <div class="val ${c[key] ? "" : "empty"}">${c[key] || "Not set"}</div>
-      </div>
-    `).join("");
+        <div class="val ${has ? "" : "empty"}">${has ? v : "Not set"}</div>
+      </div>`;
+    }).join("");
     document.getElementById("detailCard").dataset.locationId = c.locationId;
     document.getElementById("detailCard").style.display = "block";
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -355,14 +414,14 @@
 
   async function loadClients() {
     const rowsEl = document.getElementById("clientRows");
-    rowsEl.innerHTML = '<tr><td colspan="4" class="muted">Loading…</td></tr>';
+    rowsEl.innerHTML = '<tr><td colspan="5" class="muted">Loading…</td></tr>';
     try {
       const res = await fetch(`${API}?token=${encodeURIComponent(token)}`);
       if (res.status === 403) { logout(); return; }
       const clients = await res.json();
       clientsCache = Array.isArray(clients) ? clients : [];
       if (clientsCache.length === 0) {
-        rowsEl.innerHTML = '<tr><td colspan="4" class="muted">No clients yet.</td></tr>';
+        rowsEl.innerHTML = '<tr><td colspan="5" class="muted">No clients yet.</td></tr>';
         return;
       }
       rowsEl.innerHTML = clientsCache.map((c, i) => `
@@ -370,11 +429,12 @@
           <td>${c.locationId || ""}</td>
           <td>${c.businessName || ""}<br><span class="muted" style="font-size:11px;">${c.businessType || ""}</span></td>
           <td>${c.phone || '<span class="muted">—</span>'}</td>
+          <td>${c.tapsSinceSignup || 0} <span class="muted" style="font-size:11px;">(${c.tapsThisMonth || 0} this mo)</span></td>
           <td><span class="muted-link" onclick='event.stopPropagation(); editClient(clientsCache[${i}])'>Edit</span></td>
         </tr>
       `).join("");
     } catch (err) {
-      rowsEl.innerHTML = `<tr><td colspan="4" class="muted">Failed to load: ${err.message}</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="5" class="muted">Failed to load: ${err.message}</td></tr>`;
     }
   }
 
@@ -386,8 +446,15 @@
     document.getElementById("f_phone").value = c.phone || "";
     document.getElementById("f_email").value = c.email || "";
     document.getElementById("f_googleAccountId").value = c.googleAccountId || "";
+    document.getElementById("f_placeId").value = c.placeId || "";
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
+    // No status recorded = grandfathered active; show that so a save keeps them on.
+    document.getElementById("f_subscriptionStatus").value = c.subscriptionStatus || "active";
+    document.getElementById("f_initialGoogleRating").value = c.initialGoogleRating ?? "";
+    document.getElementById("f_initialReviewCount").value = c.initialReviewCount ?? "";
+    document.getElementById("f_googleRating").value = c.googleRating ?? "";
+    document.getElementById("f_reviewCount").value = c.reviewCount ?? "";
     document.getElementById("formTitle").textContent = "Edit client";
     showForm();
   }
@@ -398,6 +465,10 @@
       setStatus("Location ID is required.", "error");
       return;
     }
+    const numOrEmpty = (id) => {
+      const v = document.getElementById(id).value.trim();
+      return v === "" ? "" : Number(v);
+    };
     const payload = {
       token,
       locationId,
@@ -406,8 +477,14 @@
       phone: document.getElementById("f_phone").value.trim(),
       email: document.getElementById("f_email").value.trim(),
       googleAccountId: document.getElementById("f_googleAccountId").value.trim(),
+      placeId: document.getElementById("f_placeId").value.trim(),
       voicePerspective: document.getElementById("f_voicePerspective").value,
       publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),
+      subscriptionStatus: document.getElementById("f_subscriptionStatus").value,
+      initialGoogleRating: numOrEmpty("f_initialGoogleRating"),
+      initialReviewCount: numOrEmpty("f_initialReviewCount"),
+      googleRating: numOrEmpty("f_googleRating"),
+      reviewCount: numOrEmpty("f_reviewCount"),
     };
     setStatus("Saving…", "");
     try {
