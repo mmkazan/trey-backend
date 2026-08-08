@@ -18,6 +18,14 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// YYYY-MM of the last complete calendar month. A monthly sync running on the
+// 1st records the rating that the month just ended on.
+function lastCompleteMonth(now) {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  d.setUTCDate(0);
+  return d.toISOString().slice(0, 7);
+}
+
 async function fetchGooglePlace(placeId) {
   const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`;
   const res = await fetch(url, {
@@ -68,6 +76,8 @@ exports.handler = async (event) => {
 
   // FULL MODE: refresh every client that has a placeId.
   const clientsStore = blobsStore("clients");
+  const ratingHistory = blobsStore("ratinghistory");
+  const snapshotMonth = lastCompleteMonth(new Date());
   const { blobs } = await clientsStore.list();
   const results = [];
   for (const b of blobs) {
@@ -82,6 +92,19 @@ exports.handler = async (event) => {
         lastGoogleSync: new Date().toISOString(),
       };
       await clientsStore.setJSON(client.locationId, updated);
+
+      // Record the just-ended month's rating for the monthly report's
+      // month-over-month hero. Write-if-absent so a mid-month manual refresh
+      // never overwrites the snapshot the scheduled 1st-of-month sync took.
+      if (typeof r.rating === "number") {
+        const snapKey = `${client.locationId}:${snapshotMonth}`;
+        const existing = await ratingHistory.get(snapKey, { type: "json" });
+        if (!existing) {
+          await ratingHistory.setJSON(snapKey, {
+            rating: r.rating, source: "monthly-sync", capturedAt: new Date().toISOString(),
+          });
+        }
+      }
       results.push({ locationId: client.locationId, rating: r.rating, reviewCount: r.reviewCount });
     } catch (e) {
       results.push({ locationId: client.locationId, error: e.message });
