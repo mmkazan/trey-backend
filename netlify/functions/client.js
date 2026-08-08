@@ -18,6 +18,14 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// Monday (UTC) of the given date's week, as YYYY-MM-DD — the weekly key.
+function weekKey(d) {
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = date.getUTCDay(); // 0=Sun .. 6=Sat
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? -6 : 1 - day));
+  return date.toISOString().slice(0, 10);
+}
+
 exports.handler = async (event) => {
   let requestBody = {};
   if (event.body) {
@@ -36,19 +44,30 @@ exports.handler = async (event) => {
   const clientsStore = blobsStore("clients");
   const statsStore = blobsStore("stats");
   const tapTallyStore = blobsStore("taptally");
+  const reviewTallyStore = blobsStore("reviewtally");
 
   async function withStats(client) {
     if (!client) return client;
+    const now = new Date();
+    const monthKey = now.toISOString().slice(0, 7); // YYYY-MM
+    const wKey = weekKey(now);
     const stats = (await statsStore.get(client.locationId, { type: "json" })) || {};
-    const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
     const tally = (await tapTallyStore.get(`${client.locationId}:${monthKey}`, { type: "json" })) || {};
+    const weekTally = (await tapTallyStore.get(`${client.locationId}:week:${wKey}`, { type: "json" })) || {};
     const total = (await tapTallyStore.get(`${client.locationId}:total`, { type: "json" })) || {};
+    const weekReviews = (await reviewTallyStore.get(`${client.locationId}:week:${wKey}`, { type: "json" })) || {};
+    const monthReviews = (await reviewTallyStore.get(`${client.locationId}:${monthKey}`, { type: "json" })) || {};
     return {
       ...client,
       tapReviews: stats.tapReviews || 0,
       organicReviews: stats.organicReviews || 0,
       tapsThisMonth: tally.taps || 0,
+      tapsThisWeek: weekTally.taps || 0,
       tapsSinceSignup: total.taps || 0,
+      tapReviewsThisWeek: weekReviews.tapReviews || 0,
+      organicReviewsThisWeek: weekReviews.organicReviews || 0,
+      tapReviewsThisMonth: monthReviews.tapReviews || 0,
+      organicReviewsThisMonth: monthReviews.organicReviews || 0,
     };
   }
 
