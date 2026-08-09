@@ -32,18 +32,19 @@ exports.handler = async (event) => {
   const params = new URLSearchParams(event && event.body ? event.body : "");
   const from = params.get("From") || "";                    // e.g. "whatsapp:+4479..."
   const phone = from.replace(/^whatsapp:/i, "").trim();
+  const phoneKey = phone.replace(/\D/g, "");                // match by digits only (a URL "+" can arrive decoded as a space)
   const buttonText = (params.get("ButtonText") || "").trim();
   const body = (params.get("Body") || "").trim();
   const signal = (buttonText || body).toLowerCase();        // button tap OR typed text
 
-  const pendingStore = blobsStore("approvalpending");       // phone -> { reviewId, status, awaitingEdit }
+  const pendingStore = blobsStore("approvalpending");       // phoneKey -> { reviewId, status, awaitingEdit }
   const reviewsStore = blobsStore("reviews");
-  const pending = phone ? await pendingStore.get(phone, { type: "json" }) : null;
+  const pending = phoneKey ? await pendingStore.get(phoneKey, { type: "json" }) : null;
 
   // If we asked the owner to type an edited reply, treat this message as it.
   if (pending && pending.awaitingEdit && body && !buttonText) {
     await saveApproval(reviewsStore, pending.reviewId, body);
-    await pendingStore.setJSON(phone, { ...pending, awaitingEdit: false, status: "approved" });
+    await pendingStore.setJSON(phoneKey, { ...pending, awaitingEdit: false, status: "approved" });
     return twiml("✅ Thanks — I'll post that wording. You can change it any time.");
   }
 
@@ -69,15 +70,15 @@ exports.handler = async (event) => {
 
     if (isApprove) {
       await saveApproval(reviewsStore, pending.reviewId, null); // use the draft as-is
-      await pendingStore.setJSON(phone, { ...pending, status: "approved" });
+      await pendingStore.setJSON(phoneKey, { ...pending, status: "approved" });
       return twiml("✅ Approved — your reply is being posted. Nice one.");
     }
     if (isSkip) {
-      await pendingStore.setJSON(phone, { ...pending, status: "skipped" });
+      await pendingStore.setJSON(phoneKey, { ...pending, status: "skipped" });
       return twiml("⏭️ Skipped — no reply will be posted for that review.");
     }
     // Edit
-    await pendingStore.setJSON(phone, { ...pending, awaitingEdit: true });
+    await pendingStore.setJSON(phoneKey, { ...pending, awaitingEdit: true });
     return twiml("✏️ Sure — reply to this message with the wording you'd like and I'll post that instead.");
   }
 
