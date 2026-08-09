@@ -1,24 +1,17 @@
 const { getStore } = require("@netlify/blobs");
 
-// NFC/QR "Tappy Stand" landing endpoint.
-//
-//  - Logs the tap so review-webhook.js can attribute a review to it.
-//  - Counts taps per month for reporting ("6 taps -> 4 completed reviews").
-//  - Enforces the 14-day free-trial pause promised in the Terms: once a
-//    client's trial has ended and they haven't subscribed, the stand shows an
-//    "unavailable" page (with a billing link) instead of the Google review page.
-//  - Active clients are redirected straight to Google to leave a review.
-//
-// Clients with no subscriptionStatus are treated as active ("grandfathered"),
-// so stands that were live before this feature shipped never pause by surprise.
+// Receives an incoming Google review (POSTed by whatever review source feeds
+// this endpoint), matches it to a recent NFC tap, looks up the client record,
+// generates an AI reply draft, stores it for approval, and sends a short
+// WhatsApp alert with a link to the approve page.
 
-const TRIAL_DAYS = 14;
+const TAP_WINDOW_MINUTES = 60;
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
-// Monday (UTC) of the given date's week, as YYYY-MM-DD — used as the weekly key.
+// Monday (UTC) of the given date's week, as YYYY-MM-DD — the weekly key.
 function weekKey(d) {
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   const day = date.getUTCDay(); // 0=Sun .. 6=Sat
@@ -26,190 +19,243 @@ function weekKey(d) {
   return date.toISOString().slice(0, 10);
 }
 
-// A quick branded "thank you" screen shown for ~1.6s before we send the
-// customer on to Google. Uses the client's saved logoUrl when present.
-function thankYouPage(client, target) {
-  const name = escapeHtml((client && client.businessName) || displayName(client) || "");
-  const logoUrl = client && client.logoUrl ? escapeHtml(client.logoUrl) : "";
-  const safeTarget = escapeHtml(target);
-  const greeting = name ? `Thanks for visiting ${name}!` : "Thanks for visiting!";
-  const logoImg = logoUrl
-    ? `<img src="${logoUrl}" alt="${name}" style="max-height:88px;max-width:220px;margin:0 auto 22px;display:block;object-fit:contain;">`
-    : "";
-  const body = `<!DOCTYPE html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="2;url=${safeTarget}">
-<title>Thank you</title>
-<style>
-  *{box-sizing:border-box}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
-  .card{max-width:420px;width:100%;text-align:center}
-  h1{font-size:24px;margin:0 0 10px;letter-spacing:-0.4px}
-  p{font-size:16px;color:#475569;margin:0 0 24px;line-height:1.55}
-  .spinner{width:32px;height:32px;border:4px solid #d1fae5;border-top-color:#059669;border-radius:50%;margin:0 auto 20px;animation:spin .8s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  a.go{color:#059669;font-size:14px;text-decoration:none}
-  .foot{margin-top:32px;font-size:12px;color:#94a3b8}
-</style></head>
-<body>
-  <div class="card">
-    ${logoImg}
-    <h1>${greeting}</h1>
-    <p>Taking you to Google to leave a quick review &mdash; it only takes a moment and really helps other customers find us.</p>
-    <div class="spinner"></div>
-    <a class="go" id="go" href="${safeTarget}">Not redirected? Tap here</a>
-    <div class="foot">Powered by Trey</div>
-  </div>
-  <script>setTimeout(function(){var g=document.getElementById('go');if(g){window.location.replace(g.href);}},1600);</script>
-</body></html>`;
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-    body,
-  };
-}
-
-function escapeHtml(str) {
-  return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-// Resolve where to send the customer. A `googleUrl` from the tag is only
-// accepted if it is an https URL on a Google host — this stops an attacker
-// turning a stand link into an open redirect to a phishing site or a
-// javascript: link. Otherwise we build the review URL from the client's saved
-// placeId (preferred) or the locationId. Netlify already URL-decodes query
-// params once, so we must NOT decodeURIComponent again (double-decode corrupts
-// valid targets and throws on a literal %).
-function safeReviewTarget(googleUrl, client, locationId) {
-  const fallbackId = (client && client.placeId) || locationId;
-  const fallback = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(fallbackId)}`;
-  if (!googleUrl) return fallback;
-  try {
-    const u = new URL(googleUrl);
-    const host = u.hostname.toLowerCase();
-    // Google review/maps hosts only. Note: goo.gl (a link shortener) is
-    // deliberately excluded, and Google's own /url?q= open-redirector is
-    // rejected below — both could otherwise bounce a visitor to any site.
-    const okHost =
-      host === "google.com" || host.endsWith(".google.com") ||
-      host === "g.page" || host.endsWith(".g.page");
-    const isRedirector = u.pathname === "/url"; // e.g. https://www.google.com/url?q=https://evil.com
-    if (u.protocol === "https:" && okHost && !isRedirector) return u.href;
-  } catch (e) { /* not a valid absolute URL — fall through */ }
-  return fallback;
-}
-
-// Should the stand be paused for this client (trial over, not subscribed)?
-function isPaused(client) {
-  if (!client) return false;
-  const status = client.subscriptionStatus;
-  if (status === "active") return false;
-  if (status === "paused" || status === "cancelled") return true;
-  if (status === "trial") {
-    const started = new Date(client.createdAt || Date.now()).getTime();
-    const trialEnds = started + TRIAL_DAYS * 24 * 60 * 60 * 1000;
-    return Date.now() > trialEnds;
-  }
-  return false; // no status recorded = grandfathered active
-}
-
-// Name to show on the pause page: the individual's sign-off, else the business.
-function displayName(client) {
-  if (!client) return "the business owner";
-  const isIndividual = (client.voicePerspective || "").toLowerCase() === "individual";
-  return (isIndividual ? client.publicSignOffName : client.businessName) ||
-    client.businessName || client.publicSignOffName || "the business owner";
-}
-
-function pausedPage(client, locationId) {
-  const name = escapeHtml(displayName(client));
-  const payBase = process.env.STRIPE_PAYMENT_LINK || "";
-  const payUrl = payBase
-    ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "")
-    : "";
-  const payButton = payUrl
-    ? `<a href="${escapeHtml(payUrl)}" style="display:inline-block;margin-top:22px;background:#059669;color:white;text-decoration:none;border-radius:12px;padding:15px 28px;font-size:16px;font-weight:600;">Reactivate subscription</a>`
-    : `<p style="color:#94a3b8;font-size:13px;margin-top:22px;">Billing link coming soon.</p>`;
-
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-    body: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Review link unavailable</title></head>
-<body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;">
-  <div style="max-width:440px;margin:0 auto;padding:24px;">
-    <div style="background:white;border-radius:16px;padding:36px 26px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.05);margin-top:70px;">
-      <div style="font-size:40px;">&#9203;</div>
-      <h1 style="color:#0f172a;font-size:20px;margin:14px 0 8px;">This review link is currently unavailable</h1>
-      <p style="color:#64748b;font-size:15px;line-height:1.5;margin:0;">If you were about to leave a review, thank you &mdash; please let <strong>${name}</strong> know their Trey Tappy Stand needs reactivating.</p>
-      <hr style="border:none;border-top:1px solid #f1f5f9;margin:24px 0;">
-      <p style="color:#475569;font-size:14px;line-height:1.5;margin:0;"><strong>${name}</strong> &mdash; if this is you, your free trial has ended. Reactivate below to switch your Trey Tappy Stand back on.</p>
-      ${payButton}
-      <p style="color:#94a3b8;font-size:12px;margin-top:26px;">Trey &bull; Reputation on Autopilot</p>
-    </div>
-  </div>
-</body></html>`,
-  };
-}
-
 exports.handler = async (event) => {
-  const params = event.queryStringParameters || {};
-  const { locationId, googleUrl, preview } = params;
-
-  // No location on the tag = misconfigured stand. Show a gentle notice rather
-  // than bouncing the customer to a broken Google URL.
-  if (!locationId) {
-    return {
-      statusCode: 400,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Invalid link</title></head><body style="font-family:-apple-system,sans-serif;text-align:center;padding:80px 24px;color:#64748b;">This tap link isn't set up correctly. Please let the business know.</body></html>`,
-    };
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
   }
 
-  const clientsStore = blobsStore("clients");
-  const client = await clientsStore.get(locationId, { type: "json" });
-
-  // Preview mode lets an owner/admin see the pause page without pausing anything.
-  if (preview === "paused") {
-    return pausedPage(client, locationId);
-  }
-
-  // Enforce the trial / subscription gate.
-  if (isPaused(client)) {
-    return pausedPage(client, locationId);
-  }
-
-  // Active (or grandfathered / unknown) -> log the tap and count it, then send
-  // the customer on to Google.
+  let body;
   try {
-    const tapsStore = blobsStore("taps");
-    await tapsStore.setJSON(locationId, {
-      timestamp: new Date().toISOString(),
-      processed: false,
+    body = JSON.parse(event.body || "{}");
+  } catch (err) {
+    return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON" }) };
+  }
+
+  const { locationId, reviewerName, rating, comment } = body;
+  const reviewId = body.reviewId || `rev_${Date.now()}`;
+
+  if (!locationId) {
+    return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
+  }
+
+  // Authenticate the caller. If TREY_WEBHOOK_SECRET is set on Netlify, require
+  // it (as the X-Trey-Signature header or a `secret` body field) so nobody who
+  // knows a public locationId can forge reviews or trigger WhatsApp sends. If
+  // it's unset, allow but warn — so the live flow keeps working until you've
+  // added the secret to the upstream caller (whatever posts reviews here), then
+  // set the env var.
+  const webhookSecret = process.env.TREY_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const h = event.headers || {};
+    const provided = h["x-trey-signature"] || h["X-Trey-Signature"] || body.secret || "";
+    const a = Buffer.from(String(provided)), b = Buffer.from(String(webhookSecret));
+    const ok = a.length === b.length && require("crypto").timingSafeEqual(a, b);
+    if (!ok) {
+      return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
+    }
+  } else {
+    console.warn("[review-webhook] TREY_WEBHOOK_SECRET not set — webhook is unauthenticated. Set it and send it from the upstream caller to lock this down.");
+  }
+
+  const tapsStore = blobsStore("taps");
+  const clientsStore = blobsStore("clients");
+  const statsStore = blobsStore("stats");
+  const reviewsStore = blobsStore("reviews");
+
+  // 1. Look up the client record first.
+  const client = await clientsStore.get(locationId, { type: "json" });
+  if (!client) {
+    console.error(`No client onboarded for locationId: ${locationId}`);
+    return { statusCode: 404, body: JSON.stringify({ error: "Unknown location" }) };
+  }
+
+  // 2. Idempotency: if this reviewId was already processed, don't double-count
+  //    or re-alert. (Only possible when the caller sends a stable reviewId; an
+  //    auto-generated rev_<timestamp> id is unique per call.)
+  if (body.reviewId) {
+    const already = await reviewsStore.get(`pending:${reviewId}`, { type: "json" });
+    if (already) {
+      return { statusCode: 200, body: JSON.stringify({ success: true, deduped: true, reviewId }) };
+    }
+  }
+
+  // 3. Decide tap-vs-organic now, but DON'T consume the tap yet. All side
+  //    effects (tap consume, counters, records) are committed together after
+  //    the reply is generated, so a failed run can be retried without
+  //    mis-counting or flipping the attribution.
+  let source = "Organic Review";
+  let tapToConsume = null;
+  const tap = await tapsStore.get(locationId, { type: "json" });
+  if (tap && !tap.processed) {
+    const ageMinutes = (Date.now() - new Date(tap.timestamp).getTime()) / 60000;
+    if (ageMinutes >= 0 && ageMinutes <= TAP_WINDOW_MINUTES) {
+      source = "Trey Tappy Stand \ud83c\udfb4";
+      tapToConsume = tap;
+    }
+  }
+
+  // 4. Generate the AI reply draft (internal call \u2014 send the shared secret).
+  const siteUrl = process.env.URL || "https://treyv1.netlify.app";
+  let replyDraft;
+  try {
+    const replyResponse = await fetch(`${siteUrl}/.netlify/functions/generate-reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Trey-Internal": process.env.TREY_TAPPY_SECRET_TOKEN || "",
+      },
+      body: JSON.stringify({
+        businessName: client.businessName,
+        businessType: client.businessType,
+        voicePerspective: client.voicePerspective,
+        publicSignOffName: client.publicSignOffName,
+        businessPhone: client.phone,
+        reviewerName,
+        rating,
+        comment,
+        source,
+      }),
     });
 
-    // Tap tallies for reporting: one per month, plus an all-time total since sign-up.
-    const tallyStore = blobsStore("taptally");
-    const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
-    const tallyKey = `${locationId}:${monthKey}`;
-    const tally = (await tallyStore.get(tallyKey, { type: "json" })) || { taps: 0 };
-    tally.taps += 1;
-    await tallyStore.setJSON(tallyKey, tally);
+    if (!replyResponse.ok) {
+      const errText = await replyResponse.text();
+      throw new Error(`generate-reply returned ${replyResponse.status}: ${errText}`);
+    }
 
-    const totalKey = `${locationId}:total`;
-    const total = (await tallyStore.get(totalKey, { type: "json" })) || { taps: 0 };
-    total.taps += 1;
-    await tallyStore.setJSON(totalKey, total);
-
-    // Weekly bucket (Mon-Sun) for the weekly report.
-    const weekTallyKey = `${locationId}:week:${weekKey(new Date())}`;
-    const weekTally = (await tallyStore.get(weekTallyKey, { type: "json" })) || { taps: 0 };
-    weekTally.taps += 1;
-    await tallyStore.setJSON(weekTallyKey, weekTally);
+    const replyData = await replyResponse.json();
+    replyDraft = replyData.replyDraft;
   } catch (err) {
-    console.error("Tap logging error:", err);
+    console.error("Error generating reply:", err);
+    return { statusCode: 502, body: JSON.stringify({ error: "Failed to generate reply" }) };
   }
 
-  const target = safeReviewTarget(googleUrl, client, locationId);
+  // 5. Commit side effects together, now that the reply exists.
+  const isTap = source.startsWith("Trey Tappy");
+  if (tapToConsume) {
+    await tapsStore.setJSON(locationId, { ...tapToConsume, processed: true });
+  }
 
-  return thankYouPage(client, target);
+  const stats = (await statsStore.get(locationId, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
+  if (isTap) stats.tapReviews += 1;
+  else stats.organicReviews += 1;
+  await statsStore.setJSON(locationId, stats);
+
+  // Period buckets (this week Mon-Sun + this month) for the reports. Wrapped so
+  // a tally hiccup never blocks the reply + WhatsApp alert below.
+  const now = new Date();
+  const monthKey = now.toISOString().slice(0, 7); // YYYY-MM
+  try {
+    const reviewTallyStore = blobsStore("reviewtally");
+    const periodKeys = [`${locationId}:week:${weekKey(now)}`, `${locationId}:${monthKey}`];
+    for (const pKey of periodKeys) {
+      const bucket = (await reviewTallyStore.get(pKey, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
+      if (isTap) bucket.tapReviews += 1;
+      else bucket.organicReviews += 1;
+      await reviewTallyStore.setJSON(pKey, bucket);
+    }
+  } catch (err) {
+    console.error("Review tally error:", err);
+  }
+
+  // Save the pending approval (looked up by approve.js) and the permanent
+  // review record (used by the monthly report page). The record key is stored
+  // on the pending record so approve.js can write finalReply to the SAME month
+  // bucket even if approval happens after a month boundary.
+  const recordKey = `review:${locationId}:${monthKey}:${reviewId}`;
+  const reviewRecord = {
+    reviewId,
+    locationId,
+    accountId: client.googleAccountId || "",
+    businessName: client.businessName,
+    reviewerName,
+    rating,
+    comment,
+    source,
+    replyDraft,
+    status: "pending",
+    recordKey,
+    createdAt: now.toISOString(),
+  };
+
+  await reviewsStore.setJSON(`pending:${reviewId}`, reviewRecord);
+  await reviewsStore.setJSON(recordKey, reviewRecord);
+
+  // 6. Send the WhatsApp alert via Twilio — short message, link only.
+  const approveUrl =
+    `${siteUrl}/.netlify/functions/approve?reviewId=${encodeURIComponent(reviewId)}` +
+    `&token=${encodeURIComponent(process.env.TREY_TAPPY_SECRET_TOKEN)}`;
+
+  const messageBody =
+    `\u2b50 *New review \u2014 ${client.businessName}* \u2b50\n` +
+    `\ud83d\udccc *Via ${source}*\n\n` +
+    `*Rating:* ${rating} \u2b50\n` +
+    `*Reviewer:* ${reviewerName}\n` +
+    `*Review:* "${comment}"\n\n` +
+    `\ud83d\udc49 View & approve reply:\n${approveUrl}\n\n` +
+    `\u2014 Trey`;
+
+  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+  const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
+  const twilioFrom = process.env.TWILIO_WHATSAPP_FROM;
+  const contentSid = process.env.TWILIO_APPROVAL_CONTENT_SID;
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+
+  // WhatsApp template variables must be single-line (no newlines/tabs, no runs
+  // of 4+ spaces) and reasonably short, or Twilio rejects the send.
+  const clean = (v, max = 600) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+
+  // Choose sender: a Messaging Service (if configured) or the WhatsApp number.
+  // From and MessagingServiceSid are mutually exclusive.
+  const twilioParams = messagingServiceSid
+    ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
+    : { To: `whatsapp:${client.phone}`, From: twilioFrom };
+
+  if (contentSid) {
+    // Approved template path — delivers reliably outside the 24h session
+    // window and renders the "View & approve" CTA button. Variable order must
+    // match the template definition in whatsapp-template.json.
+    twilioParams.ContentSid = contentSid;
+    twilioParams.ContentVariables = JSON.stringify({
+      1: clean(client.businessName, 60),
+      2: clean(source, 60),
+      3: clean(rating, 12),
+      4: clean(reviewerName, 60),
+      5: clean(comment, 500) || "(no comment left)",
+      // Appended verbatim to the button URL's ?reviewId= — pre-encode so any
+      // special characters in a Google review id survive the round-trip.
+      6: encodeURIComponent(reviewId),
+    });
+  } else {
+    // Fallback: freeform session message. Only delivers if the client has
+    // messaged the Trey number within the last 24 hours.
+    twilioParams.Body = messageBody;
+  }
+
+  try {
+    const twilioResp = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Basic " + Buffer.from(`${twilioSid}:${twilioAuth}`).toString("base64"),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(twilioParams),
+      }
+    );
+
+    if (!twilioResp.ok) {
+      const errText = await twilioResp.text();
+      throw new Error(`Twilio returned ${twilioResp.status}: ${errText}`);
+    }
+  } catch (err) {
+    console.error("Error sending WhatsApp message:", err);
+    return { statusCode: 502, body: JSON.stringify({ error: "Failed to send WhatsApp message" }) };
+  }
+
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true, source, reviewId }),
+  };
 };
