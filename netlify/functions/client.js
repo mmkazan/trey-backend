@@ -18,6 +18,29 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// Admin auth: the token comes from the Authorization: Bearer header (preferred)
+// or the JSON body — never the query string, because URLs leak through server,
+// CDN and proxy logs, browser history and Referer headers. Compared in constant
+// time so a wrong token can't be recovered by timing.
+function adminAuthorized(event, body) {
+  const h = event.headers || {};
+  const auth = h.authorization || h.Authorization || "";
+  const provided = auth.replace(/^Bearer\s+/i, "").trim() || (body && body.token) || "";
+  const expected = process.env.CLIENT_ADMIN_TOKEN || "";
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided), b = Buffer.from(expected);
+  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
+}
+
+// Coerce a rating/count field to a finite number (or undefined) so every write
+// path stores numbers — the report page and senders expect numbers, but some
+// onboarding forms post strings.
+function numOrUndef(v) {
+  if (v === "" || v === null || v === undefined) return undefined;
+  const n = Number(v);
+  return isFinite(n) ? n : undefined;
+}
+
 // Monday (UTC) of the given date's week, as YYYY-MM-DD — the weekly key.
 function weekKey(d) {
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -36,8 +59,7 @@ exports.handler = async (event) => {
     }
   }
 
-  const token = (event.queryStringParameters || {}).token || requestBody.token;
-  if (!token || token !== process.env.CLIENT_ADMIN_TOKEN) {
+  if (!adminAuthorized(event, requestBody)) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
@@ -84,6 +106,15 @@ exports.handler = async (event) => {
       updatedAt: new Date().toISOString(),
       createdAt: existing.createdAt || new Date().toISOString(),
     };
+    // Store ratings/counts as numbers regardless of how the form posted them,
+    // so the report page and monthly sender read consistent types.
+    for (const f of ["initialGoogleRating", "googleRating", "initialReviewCount", "reviewCount"]) {
+      if (f in requestBody) {
+        const n = numOrUndef(record[f]);
+        if (n === undefined) delete record[f];
+        else record[f] = n;
+      }
+    }
     // Brand-new sign-ups start on the 14-day trial clock enforced by tap.js.
     // Pre-existing clients keep whatever they have (no status = grandfathered
     // active), so no live stand pauses unexpectedly when this ships.
