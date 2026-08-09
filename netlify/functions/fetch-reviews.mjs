@@ -55,11 +55,22 @@ async function googleAccessToken() {
 }
 
 async function listReviews(accessToken, accountId, locationId) {
-  const url = `https://mybusiness.googleapis.com/v4/accounts/${encodeURIComponent(accountId)}/locations/${encodeURIComponent(locationId)}/reviews`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data.error && data.error.message) || `reviews HTTP ${res.status}`);
-  return Array.isArray(data.reviews) ? data.reviews : [];
+  // Page through ALL reviews (Google returns ~50 per page). Without this the
+  // baseline would only remember the 50 most-recently-updated reviews, and an
+  // edited old review could later resurface as "new".
+  const out = [];
+  let pageToken = "";
+  for (let i = 0; i < 40; i++) { // safety cap (~2000 reviews)
+    const base = `https://mybusiness.googleapis.com/v4/accounts/${encodeURIComponent(accountId)}/locations/${encodeURIComponent(locationId)}/reviews`;
+    const url = pageToken ? `${base}?pageToken=${encodeURIComponent(pageToken)}` : base;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data.error && data.error.message) || `reviews HTTP ${res.status}`);
+    if (Array.isArray(data.reviews)) out.push(...data.reviews);
+    pageToken = data.nextPageToken || "";
+    if (!pageToken) break;
+  }
+  return out;
 }
 
 export default async () => {
@@ -98,67 +109,68 @@ export default async () => {
     if (!client || !client.googleAccountId || !client.locationId) continue; // not GBP-connected
     summary.clients++;
 
-    let reviews;
+    // Wrapped per-client so one flaky Google call or blob write can't starve
+    // the remaining clients this run.
     try {
-      reviews = await listReviews(accessToken, client.googleAccountId, client.locationId);
-    } catch (e) {
-      summary.failed++;
-      console.error(`[fetch-reviews] ${client.locationId} list failed:`, e.message);
-      continue;
-    }
+      const reviews = await listReviews(accessToken, client.googleAccountId, client.locationId);
 
-    // First time we ever poll a location, record its EXISTING reviews as seen
-    // WITHOUT replying — so activation doesn't fire the whole back-catalogue of
-    // old reviews at the owner. Only reviews that arrive after this baseline
-    // trigger the flow.
-    const baselineKey = `baseline:${client.locationId}`;
-    const isFirstRun = !(await seenStore.get(baselineKey));
+      // First time we ever poll a location, record its EXISTING reviews as seen
+      // WITHOUT replying — so activation doesn't fire the whole back-catalogue of
+      // old reviews at the owner. Only reviews that arrive after this baseline
+      // trigger the flow. The baseline marker is written only AFTER all seen-keys,
+      // so a partial baseline can never leak the back-catalogue.
+      const baselineKey = `baseline:${client.locationId}`;
+      const isFirstRun = !(await seenStore.get(baselineKey));
 
-    for (const rv of reviews) {
-      const reviewId = rv.reviewId || (rv.name || "").split("/").pop();
-      if (!reviewId) continue;
-      const seenKey = `${client.locationId}:${reviewId}`;
+      for (const rv of reviews) {
+        const reviewId = rv.reviewId || (rv.name || "").split("/").pop();
+        if (!reviewId) continue;
+        const seenKey = `${client.locationId}:${reviewId}`;
+
+        if (isFirstRun) {
+          await seenStore.setJSON(seenKey, { at: new Date().toISOString(), baseline: true });
+          summary.baselined++;
+          continue;
+        }
+
+        if (rv.reviewReply) continue;               // already replied (in or outside Trey)
+        if (await seenStore.get(seenKey)) continue; // already handled
+
+        summary.newReviews++;
+        const payload = {
+          locationId: client.locationId,
+          reviewId, // stable Google id → review-webhook's dedupe keys on this
+          reviewerName: (rv.reviewer && rv.reviewer.displayName) || "A customer",
+          rating: STAR[rv.starRating] || 5, // default 5 if Google leaves it unspecified (rare) so alerts never show "null"
+          comment: rv.comment || "",
+        };
+        try {
+          const res = await fetch(`${base}/.netlify/functions/review-webhook`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Trey-Signature": webhookSecret },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            // Mark seen only on success, so a transient failure (or a config fix)
+            // gets retried next run rather than silently dropped.
+            await seenStore.setJSON(seenKey, { at: new Date().toISOString() });
+            summary.sent++;
+          } else {
+            summary.failed++;
+            console.error(`[fetch-reviews] review-webhook ${res.status} for ${reviewId}`);
+          }
+        } catch (e) {
+          summary.failed++;
+          console.error(`[fetch-reviews] webhook post failed for ${reviewId}:`, e.message);
+        }
+      }
 
       if (isFirstRun) {
-        await seenStore.setJSON(seenKey, { at: new Date().toISOString(), baseline: true });
-        summary.baselined++;
-        continue;
+        await seenStore.setJSON(baselineKey, { at: new Date().toISOString(), count: reviews.length });
       }
-
-      if (rv.reviewReply) continue;               // already replied (in or outside Trey)
-      if (await seenStore.get(seenKey)) continue; // already handled
-
-      summary.newReviews++;
-      const payload = {
-        locationId: client.locationId,
-        reviewId, // stable Google id → review-webhook's dedupe keys on this
-        reviewerName: (rv.reviewer && rv.reviewer.displayName) || "A customer",
-        rating: STAR[rv.starRating] || null,
-        comment: rv.comment || "",
-      };
-      try {
-        const res = await fetch(`${base}/.netlify/functions/review-webhook`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Trey-Signature": webhookSecret },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          // Mark seen only on success, so a transient failure (or a config fix)
-          // gets retried next run rather than silently dropped.
-          await seenStore.setJSON(seenKey, { at: new Date().toISOString() });
-          summary.sent++;
-        } else {
-          summary.failed++;
-          console.error(`[fetch-reviews] review-webhook ${res.status} for ${reviewId}`);
-        }
-      } catch (e) {
-        summary.failed++;
-        console.error(`[fetch-reviews] webhook post failed for ${reviewId}:`, e.message);
-      }
-    }
-
-    if (isFirstRun) {
-      await seenStore.setJSON(baselineKey, { at: new Date().toISOString(), count: reviews.length });
+    } catch (e) {
+      summary.failed++;
+      console.error(`[fetch-reviews] ${client.locationId} failed:`, e.message);
     }
   }
 
