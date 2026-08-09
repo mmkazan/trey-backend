@@ -6,10 +6,26 @@ exports.handler = async (event, context) => {
     };
   }
 
+  // Internal-only endpoint: called server-to-server by review-webhook. Require
+  // the shared secret (sent as the X-Trey-Internal header) so this isn't an
+  // open Gemini proxy anyone can call to burn the API key.
+  const internalSecret = process.env.TREY_TAPPY_SECRET_TOKEN;
+  if (internalSecret) {
+    const h = event.headers || {};
+    const provided = h["x-trey-internal"] || h["X-Trey-Internal"] || "";
+    const a = Buffer.from(String(provided)), b = Buffer.from(String(internalSecret));
+    const ok = a.length === b.length && require("crypto").timingSafeEqual(a, b);
+    if (!ok) {
+      return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
+    }
+  } else {
+    console.warn("[generate-reply] TREY_TAPPY_SECRET_TOKEN not set — endpoint is unauthenticated.");
+  }
+
   try {
     const body = JSON.parse(event.body || "{}");
 
-    // Extract parameters from Make payload
+    // Parameters (posted server-to-server by review-webhook)
     const {
       businessName = "our business",
       businessType = "business",
@@ -23,7 +39,7 @@ exports.handler = async (event, context) => {
     } = body;
 
     const pronounRule =
-      voicePerspective.toLowerCase() === "individual"
+      String(voicePerspective || "").toLowerCase() === "individual"
         ? "Write in the first-person singular ('I', 'my', 'me')."
         : "Write in the first-person plural ('we', 'our', 'us').";
 
@@ -72,7 +88,14 @@ Rules for the reply:
       throw new Error(`Gemini API Error: ${data.error.message}`);
     }
 
-    const replyDraft = data.candidates[0].content.parts[0].text.trim();
+    const text =
+      data && data.candidates && data.candidates[0] && data.candidates[0].content &&
+      data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
+      data.candidates[0].content.parts[0].text;
+    if (!text) {
+      throw new Error("Gemini returned no reply text (possibly safety-blocked or empty).");
+    }
+    const replyDraft = text.trim();
 
     return {
       statusCode: 200,
