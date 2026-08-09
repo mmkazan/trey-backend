@@ -1,107 +1,25 @@
-// Inbound WhatsApp handler (live — this function's URL is the Trey WhatsApp
-// sender's "A message comes in" webhook).
+// Inbound WhatsApp auto-reply.
 //
-// Handles two things:
-//   1. Approval button taps (Approve / Edit / Skip) from a review-alert message
-//      — the owner responds INSIDE WhatsApp, no web page, and gets a clean
-//      one-line confirmation back.
-//   2. Any other message — the short "this number isn't monitored" support reply.
+// Set this function's URL as the "A message comes in" webhook on the Trey
+// WhatsApp sender in Twilio. When anyone messages the Trey number, Twilio
+// calls this and we reply with support contact details — because the number
+// itself only sends automated review-approval alerts and isn't monitored.
 //
-// Replies are normal freeform messages, allowed because the person's inbound
-// message opens a 24-hour session window (no template/approval needed).
+// The reply is a normal freeform message (allowed, since the person's inbound
+// message opens a 24-hour session window), so no template or approval is needed.
 
-const { getStore } = require("@netlify/blobs");
+exports.handler = async () => {
+  const reply =
+    "Thanks for messaging Trey. This number sends your review-approval alerts and isn't monitored for replies. " +
+    "For any help, please call or message us on +44 7941 052034, or email mmkazan@gmail.com and we'll get straight back to you.";
 
-function blobsStore(name) {
-  return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
-}
+  const twiml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    "<Response><Message>" + reply + "</Message></Response>";
 
-const SUPPORT =
-  "Thanks for messaging Trey. This number sends your review-approval alerts and isn't monitored for replies. " +
-  "For any help, please call or message us on +44 7941 052034, or email mmkazan@gmail.com and we'll get straight back to you.";
-
-function twiml(message) {
   return {
     statusCode: 200,
     headers: { "Content-Type": "text/xml" },
-    body: '<?xml version="1.0" encoding="UTF-8"?><Response><Message>' + message + "</Message></Response>",
+    body: twiml,
   };
-}
-
-exports.handler = async (event) => {
-  const params = new URLSearchParams(event && event.body ? event.body : "");
-  const from = params.get("From") || "";                    // e.g. "whatsapp:+4479..."
-  const phone = from.replace(/^whatsapp:/i, "").trim();
-  const phoneKey = phone.replace(/\D/g, "");                // match by digits only (a URL "+" can arrive decoded as a space)
-  const buttonText = (params.get("ButtonText") || "").trim();
-  const body = (params.get("Body") || "").trim();
-  const signal = (buttonText || body).toLowerCase();        // button tap OR typed text
-
-  const pendingStore = blobsStore("approvalpending");       // phoneKey -> { reviewId, status, awaitingEdit }
-  const reviewsStore = blobsStore("reviews");
-  const pending = phoneKey ? await pendingStore.get(phoneKey, { type: "json" }) : null;
-
-  // If we asked the owner to type an edited reply, treat this message as it.
-  if (pending && pending.awaitingEdit && body && !buttonText) {
-    await saveApproval(reviewsStore, pending.reviewId, body);
-    await pendingStore.setJSON(phoneKey, { ...pending, awaitingEdit: false, status: "approved" });
-    return twiml("✅ Thanks — I'll post that wording. You can change it any time.");
-  }
-
-  const isApprove = /approve/.test(signal);
-  const isEdit = /\bedit\b/.test(signal);
-  const isSkip = /skip/.test(signal);
-
-  if (isApprove || isEdit || isSkip) {
-    if (!pending) {
-      // No live review to act on (e.g. a stray/old tap).
-      return twiml("That review has already been dealt with — nothing left to do here. 👍");
-    }
-
-    // Already actioned? Give a clean "already handled" line instead of redoing it.
-    // (Edit is still allowed, so the owner can change their wording afterwards.)
-    if ((isApprove || isSkip) && (pending.status === "approved" || pending.status === "skipped")) {
-      return twiml(
-        pending.status === "approved"
-          ? "✅ You've already approved this one — your reply's posted. Nothing more to do."
-          : "⏭️ You've already skipped this one — no reply was posted."
-      );
-    }
-
-    if (isApprove) {
-      await saveApproval(reviewsStore, pending.reviewId, null); // use the draft as-is
-      await pendingStore.setJSON(phoneKey, { ...pending, status: "approved" });
-      return twiml("✅ Approved — your reply is being posted. Nice one.");
-    }
-    if (isSkip) {
-      await pendingStore.setJSON(phoneKey, { ...pending, status: "skipped" });
-      return twiml("⏭️ Skipped — no reply will be posted for that review.");
-    }
-    // Edit
-    await pendingStore.setJSON(phoneKey, { ...pending, awaitingEdit: true });
-    return twiml("✏️ Sure — reply to this message with the wording you'd like and I'll post that instead.");
-  }
-
-  return twiml(SUPPORT);
 };
-
-// Record the owner's decision (draft or edited reply) on the pending + permanent
-// review records. Actual posting to Google is handled by the existing approve
-// flow (MOCK_MODE for now).
-async function saveApproval(reviewsStore, reviewId, editedReply) {
-  if (!reviewId) return;
-  try {
-    const rec = await reviewsStore.get(`pending:${reviewId}`, { type: "json" });
-    if (!rec) return;
-    const finalReply = editedReply || rec.replyDraft;
-    await reviewsStore.setJSON(`pending:${reviewId}`, {
-      ...rec, status: "approved", finalReply, approvedAt: new Date().toISOString(), approvedVia: "whatsapp",
-    });
-    if (rec.recordKey) {
-      const perm = await reviewsStore.get(rec.recordKey, { type: "json" });
-      if (perm) await reviewsStore.setJSON(rec.recordKey, { ...perm, status: "approved", finalReply });
-    }
-  } catch (e) {
-    console.error("[whatsapp-inbound] saveApproval failed:", e.message);
-  }
-}
