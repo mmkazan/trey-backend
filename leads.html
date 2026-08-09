@@ -109,7 +109,12 @@
   const toNum=v=>{ const n=parseFloat(v); return isNaN(n)?null:n; };
   const clsStatus=s=>"s-"+(s||"New").replace(/\s/g,"");
   function fmtDate(d){ if(!d||isNaN(d))return""; const p=n=>String(n).padStart(2,"0"); return p(d.getDate())+"/"+p(d.getMonth()+1)+"/"+d.getFullYear(); }
-  const esc=v=>{ v=(v==null?"":String(v)); const d=document.createElement("div"); d.textContent=v; return d.innerHTML; };
+  // Escape for HTML — including quotes, so it's safe inside attribute values
+  // (textContent alone escapes <>& but leaves " and ', which breaks out of an
+  // href="..."). Lead data is scraped from Google, so treat it as hostile.
+  const esc=v=>{ v=(v==null?"":String(v)); const d=document.createElement("div"); d.textContent=v; return d.innerHTML.replace(/"/g,"&quot;").replace(/'/g,"&#39;"); };
+  // Only allow http(s) links; anything else (javascript:, data:, …) is dropped.
+  const safeUrl=u=>{ u=(u==null?"":String(u)); return /^https?:\/\//i.test(u)?u:""; };
 
   // ---------- v2 scoring (mirrors docs/lead-scoring-spec.md) ----------
   function scoreApify(row){
@@ -171,17 +176,20 @@
       else if("title" in first){ list=rows.map(scoreApify).filter(Boolean); }
       else { setStatus("Unrecognised CSV — expected an Apify export or a Trey scored file.","error"); return; }
       setStatus("Saving "+list.length+" leads…","");
-      try{ await bulkSave(list); setStatus("Added "+list.length+" leads.","success"); loadLeads(); }
-      catch(e){ setStatus("Upload failed: "+e.message,"error"); }
+      try{ const saved=await bulkSave(list); setStatus("Added "+saved+" leads.","success"); loadLeads(); }
+      catch(e){ const n=(e&&e.saved)||0; setStatus("Upload stopped after "+n+" of "+list.length+" — "+e.message+". Re-uploading is safe for rows with a place/phone.","error"); loadLeads(); }
     },error:(e)=>setStatus("Could not read file: "+e.message,"error")});
   }
   async function bulkSave(list){
+    let saved=0;
     for(let i=0;i<list.length;i+=50){
       const batch=list.slice(i,i+50);
       const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,leads:batch})});
       if(r.status===403){ logout(); throw new Error("Unauthorized"); }
-      if(!r.ok) throw new Error("HTTP "+r.status);
+      if(!r.ok){ const e=new Error("HTTP "+r.status); e.saved=saved; throw e; }
+      saved+=batch.length;
     }
+    return saved;
   }
   async function quickAdd(){
     const name=document.getElementById("q_name").value.trim(); if(!name)return;
@@ -203,7 +211,7 @@
     const list=document.getElementById("leadList");
     list.innerHTML='<div class="muted" style="padding:10px;">Loading…</div>';
     try{
-      const r=await fetch(API+"?token="+encodeURIComponent(token)); if(r.status===403){logout();return;}
+      const r=await fetch(API,{headers:{Authorization:"Bearer "+token}}); if(r.status===403){logout();return;}
       LEADS=await r.json(); if(!Array.isArray(LEADS))LEADS=[];
       LEADS.sort((a,b)=>((a.tier||3)-(b.tier||3))||((b.score||-1)-(a.score||-1)));
       render();
@@ -243,8 +251,8 @@
         '</div>'+
         '<label>Notes</label><textarea id="nt_'+i+'">'+esc(l.notes||"")+'</textarea>'+
         '<div style="margin-top:6px;font-size:12px;color:var(--muted);">'+
-          (l.website?'<a href="'+esc(l.website)+'" target="_blank" rel="noopener">Website</a> · ':'')+
-          (l.reviewUrl?'<a href="'+esc(l.reviewUrl)+'" target="_blank" rel="noopener">Review link</a> · ':'')+
+          (safeUrl(l.website)?'<a href="'+esc(safeUrl(l.website))+'" target="_blank" rel="noopener">Website</a> · ':'')+
+          (safeUrl(l.reviewUrl)?'<a href="'+esc(safeUrl(l.reviewUrl))+'" target="_blank" rel="noopener">Review link</a> · ':'')+
           esc(l.address||"")+'</div>'+
         '<div style="margin-top:12px;display:flex;gap:8px;">'+
           '<button class="btn-primary" onclick="saveLead('+i+')">Save</button>'+
