@@ -18,9 +18,10 @@ import { getStore } from "@netlify/blobs";
 
 export const config = { schedule: "0 8 * * 1" };
 
-// Fallbacks to the live SIDs so this works even before the env vars are set.
+// Fallback to the live Utility SID (trey_weekly_report_v2) so this works even
+// before the env var is set. Override with TWILIO_WEEKLY_CONTENT_SID on Netlify.
 const WEEKLY_CONTENT_SID =
-  process.env.TWILIO_WEEKLY_CONTENT_SID || "HX0952b59e0412f096d5e23d67e6b31d97";
+  process.env.TWILIO_WEEKLY_CONTENT_SID || "HX75b48d2a80306b8bfe09197950013000";
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
@@ -81,6 +82,7 @@ export default async () => {
   const clientsStore = blobsStore("clients");
   const tapTallyStore = blobsStore("taptally");
   const reviewTallyStore = blobsStore("reviewtally");
+  const sentStore = blobsStore("reportssent"); // idempotency: one send per client per week
 
   const twilioFrom = process.env.TWILIO_WHATSAPP_FROM;
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
@@ -105,6 +107,9 @@ export default async () => {
     if (!isSendable(client)) { summary.skipped++; continue; }
 
     const loc = client.locationId || b.key;
+    // Already sent this client their report for this week? Skip — so a re-fire
+    // or redeploy-trigger never double-messages anyone.
+    if (await sentStore.get(`weekly:${loc}:${wKey}`)) { summary.skipped++; continue; }
     const weekTally = (await tapTallyStore.get(`${loc}:week:${wKey}`, { type: "json" })) || {};
     const weekReviews = (await reviewTallyStore.get(`${loc}:week:${wKey}`, { type: "json" })) || {};
 
@@ -129,6 +134,7 @@ export default async () => {
 
     try {
       await sendWhatsApp(params);
+      await sentStore.setJSON(`weekly:${loc}:${wKey}`, { at: new Date().toISOString() });
       summary.sent++;
     } catch (err) {
       summary.failed++;
