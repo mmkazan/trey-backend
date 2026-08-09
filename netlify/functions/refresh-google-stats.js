@@ -18,6 +18,22 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// Admin auth. Accepts the token from the Authorization: Bearer header, the JSON
+// body, or the query string (the last kept only for the manual ?placeId= test
+// mode and the scheduled monthly-google-sync call). Constant-time compare.
+// NOTE: the previous version trusted an `x-nf-scheduled` request header to skip
+// auth entirely — any external caller could set that header, so it's removed.
+function adminAuthorized(event, body, params) {
+  const h = event.headers || {};
+  const auth = h.authorization || h.Authorization || "";
+  const provided = auth.replace(/^Bearer\s+/i, "").trim() ||
+    (body && body.token) || (params && params.token) || "";
+  const expected = process.env.CLIENT_ADMIN_TOKEN || "";
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided), b = Buffer.from(expected);
+  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
+}
+
 // YYYY-MM of the last complete calendar month. A monthly sync running on the
 // 1st records the rating that the month just ended on.
 function lastCompleteMonth(now) {
@@ -50,13 +66,7 @@ exports.handler = async (event) => {
   if (event.body) {
     try { body = JSON.parse(event.body); } catch (e) { /* ignore */ }
   }
-  const token = params.token || body.token;
-
-  // Netlify scheduled invocations set this header; allow those through too.
-  const headers = event.headers || {};
-  const isScheduled = !!(headers["x-nf-scheduled"] || headers["X-Nf-Scheduled"]);
-
-  if (!isScheduled && token !== process.env.CLIENT_ADMIN_TOKEN) {
+  if (!adminAuthorized(event, body, params)) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
   if (!process.env.GOOGLE_PLACES_API_KEY) {
@@ -85,10 +95,12 @@ exports.handler = async (event) => {
     if (!client || !client.placeId) continue;
     try {
       const r = await fetchGooglePlace(client.placeId);
+      // Don't clobber a known-good rating/count with null if Places returns a
+      // 200 that's missing those fields (e.g. a temporarily delisted place).
       const updated = {
         ...client,
-        googleRating: r.rating,
-        reviewCount: r.reviewCount,
+        googleRating: r.rating ?? client.googleRating,
+        reviewCount: r.reviewCount ?? client.reviewCount,
         lastGoogleSync: new Date().toISOString(),
       };
       await clientsStore.setJSON(client.locationId, updated);
@@ -96,7 +108,10 @@ exports.handler = async (event) => {
       // Record the just-ended month's rating for the monthly report's
       // month-over-month hero. Write-if-absent so a mid-month manual refresh
       // never overwrites the snapshot the scheduled 1st-of-month sync took.
-      if (typeof r.rating === "number") {
+      // Only record the month snapshot when running at/near the start of the
+      // month (the scheduled sync's window), so a mid-month manual refresh
+      // doesn't mislabel today's rating as last month's snapshot.
+      if (typeof r.rating === "number" && new Date().getUTCDate() <= 3) {
         const snapKey = `${client.locationId}:${snapshotMonth}`;
         const existing = await ratingHistory.get(snapKey, { type: "json" });
         if (!existing) {
