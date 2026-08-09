@@ -96,8 +96,10 @@ function monthLabel(ym) {
 
 // Ratings render as 4, 4.3 etc — never "4.30" or "4.0".
 function fmtRating(r) {
-  if (typeof r !== "number" || !isFinite(r)) return null;
-  return (Math.round(r * 10) / 10).toString();
+  if (r === null || r === undefined || r === "") return null;
+  const n = Number(r); // onboarding may store ratings as strings ("4.5")
+  if (!isFinite(n)) return null;
+  return (Math.round(n * 10) / 10).toString();
 }
 
 function plural(n, one, many) {
@@ -189,13 +191,22 @@ async function loadReportData(locationId, month) {
   const ratingHistory = blobsStore("ratinghistory");
   const num = (v) => (v && typeof v.rating === "number" ? v.rating : null);
   let monthRating = num(await ratingHistory.get(`${locationId}:${month}`, { type: "json" }));
-  if (monthRating === null && typeof client.googleRating === "number") {
-    monthRating = client.googleRating;
-    try {
-      await ratingHistory.setJSON(`${locationId}:${month}`, {
-        rating: monthRating, source: "report-backfill", capturedAt: new Date().toISOString(),
-      });
-    } catch (e) { console.error("[report] rating snapshot backfill failed:", e.message); }
+  const liveRating = Number(client.googleRating);
+  if (monthRating === null && isFinite(liveRating)) {
+    monthRating = liveRating;
+    // Only persist a backfilled snapshot for the current or just-ended month.
+    // Never write today's live rating into an OLD month that a saved link
+    // requested — that would fabricate history and skew later month-over-month
+    // deltas.
+    const bnow = new Date();
+    const currentMonth = bnow.toISOString().slice(0, 7);
+    if (month === currentMonth || month === lastCompleteMonth(bnow)) {
+      try {
+        await ratingHistory.setJSON(`${locationId}:${month}`, {
+          rating: monthRating, source: "report-backfill", capturedAt: new Date().toISOString(),
+        });
+      } catch (e) { console.error("[report] rating snapshot backfill failed:", e.message); }
+    }
   }
   const prevMonthRating = num(await ratingHistory.get(`${locationId}:${prevMonthKey(month)}`, { type: "json" }));
 
@@ -493,7 +504,12 @@ exports.handler = async (event) => {
 
   // --- Key generator (admin-only): mint the signed link to send. ---
   if (params.gen) {
-    if (params.token !== process.env.CLIENT_ADMIN_TOKEN) {
+    const gh = event.headers || {};
+    const provided = (gh.authorization || gh.Authorization || "").replace(/^Bearer\s+/i, "").trim() || params.token || "";
+    const expected = process.env.CLIENT_ADMIN_TOKEN || "";
+    const authOk = !!expected && provided.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!authOk) {
       return { statusCode: 403, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Unauthorized" }) };
     }
     if (!process.env.TREY_REPORT_SECRET) {
