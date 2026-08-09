@@ -8,6 +8,37 @@ function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// A gentle "days of free trial left + Subscribe" banner. Shows only while the
+// client is on trial (or lapsed); nothing once subscribed. Needs STRIPE_PAYMENT_LINK.
+function trialBanner(client, locationId) {
+  if (!client) return "";
+  const status = client.subscriptionStatus;
+  if (status === "active") return "";
+  const TRIAL_DAYS = 14;
+  let daysLeft = null;
+  if (client.createdAt) {
+    const ends = new Date(client.createdAt).getTime() + TRIAL_DAYS * 86400000;
+    if (!isNaN(ends)) daysLeft = Math.ceil((ends - Date.now()) / 86400000);
+  }
+  const onTrial = status === "trial";
+  const ended = status === "paused" || status === "cancelled" || (onTrial && daysLeft !== null && daysLeft <= 0);
+  if (!onTrial && !ended) return "";
+  const payBase = process.env.STRIPE_PAYMENT_LINK || "";
+  const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
+  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#065f46;font-weight:700">${t}</a>` : `<strong>${t}</strong>`);
+  let msg;
+  if (ended) {
+    msg = `Your free trial has ended — ${link("resubscribe")} to switch Trey back on.`;
+  } else if (daysLeft !== null && daysLeft <= 3) {
+    msg = `Just ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left of your free trial — ${link("keep Trey going")} whenever you're ready.`;
+  } else if (daysLeft !== null) {
+    msg = `${daysLeft} days left of your free trial. Enjoying Trey? ${link("Set up your subscription")}.`;
+  } else {
+    msg = `You're on your free trial — ${link("set up your subscription")} whenever you're ready.`;
+  }
+  return `<div style="background:#ecfdf5;border-bottom:1px solid #a7f3d0;color:#065f46;font-size:13px;line-height:1.45;text-align:center;padding:9px 14px">${msg}</div>`;
+}
+
 function page(body) {
   return {
     statusCode: 200,
@@ -61,16 +92,38 @@ function donePage(pending) {
 async function getConfirmContentSid() {
   if (process.env.TWILIO_CONFIRM_CONTENT_SID) return process.env.TWILIO_CONFIRM_CONTENT_SID;
   const cfg = blobsStore("config");
-  const cached = await cfg.get("confirmContentSid", { type: "json" });
-  if (cached && cached.sid) return cached.sid;
-
   const sid = process.env.TWILIO_ACCOUNT_SID, auth = process.env.TWILIO_AUTH_TOKEN;
   const authHeader = "Basic " + Buffer.from(`${sid}:${auth}`).toString("base64");
+  const NAME = "trey_review_handled_confirmation";
+
+  // Submit an existing template for WhatsApp approval; true only if accepted.
+  const submitForApproval = async (contentSid) => {
+    try {
+      const r = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests/whatsapp`, {
+        method: "POST",
+        headers: { Authorization: authHeader, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: NAME, category: "UTILITY" }),
+      });
+      return r.ok;
+    } catch (e) { return false; }
+  };
+
+  const cached = await cfg.get("confirmContentSid", { type: "json" });
+  if (cached && cached.sid) {
+    // Created before but the approval submit hadn't succeeded — retry it, so a
+    // one-off 4xx doesn't leave the confirmation permanently undeliverable.
+    if (!cached.approvalSubmitted) {
+      const ok = await submitForApproval(cached.sid);
+      if (ok) await cfg.setJSON("confirmContentSid", { ...cached, approvalSubmitted: true });
+    }
+    return cached.sid;
+  }
+
   const createResp = await fetch("https://content.twilio.com/v1/Content", {
     method: "POST",
     headers: { Authorization: authHeader, "Content-Type": "application/json" },
     body: JSON.stringify({
-      friendly_name: "trey_review_handled_confirmation",
+      friendly_name: NAME,
       language: "en",
       variables: { 1: "Reviewer", 2: "Business" },
       types: { "twilio/text": { body: "✅ Sorted — {{1}}'s review for {{2}} is handled. Nothing more to do on that one." } },
@@ -78,15 +131,8 @@ async function getConfirmContentSid() {
   });
   const cj = await createResp.json().catch(() => ({}));
   if (!createResp.ok || !cj.sid) throw new Error("confirm template create failed: " + JSON.stringify(cj).slice(0, 200));
-  // Submit for WhatsApp approval (best-effort; utility category).
-  try {
-    await fetch(`https://content.twilio.com/v1/Content/${cj.sid}/ApprovalRequests/whatsapp`, {
-      method: "POST",
-      headers: { Authorization: authHeader, "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "trey_review_handled_confirmation", category: "UTILITY" }),
-    });
-  } catch (e) { /* approval submit is best-effort */ }
-  await cfg.setJSON("confirmContentSid", { sid: cj.sid, createdAt: new Date().toISOString() });
+  const approvalSubmitted = await submitForApproval(cj.sid);
+  await cfg.setJSON("confirmContentSid", { sid: cj.sid, approvalSubmitted, createdAt: new Date().toISOString() });
   return cj.sid;
 }
 
@@ -99,17 +145,21 @@ async function sendHandledConfirmation(pending) {
     const client = await blobsStore("clients").get(pending.locationId, { type: "json" });
     const digits = client && client.phone ? String(client.phone).replace(/\D/g, "") : "";
     if (!digits) return;
-    const tSid = process.env.TWILIO_ACCOUNT_SID, tAuth = process.env.TWILIO_AUTH_TOKEN, from = process.env.TWILIO_WHATSAPP_FROM;
-    await fetch(`https://api.twilio.com/2010-04-01/Accounts/${tSid}/Messages.json`, {
+    const tSid = process.env.TWILIO_ACCOUNT_SID, tAuth = process.env.TWILIO_AUTH_TOKEN;
+    const from = process.env.TWILIO_WHATSAPP_FROM, msgService = process.env.TWILIO_MESSAGING_SERVICE_SID;
+    // Mirror review-webhook's sender selection (From and MessagingService are
+    // mutually exclusive) so a Messaging-Service-only setup doesn't send From=undefined.
+    const p = msgService
+      ? { To: `whatsapp:+${digits}`, MessagingServiceSid: msgService }
+      : { To: `whatsapp:+${digits}`, From: from };
+    p.ContentSid = confirmSid;
+    p.ContentVariables = JSON.stringify({ 1: pending.reviewerName || "the customer", 2: pending.businessName || "your business" });
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${tSid}/Messages.json`, {
       method: "POST",
       headers: { Authorization: "Basic " + Buffer.from(`${tSid}:${tAuth}`).toString("base64"), "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        To: `whatsapp:+${digits}`,
-        From: from,
-        ContentSid: confirmSid,
-        ContentVariables: JSON.stringify({ 1: pending.reviewerName || "the customer", 2: pending.businessName || "your business" }),
-      }),
+      body: new URLSearchParams(p),
     });
+    if (!r.ok) console.error("[approve] confirmation send returned", r.status, (await r.text().catch(() => "")).slice(0, 200));
   } catch (e) {
     console.error("[approve] handled-confirmation send failed:", e.message);
   }
@@ -144,7 +194,9 @@ exports.handler = async (event) => {
   }
 
   if (event.httpMethod === "POST") {
-    const MOCK_MODE = true; // Set to false once Google Business Profile API access is approved.
+    // Live posting to Google is OFF by default. Set TREY_LIVE_POSTING="true" on
+    // Netlify once Business Profile API access is confirmed to turn it on.
+    const MOCK_MODE = process.env.TREY_LIVE_POSTING !== "true";
     const finalReply = replyText || pending.replyDraft;
 
     try {
@@ -188,14 +240,19 @@ exports.handler = async (event) => {
       // clean, scannable list of what still needs a response. Best-effort.
       await sendHandledConfirmation(pending);
 
+      const okTitle = MOCK_MODE ? "Reply approved" : "Reply posted";
+      const okMsg = MOCK_MODE
+        ? `Saved and marked handled. It'll post to ${escapeHtml(pending.businessName)}'s Google profile once live posting is switched on.`
+        : `Your reply is now live on ${escapeHtml(pending.businessName)}'s Google Business Profile.`;
+
       return page(`
         <div style="max-width:420px;margin:0 auto;padding:24px;">
           <div style="background:white;border-radius:16px;padding:32px 24px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.05);margin-top:60px;">
             <div style="background:#dcfce7;width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
               <span style="font-size:32px;">\u2705</span>
             </div>
-            <h2 style="color:#0f172a;margin:0 0 8px;">Reply posted</h2>
-            <p style="color:#64748b;font-size:14px;margin-bottom:20px;">Your reply is now live on ${escapeHtml(pending.businessName)}'s Google Business Profile.</p>
+            <h2 style="color:#0f172a;margin:0 0 8px;">${okTitle}</h2>
+            <p style="color:#64748b;font-size:14px;margin-bottom:20px;">${okMsg}</p>
             <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;text-align:left;font-size:13px;color:#334155;white-space:pre-line;">"${escapeHtml(finalReply)}"</div>
             <p style="color:#94a3b8;font-size:12px;margin-top:24px;">Trey \u2022 Reputation on Autopilot</p>
           </div>
@@ -208,10 +265,12 @@ exports.handler = async (event) => {
   }
 
   // GET — render the approve form.
+  const bannerClient = await blobsStore("clients").get(pending.locationId, { type: "json" });
   const ratingNum = Number(pending.rating) || 0;
   const stars = "\u2b50".repeat(Math.max(0, Math.min(5, Math.round(ratingNum))));
 
   return page(`
+    ${trialBanner(bannerClient, pending.locationId)}
     <div style="max-width:420px;margin:0 auto;padding:20px 20px 40px;">
       <div style="display:flex;align-items:center;gap:8px;padding:12px 0 20px;">
         <div style="width:28px;height:28px;border-radius:8px;background:#059669;display:flex;align-items:center;justify-content:center;color:white;font-size:14px;">\u2728</div>
