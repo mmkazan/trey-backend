@@ -304,6 +304,11 @@
   let token = sessionStorage.getItem("treyAdminToken") || "";
   let clientsCache = [];
 
+  // Escape any value before putting it into innerHTML (incl. quotes for
+  // attribute contexts). Prevents a stored value like "<img onerror=…>" from
+  // executing when the client list/detail renders.
+  const esc = (v) => { v = (v == null ? "" : String(v)); const d = document.createElement("div"); d.textContent = v; return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
+
   function saveToken() {
     const val = document.getElementById("tokenInput").value.trim();
     if (!val) return;
@@ -404,10 +409,10 @@
     document.getElementById("detailGrid").innerHTML = DETAIL_FIELDS.map(([label, key]) => {
       const v = cc[key];
       const has = v !== undefined && v !== null && v !== "";
-      const display = has ? (STAR_KEYS.has(key) ? `${v} ★` : v) : "Not set";
+      const display = has ? (STAR_KEYS.has(key) ? `${esc(v)} ★` : esc(v)) : "Not set";
       return `
       <div class="field">
-        <label>${label}</label>
+        <label>${esc(label)}</label>
         <div class="val ${has ? "" : "empty"}">${display}</div>
       </div>`;
     }).join("");
@@ -426,7 +431,7 @@
     const rowsEl = document.getElementById("clientRows");
     rowsEl.innerHTML = '<tr><td colspan="5" class="muted">Loading…</td></tr>';
     try {
-      const res = await fetch(`${API}?token=${encodeURIComponent(token)}`);
+      const res = await fetch(API, { headers: { Authorization: "Bearer " + token } });
       if (res.status === 403) { logout(); return; }
       const clients = await res.json();
       clientsCache = Array.isArray(clients) ? clients : [];
@@ -436,15 +441,15 @@
       }
       rowsEl.innerHTML = clientsCache.map((c, i) => `
         <tr onclick="showDetail(clientsCache[${i}])">
-          <td>${c.locationId || ""}</td>
-          <td>${c.businessName || ""}<br><span class="muted" style="font-size:11px;">${c.businessType || ""}</span></td>
-          <td>${c.phone || '<span class="muted">—</span>'}</td>
-          <td>${c.tapsSinceSignup || 0} <span class="muted" style="font-size:11px;">(${c.tapsThisMonth || 0} this mo)</span></td>
+          <td>${esc(c.locationId || "")}</td>
+          <td>${esc(c.businessName || "")}<br><span class="muted" style="font-size:11px;">${esc(c.businessType || "")}</span></td>
+          <td>${c.phone ? esc(c.phone) : '<span class="muted">—</span>'}</td>
+          <td>${esc(c.tapsSinceSignup || 0)} <span class="muted" style="font-size:11px;">(${esc(c.tapsThisMonth || 0)} this mo)</span></td>
           <td><span class="muted-link" onclick='event.stopPropagation(); editClient(clientsCache[${i}])'>Edit</span></td>
         </tr>
       `).join("");
     } catch (err) {
-      rowsEl.innerHTML = `<tr><td colspan="5" class="muted">Failed to load: ${err.message}</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="5" class="muted">Failed to load: ${esc(err.message)}</td></tr>`;
     }
   }
 
