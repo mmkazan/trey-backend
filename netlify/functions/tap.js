@@ -73,6 +73,32 @@ function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Resolve where to send the customer. A `googleUrl` from the tag is only
+// accepted if it is an https URL on a Google host — this stops an attacker
+// turning a stand link into an open redirect to a phishing site or a
+// javascript: link. Otherwise we build the review URL from the client's saved
+// placeId (preferred) or the locationId. Netlify already URL-decodes query
+// params once, so we must NOT decodeURIComponent again (double-decode corrupts
+// valid targets and throws on a literal %).
+function safeReviewTarget(googleUrl, client, locationId) {
+  const fallbackId = (client && client.placeId) || locationId;
+  const fallback = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(fallbackId)}`;
+  if (!googleUrl) return fallback;
+  try {
+    const u = new URL(googleUrl);
+    const host = u.hostname.toLowerCase();
+    // Google review/maps hosts only. Note: goo.gl (a link shortener) is
+    // deliberately excluded, and Google's own /url?q= open-redirector is
+    // rejected below — both could otherwise bounce a visitor to any site.
+    const okHost =
+      host === "google.com" || host.endsWith(".google.com") ||
+      host === "g.page" || host.endsWith(".g.page");
+    const isRedirector = u.pathname === "/url"; // e.g. https://www.google.com/url?q=https://evil.com
+    if (u.protocol === "https:" && okHost && !isRedirector) return u.href;
+  } catch (e) { /* not a valid absolute URL — fall through */ }
+  return fallback;
+}
+
 // Should the stand be paused for this client (trial over, not subscribed)?
 function isPaused(client) {
   if (!client) return false;
@@ -183,9 +209,7 @@ exports.handler = async (event) => {
     console.error("Tap logging error:", err);
   }
 
-  const target = googleUrl
-    ? decodeURIComponent(googleUrl)
-    : `https://search.google.com/local/writereview?placeid=${encodeURIComponent(locationId)}`;
+  const target = safeReviewTarget(googleUrl, client, locationId);
 
   return thankYouPage(client, target);
 };
