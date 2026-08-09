@@ -25,9 +25,10 @@ import crypto from "node:crypto";
 
 export const config = { schedule: "0 9 1 * *" };
 
-// Fallbacks to the live SIDs so this works even before the env vars are set.
+// Fallback to the live Utility SID (trey_monthly_report_v3) so this works even
+// before the env var is set. Override with TWILIO_MONTHLY_CONTENT_SID on Netlify.
 const MONTHLY_CONTENT_SID =
-  process.env.TWILIO_MONTHLY_CONTENT_SID || "HXb4a4ffbb7e556ad443628d40088e6a21";
+  process.env.TWILIO_MONTHLY_CONTENT_SID || "HX71ca271a874e3d0dee582ea32301b2f1";
 
 // MUST match KEY_LEN in report.js. If you change one, change both.
 const KEY_LEN = 32;
@@ -93,6 +94,7 @@ export default async () => {
   const clientsStore = blobsStore("clients");
   const tapTallyStore = blobsStore("taptally");
   const reviewTallyStore = blobsStore("reviewtally");
+  const sentStore = blobsStore("reportssent"); // idempotency: one send per client per month
 
   const twilioFrom = process.env.TWILIO_WHATSAPP_FROM;
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
@@ -117,6 +119,9 @@ export default async () => {
     if (!isSendable(client)) { summary.skipped++; continue; }
 
     const loc = client.locationId || b.key;
+    // Already sent this client their report for this month? Skip — so a re-fire
+    // or redeploy-trigger never double-messages anyone.
+    if (await sentStore.get(`monthly:${loc}:${mKey}`)) { summary.skipped++; continue; }
     const monthTally = (await tapTallyStore.get(`${loc}:${mKey}`, { type: "json" })) || {};
     const monthReviews = (await reviewTallyStore.get(`${loc}:${mKey}`, { type: "json" })) || {};
 
@@ -155,6 +160,7 @@ export default async () => {
 
     try {
       await sendWhatsApp(params);
+      await sentStore.setJSON(`monthly:${loc}:${mKey}`, { at: new Date().toISOString() });
       summary.sent++;
     } catch (err) {
       summary.failed++;
