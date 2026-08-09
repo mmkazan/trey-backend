@@ -83,8 +83,9 @@ exports.handler = async (event) => {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
-  const to = (params.to || "").replace(/[^\d+]/g, "");
-  if (!to) return { statusCode: 400, body: JSON.stringify({ error: "pass ?to=+44..." }) };
+  const digits = (params.to || "").replace(/\D/g, ""); // tolerate a "+" that arrived as a space
+  if (!digits) return { statusCode: 400, body: JSON.stringify({ error: "pass ?to=+44..." }) };
+  const to = "+" + digits;
 
   let contentSid;
   try {
@@ -127,7 +128,7 @@ exports.handler = async (event) => {
 
   // Give a tap something to act on: a pending mapping + a demo review record.
   const demoReviewId = `test-${Date.now()}`;
-  await blobsStore("approvalpending").setJSON(to, { reviewId: demoReviewId, sentAt: new Date().toISOString(), demo: true });
+  await blobsStore("approvalpending").setJSON(digits, { reviewId: demoReviewId, sentAt: new Date().toISOString(), demo: true });
   await blobsStore("reviews").setJSON(`pending:${demoReviewId}`, {
     reviewId: demoReviewId, businessName: vars["1"], reviewerName: vars["2"], rating: vars["3"],
     comment: vars["4"], replyDraft: vars["5"], status: "pending", demo: true, createdAt: new Date().toISOString(),
