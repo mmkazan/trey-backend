@@ -69,6 +69,37 @@ function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// A gentle "days of free trial left + Subscribe" banner. Shows only while the
+// client is on trial (or lapsed); nothing once subscribed. Needs STRIPE_PAYMENT_LINK.
+function trialBanner(client, locationId) {
+  if (!client) return "";
+  const status = client.subscriptionStatus;
+  if (status === "active") return "";
+  const TRIAL_DAYS = 14;
+  let daysLeft = null;
+  if (client.createdAt) {
+    const ends = new Date(client.createdAt).getTime() + TRIAL_DAYS * 86400000;
+    if (!isNaN(ends)) daysLeft = Math.ceil((ends - Date.now()) / 86400000);
+  }
+  const onTrial = status === "trial";
+  const ended = status === "paused" || status === "cancelled" || (onTrial && daysLeft !== null && daysLeft <= 0);
+  if (!onTrial && !ended) return "";
+  const payBase = process.env.STRIPE_PAYMENT_LINK || "";
+  const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
+  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#065f46;font-weight:700">${t}</a>` : `<strong>${t}</strong>`);
+  let msg;
+  if (ended) {
+    msg = `Your free trial has ended — ${link("resubscribe")} to switch Trey back on.`;
+  } else if (daysLeft !== null && daysLeft <= 3) {
+    msg = `Just ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left of your free trial — ${link("keep Trey going")} whenever you're ready.`;
+  } else if (daysLeft !== null) {
+    msg = `${daysLeft} days left of your free trial. Enjoying Trey? ${link("Set up your subscription")}.`;
+  } else {
+    msg = `You're on your free trial — ${link("set up your subscription")} whenever you're ready.`;
+  }
+  return `<div style="background:#ecfdf5;border-bottom:1px solid #a7f3d0;color:#065f46;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:9px 14px">${msg}</div>`;
+}
+
 // YYYY-MM of the last COMPLETE calendar month (the default when m is omitted).
 function lastCompleteMonth(now) {
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -382,6 +413,10 @@ function renderReport(locationId, month, data, theme) {
     ? `<a class="glink" href="${escapeHtml(profileUrl)}" target="_blank" rel="noopener">View your Google reviews →</a>`
     : "";
 
+  // Link into the review Inbox (same signed key, so still no login).
+  const inboxBase = process.env.URL || "https://treyv1.netlify.app";
+  const inboxLink = `<a class="glink" href="${inboxBase}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}">See &amp; reply to your reviews →</a>`;
+
   const title = `${businessName} — Your month with Trey`;
 
   return `<!DOCTYPE html><html lang="en"><head>
@@ -465,6 +500,7 @@ function renderReport(locationId, month, data, theme) {
   body.theme-green .foot .glink{color:#fff;text-decoration:underline}
 </style></head>
 <body class="${theme === "green" ? "theme-green" : ""}">
+${trialBanner(client, locationId)}
   <div class="wrap">
     <div class="head">
       ${treyLockup}
@@ -486,6 +522,7 @@ function renderReport(locationId, month, data, theme) {
 
     <div class="foot">
       <div class="powered">Powered by Trey</div>
+      ${inboxLink}
       ${footerLink}
     </div>
   </div>
