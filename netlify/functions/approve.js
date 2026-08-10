@@ -257,12 +257,14 @@ exports.handler = async (event) => {
       const updated = { ...pending, status: "approved", finalReply, approvedAt: new Date().toISOString() };
       await reviewsStore.setJSON(`pending:${reviewId}`, updated);
 
-      const monthKey = (pending.createdAt || new Date().toISOString()).slice(0, 7);
-      const recordKey = `review:${pending.locationId}:${monthKey}:${reviewId}`;
+      // Update the permanent review record so the Inbox reflects the reply.
+      // Use the record's OWN stored key (pending.recordKey) — recomputing it
+      // from createdAt's month can point at the wrong month and miss the record,
+      // which left approved reviews stuck in the Inbox's "waiting" list.
+      const recordKey = pending.recordKey
+        || `review:${pending.locationId}:${(pending.createdAt || new Date().toISOString()).slice(0, 7)}:${reviewId}`;
       const existingRecord = await reviewsStore.get(recordKey, { type: "json" });
-      if (existingRecord) {
-        await reviewsStore.setJSON(recordKey, { ...existingRecord, finalReply, status: "approved" });
-      }
+      await reviewsStore.setJSON(recordKey, { ...(existingRecord || pending), finalReply, status: "approved" });
 
       // Drop a "✅ done" line into the owner's WhatsApp so the thread stays a
       // clean, scannable list of what still needs a response. Best-effort.
