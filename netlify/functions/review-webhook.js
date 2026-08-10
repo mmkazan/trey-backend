@@ -109,6 +109,7 @@ exports.handler = async (event) => {
         businessType: client.businessType,
         voicePerspective: client.voicePerspective,
         publicSignOffName: client.publicSignOffName,
+        brandVoice: client.brandVoice,
         businessPhone: client.phone,
         reviewerName,
         rating,
