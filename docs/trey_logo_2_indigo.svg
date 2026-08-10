@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="54 88 228 192" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <g id="ripArcs">
+      <path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.28"/>
+      <path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+      <path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <g id="mark">
+      <use href="#ripArcs" transform="rotate(-20 50 50)"/>
+      <rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/>
+      <rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/>
+    </g>
+  </defs>
+  <g transform="translate(165,181) scale(1.18) translate(-165,-181)">
+    <use href="#mark" transform="translate(74,105) scale(1.4)"/>
+    <text x="206" y="244" font-size="48" font-weight="800" letter-spacing="-1.7" fill="#0f172a" text-anchor="middle">trey</text>
+  </g>
+</svg>
