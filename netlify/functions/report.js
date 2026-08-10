@@ -27,7 +27,8 @@ const crypto = require("crypto");
 //      NETLIFY_SITE_ID / NETLIFY_BLOBS_TOKEN used by the other functions.
 
 // Trey brand.
-const GREEN = "#059669";
+// "GREEN" kept as the name to avoid churn, but Trey's accent is now Indigo.
+const GREEN = "#4338ca";
 const SLATE = "#0f172a";
 
 // The Trey WhatsApp avatar mark (docs/trey_whatsapp_avatar.png), downscaled to
@@ -86,7 +87,7 @@ function trialBanner(client, locationId) {
   if (!onTrial && !ended) return "";
   const payBase = process.env.STRIPE_PAYMENT_LINK || "";
   const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
-  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#065f46;font-weight:700">${t}</a>` : `<strong>${t}</strong>`);
+  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#4f46e5;font-weight:800;text-decoration:underline">${t}</a>` : `<strong>${t}</strong>`);
   let msg;
   if (ended) {
     msg = `Your free trial has ended — ${link("resubscribe")} to switch Trey back on.`;
@@ -97,7 +98,7 @@ function trialBanner(client, locationId) {
   } else {
     msg = `You're on your free trial — ${link("set up your subscription")} whenever you're ready.`;
   }
-  return `<div style="background:#ecfdf5;border-bottom:1px solid #a7f3d0;color:#065f46;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:9px 14px">${msg}</div>`;
+  return `<div style="background:#fff1f2;border-bottom:1px solid #fecdd3;color:#9f1239;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:10px 14px">${msg}</div>`;
 }
 
 // YYYY-MM of the last COMPLETE calendar month (the default when m is omitted).
@@ -167,6 +168,13 @@ function treyMarkHtml() {
   </svg>`;
 }
 
+// The small square "app icon" Trey badge (indigo squircle, white tilted-ripple
+// mark) shown inline next to Trey-branded lines. Self-contained SVG so it
+// recolours cleanly and needs no external image.
+function treyBadgeSvg(cls) {
+  return `<svg class="${cls}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trey"><rect width="100" height="100" rx="24" fill="#4338ca"/><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#fff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#fff"/></svg>`;
+}
+
 // A small helper page for the not-authorised / not-found / no-data cases, in
 // the same green visual language as the real report.
 function noticePage(statusCode, title, message) {
@@ -175,8 +183,8 @@ function noticePage(statusCode, title, message) {
 <title>${escapeHtml(title)}</title>
 <style>
   *{box-sizing:border-box}
-  html{background:#059669}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#059669;background-image:linear-gradient(165deg,#0b8a5e 0%,#059669 42%,#047857 100%);background-repeat:no-repeat;color:${SLATE};display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+  html{background:#4338ca}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#4338ca;background-image:linear-gradient(165deg,#4f46e5 0%,#4338ca 42%,#3730a3 100%);background-repeat:no-repeat;color:${SLATE};display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
   .wrap{max-width:420px;width:100%;text-align:center}
   .treylockup{display:inline-flex;align-items:center;gap:9px;margin-bottom:20px}
   .treytile{width:34px;height:34px;border-radius:10px;background:#fff;color:${GREEN};display:inline-flex;align-items:center;justify-content:center;font-size:17px}
@@ -379,7 +387,7 @@ function renderReport(locationId, month, data, theme) {
     ? `<div class="card journey">
         <div class="section-label">Since you joined${joinedLabel ? ` in ${escapeHtml(joinedLabel)}` : ""}</div>
         ${journeyLines.join("")}
-        ${totalTrey > 0 ? `<div class="treytotal"><img class="tt-mark" src="${TREY_MARK}" alt="Trey"> Trey's brought you <span class="tt-num">${totalTrey}</span> ${totalTrey === 1 ? "review" : "reviews"} in total</div>` : ""}
+        ${totalTrey > 0 ? `<div class="treytotal">${treyBadgeSvg("tt-mark")} Trey's brought you <span class="tt-num">${totalTrey}</span> ${totalTrey === 1 ? "review" : "reviews"} in total</div>` : ""}
       </div>`
     : "";
 
@@ -391,7 +399,7 @@ function renderReport(locationId, month, data, theme) {
     const reply = highlight.finalReply && String(highlight.finalReply).trim();
     const replyBlock = reply
       ? `<div class="treyreply">
-          <div class="tr-head"><img class="tr-mark" src="${TREY_MARK}" alt="Trey"> Trey's reply</div>
+          <div class="tr-head">${treyBadgeSvg("tr-mark")} Trey's reply</div>
           <p class="tr-body">${escapeHtml(String(highlight.finalReply).trim())}</p>
         </div>`
       : "";
@@ -427,7 +435,7 @@ function renderReport(locationId, month, data, theme) {
   *{box-sizing:border-box}
   :root{--green:${GREEN};--slate:${SLATE}}
   html{min-height:100%}
-  body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f1f5f9;color:var(--slate);-webkit-font-smoothing:antialiased}
+  body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#e4eefc;color:var(--slate);-webkit-font-smoothing:antialiased}
   .wrap{max-width:460px;margin:0 auto;padding:20px 16px 40px}
   .card{background:#fff;border-radius:18px;padding:22px 20px;margin:14px 0;box-shadow:0 6px 20px rgba(15,23,42,0.06)}
   .head{text-align:center;padding:14px 0 6px}
@@ -473,13 +481,13 @@ function renderReport(locationId, month, data, theme) {
   .journey .jrating{font-weight:600;white-space:nowrap}
   .jstar{color:#f59e0b}
   .journey .jfrom{color:#94a3b8}
-  .treytotal{margin-top:16px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:12px 14px;font-size:15px;color:#065f46;font-weight:600;line-height:1.4;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
+  .treytotal{margin-top:16px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:12px;padding:12px 14px;font-size:15px;color:#3730a3;font-weight:600;line-height:1.4;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
   .treytotal .tt-mark{width:22px;height:22px;border-radius:6px;margin-right:7px;object-fit:cover;flex:0 0 auto}
   .treytotal .tt-num{color:var(--green);font-weight:800;font-size:18px;margin:0 3px}
   .highlight .qstars{color:#f59e0b;font-size:18px;margin:10px 0 6px;letter-spacing:2px}
   blockquote{margin:0;font-size:18px;line-height:1.5;color:var(--slate);font-weight:500}
   .qwho{font-size:14px;color:#64748b;margin-top:12px}
-  .treyreply{margin-top:16px;padding:14px 16px;background:#f0fdf4;border-radius:12px;border-left:3px solid var(--green)}
+  .treyreply{margin-top:16px;padding:14px 16px;background:#eef2ff;border-radius:12px;border-left:3px solid var(--green)}
   .treyreply .tr-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--green)}
   .treyreply .tr-mark{width:20px;height:20px;border-radius:5px;object-fit:cover}
   .treyreply .tr-body{margin:8px 0 0;font-size:15px;line-height:1.5;color:#475569}
@@ -489,8 +497,8 @@ function renderReport(locationId, month, data, theme) {
   /* green background theme — solid fallback + gradient that covers the full
      document height (no background-attachment:fixed, which breaks on mobile
      browsers and leaves everything below the first screen white) */
-  html:has(body.theme-green){background:#059669}
-  body.theme-green{background-color:#059669;background-image:linear-gradient(165deg,#0b8a5e 0%,#059669 42%,#047857 100%);background-repeat:no-repeat}
+  html:has(body.theme-green){background:#4338ca}
+  body.theme-green{background-color:#4338ca;background-image:linear-gradient(165deg,#4f46e5 0%,#4338ca 42%,#3730a3 100%);background-repeat:no-repeat}
   body.theme-green .treylogo-svg{color:#fff}
   body.theme-green .treytile{background:#fff;color:var(--green)}
   body.theme-green .treyword{color:#fff}
