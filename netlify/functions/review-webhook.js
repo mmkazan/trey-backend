@@ -19,6 +19,16 @@ function weekKey(d) {
   return date.toISOString().slice(0, 10);
 }
 
+// A short, single-line preview of a review for the WhatsApp nudge. The full
+// review AND the AI draft live on the approve page, so the message stays short
+// no matter how long the review is. Collapses whitespace (WhatsApp templates
+// reject newlines/tabs) and trims on a word boundary with an ellipsis.
+function reviewSnippet(text, max = 140) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length > max ? t.slice(0, max).replace(/\s+\S*$/, "").trim() + "…" : t;
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
@@ -191,8 +201,8 @@ exports.handler = async (event) => {
     `\ud83d\udccc *Via ${source}*\n\n` +
     `*Rating:* ${rating} \u2b50\n` +
     `*Reviewer:* ${reviewerName}\n` +
-    `*Review:* "${comment}"\n\n` +
-    `\ud83d\udc49 View & approve reply:\n${approveUrl}\n\n` +
+    `*Review:* ${comment && comment.trim() ? `"${reviewSnippet(comment)}"` : "(rating only \u2014 no written review)"}\n\n` +
+    `\ud83d\udc49 Read it all & approve your reply:\n${approveUrl}\n\n` +
     `\u2014 Trey`;
 
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
@@ -221,7 +231,7 @@ exports.handler = async (event) => {
       2: clean(source, 60),
       3: clean(rating, 12),
       4: clean(reviewerName, 60),
-      5: clean(comment, 500) || "(no comment left)",
+      5: reviewSnippet(comment, 150) || "(rating only — no written review)",
       // Appended verbatim to the button URL's ?reviewId= — pre-encode so any
       // special characters in a Google review id survive the round-trip.
       6: encodeURIComponent(reviewId),
