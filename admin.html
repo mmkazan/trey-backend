@@ -6,13 +6,13 @@
 <title>Trey Admin | Clients</title>
 <style>
   :root {
-    --bg: #f8fafc;
+    --bg: #eef3fc;
     --card: #ffffff;
     --border: #e2e8f0;
     --text: #0f172a;
     --muted: #64748b;
-    --accent: #16a34a;
-    --accent-hover: #15803d;
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
     --danger: #dc2626;
   }
   * { box-sizing: border-box; }
@@ -131,7 +131,7 @@
     min-height: 18px;
   }
   #status.error { color: var(--danger); }
-  #status.success { color: var(--accent); }
+  #status.success { color: #16a34a; }
   #tokenGate {
     max-width: 420px;
     margin: 80px auto;
@@ -164,7 +164,20 @@
 </head>
 <body>
 
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="treyMarkIndigo" viewBox="0 0 100 100">
+    <g transform="rotate(-20 50 50)">
+      <path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.28"/>
+      <path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+      <path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/>
+    <rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/>
+  </symbol>
+</svg>
+
 <div id="tokenGate" class="card">
+  <svg viewBox="0 0 100 100" width="52" height="52" style="display:block;margin:0 auto 10px;" aria-hidden="true"><use href="#treyMarkIndigo"/></svg>
   <h2>Trey Admin</h2>
   <label for="tokenInput">Admin token</label>
   <input type="password" id="tokenInput" placeholder="Paste your CLIENT_ADMIN_TOKEN" />
@@ -176,9 +189,12 @@
 
 <div id="app" style="display:none;">
   <header>
-    <div>
-      <h1>Trey Admin — Clients</h1>
-      <div class="sub">Clients, trials &amp; monthly tap activity</div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <svg viewBox="0 0 100 100" width="36" height="36" aria-hidden="true"><use href="#treyMarkIndigo"/></svg>
+      <div>
+        <h1>Trey Admin — Clients</h1>
+        <div class="sub">Clients, trials &amp; monthly tap activity</div>
+      </div>
     </div>
     <span class="muted-link" onclick="logout()">Sign out</span>
   </header>
@@ -258,6 +274,10 @@
           <input id="f_reviewCount" type="number" min="0" placeholder="auto-syncs monthly" />
         </div>
       </div>
+      <div style="margin-top:6px;">
+        <label>Brand voice <span class="muted" style="font-weight:400;text-transform:none;">— 1–2 sentences on how this business sounds; the AI matches it on every reply.</span></label>
+        <textarea id="f_brandVoice" rows="2" placeholder="e.g. We're a family-run MOT garage in Derby — friendly, straight-talking, and genuinely grateful for every customer." style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
+      </div>
       <div class="actions">
         <button class="btn-primary" onclick="saveClient()">Save client</button>
         <button class="btn-secondary" onclick="resetForm()">Clear form</button>
@@ -269,6 +289,20 @@
       <div class="card-header">
         <h2 id="detailTitle">Client details</h2>
         <span class="muted-link" onclick="hideDetail()">Close</span>
+      </div>
+      <div class="tapstand" id="tapStand" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:18px;">
+        <label style="display:block;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#64748b;font-weight:700;margin-bottom:8px;">Tap-stand URL</label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <code id="tapUrl" style="flex:1;min-width:220px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:9px 11px;font-size:12.5px;color:#0f172a;word-break:break-all;"></code>
+          <button class="btn-secondary" id="copyBtn" onclick="copyTapUrl()">Copy</button>
+        </div>
+        <div style="display:flex;gap:16px;align-items:center;margin-top:14px;flex-wrap:wrap;">
+          <div id="qrBox" style="width:176px;height:176px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px;display:flex;align-items:center;justify-content:center;"><img id="qrImg" alt="Tap-stand QR" style="width:160px;height:160px;display:none;"><span id="qrFallback" class="muted" style="display:none;font-size:11px;text-align:center;">QR unavailable — URL above still works.</span></div>
+          <div style="flex:1;min-width:200px;">
+            <div class="muted" style="font-size:12.5px;line-height:1.5;margin-bottom:10px;">Program the NFC chip with the URL above, or print this QR for the stand. Tapping either counts the visit and sends the customer to this client's Google review screen.</div>
+            <a class="btn-secondary" id="qrDownload" download style="display:inline-block;text-decoration:none;padding:9px 16px;border-radius:6px;background:#f1f5f9;color:#0f172a;font-size:14px;">Download QR (PNG)</a>
+          </div>
+        </div>
       </div>
       <div class="detailGrid" id="detailGrid"></div>
       <div class="actions">
@@ -332,7 +366,7 @@
 
   function resetForm() {
     ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName",
-     "placeId", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount"]
+     "placeId", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount", "brandVoice"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
     document.getElementById("f_subscriptionStatus").value = "trial";
@@ -377,6 +411,7 @@
     ["Business logo URL", "logoUrl"],
     ["Voice perspective", "voicePerspective"],
     ["Public sign-off name", "publicSignOffName"],
+    ["Brand voice", "brandVoice"],
     ["Subscription", "subscriptionStatus"],
     ["Taps since sign-up", "tapsSinceSignup"],
     ["Taps this month", "tapsThisMonth"],
@@ -417,8 +452,48 @@
       </div>`;
     }).join("");
     document.getElementById("detailCard").dataset.locationId = c.locationId;
+    renderTapStand(c.locationId);
     document.getElementById("detailCard").style.display = "block";
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // --- Tap stand: unique URL + QR (each client's stand link is derived from
+  // their locationId; tap.js counts the visit and redirects to Google) ---
+  function makeTapUrl(loc) {
+    return location.origin + "/.netlify/functions/tap?locationId=" + encodeURIComponent(loc);
+  }
+
+  function renderTapStand(loc) {
+    const url = makeTapUrl(loc);
+    const urlEl = document.getElementById("tapUrl");
+    urlEl.textContent = url;
+    urlEl.dataset.url = url;
+    // QR is generated server-side (tap-qr function): no CDN needed, and the
+    // download is a clean, print-ready PNG.
+    const qrSrc = "/.netlify/functions/tap-qr?locationId=" + encodeURIComponent(loc);
+    const img = document.getElementById("qrImg");
+    const fb = document.getElementById("qrFallback");
+    fb.style.display = "none";
+    img.style.display = "none";
+    img.onload = function () { img.style.display = "block"; fb.style.display = "none"; };
+    img.onerror = function () { img.style.display = "none"; fb.style.display = "block"; };
+    img.src = qrSrc;
+    const dl = document.getElementById("qrDownload");
+    dl.href = qrSrc;
+    dl.setAttribute("download", "trey-tap-qr-" + loc + ".png");
+  }
+
+  function copyTapUrl() {
+    const url = document.getElementById("tapUrl").dataset.url || "";
+    const done = function () { const b = document.getElementById("copyBtn"); b.textContent = "Copied ✓"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done).catch(fallbackCopy);
+    } else { fallbackCopy(); }
+    function fallbackCopy() {
+      const t = document.createElement("textarea"); t.value = url; document.body.appendChild(t); t.select();
+      try { document.execCommand("copy"); done(); } catch (e) {}
+      t.remove();
+    }
   }
 
   function editFromDetail() {
@@ -465,6 +540,7 @@
     document.getElementById("f_logoUrl").value = c.logoUrl || "";
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
+    document.getElementById("f_brandVoice").value = c.brandVoice || "";
     // No status recorded = grandfathered active; show that so a save keeps them on.
     document.getElementById("f_subscriptionStatus").value = c.subscriptionStatus || "active";
     document.getElementById("f_initialGoogleRating").value = c.initialGoogleRating ?? "";
@@ -497,6 +573,7 @@
       logoUrl: document.getElementById("f_logoUrl").value.trim(),
       voicePerspective: document.getElementById("f_voicePerspective").value,
       publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),
+      brandVoice: document.getElementById("f_brandVoice").value.trim(),
       subscriptionStatus: document.getElementById("f_subscriptionStatus").value,
       initialGoogleRating: numOrEmpty("f_initialGoogleRating"),
       initialReviewCount: numOrEmpty("f_initialReviewCount"),
