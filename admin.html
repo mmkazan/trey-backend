@@ -227,6 +227,14 @@
           <input id="f_email" placeholder="owner@business.com" />
         </div>
         <div>
+          <label>Contact first name</label>
+          <input id="f_contactFirstName" placeholder="e.g. John" />
+        </div>
+        <div>
+          <label>Contact surname</label>
+          <input id="f_contactSurname" placeholder="e.g. Smith" />
+        </div>
+        <div>
           <label>Google Account ID</label>
           <input id="f_googleAccountId" placeholder="Google Business account ID" />
         </div>
@@ -273,6 +281,10 @@
           <label>Review count now</label>
           <input id="f_reviewCount" type="number" min="0" placeholder="auto-syncs monthly" />
         </div>
+      </div>
+      <div style="margin-top:6px;">
+        <label>Company address</label>
+        <textarea id="f_companyAddress" rows="2" placeholder="e.g. 12 High Street, Cobham, Surrey, KT11 1AA" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
       </div>
       <div style="margin-top:6px;">
         <label>Brand voice <span class="muted" style="font-weight:400;text-transform:none;">— 1–2 sentences on how this business sounds; the AI matches it on every reply.</span></label>
@@ -366,7 +378,8 @@
 
   function resetForm() {
     ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName",
-     "placeId", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount", "brandVoice"]
+     "placeId", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount", "brandVoice",
+     "contactFirstName", "contactSurname", "companyAddress"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
     document.getElementById("f_subscriptionStatus").value = "trial";
@@ -399,6 +412,8 @@
     ["Business type", "businessType"],
     ["WhatsApp number", "phone"],
     ["Email", "email"],
+    ["Contact name", "_contactName"],
+    ["Company address", "companyAddress"],
     ["Google rating at sign-up", "initialGoogleRating"],
     ["Google rating now", "googleRating"],
     ["Rating change", "_ratingChange"],
@@ -418,7 +433,7 @@
     ["Taps this week", "tapsThisWeek"],
     ["Reviews via Trey (this week)", "tapReviewsThisWeek"],
     ["Reviews direct (this week)", "organicReviewsThisWeek"],
-    ["Reviews via tap (all time)", "tapReviews"],
+    ["Reviews via Trey (all time)", "tapReviews"],
     ["Reviews organic (all time)", "organicReviews"],
   ];
 
@@ -430,6 +445,7 @@
     document.getElementById("formCard").style.display = "none";
     document.getElementById("detailTitle").textContent = c.businessName || c.locationId;
     const cc = { ...c };
+    cc._contactName = [c.contactFirstName, c.contactSurname].filter(Boolean).join(" ");
     const ir = num(c.initialGoogleRating), nr = num(c.googleRating);
     if (ir !== null && nr !== null) {
       const d = nr - ir;
@@ -541,6 +557,9 @@
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
     document.getElementById("f_brandVoice").value = c.brandVoice || "";
+    document.getElementById("f_contactFirstName").value = c.contactFirstName || "";
+    document.getElementById("f_contactSurname").value = c.contactSurname || "";
+    document.getElementById("f_companyAddress").value = c.companyAddress || "";
     // No status recorded = grandfathered active; show that so a save keeps them on.
     document.getElementById("f_subscriptionStatus").value = c.subscriptionStatus || "active";
     document.getElementById("f_initialGoogleRating").value = c.initialGoogleRating ?? "";
@@ -574,6 +593,9 @@
       voicePerspective: document.getElementById("f_voicePerspective").value,
       publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),
       brandVoice: document.getElementById("f_brandVoice").value.trim(),
+      contactFirstName: document.getElementById("f_contactFirstName").value.trim(),
+      contactSurname: document.getElementById("f_contactSurname").value.trim(),
+      companyAddress: document.getElementById("f_companyAddress").value.trim(),
       subscriptionStatus: document.getElementById("f_subscriptionStatus").value,
       initialGoogleRating: numOrEmpty("f_initialGoogleRating"),
       initialReviewCount: numOrEmpty("f_initialReviewCount"),
