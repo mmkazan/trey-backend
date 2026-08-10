@@ -211,5 +211,14 @@ exports.handler = async (event) => {
 
   const target = safeReviewTarget(googleUrl, client, locationId);
 
-  return thankYouPage(client, target);
+  // Active clients: redirect STRAIGHT to Google — no interstitial. The tap is
+  // already logged above, so attribution is unaffected. The old 1.6s thank-you
+  // page was unreadable and only cost drop-off between tap and review form.
+  // (The pause/notice pages above are kept — the message only matters when the
+  // subscription isn't paid.)
+  return {
+    statusCode: 302,
+    headers: { Location: target, "Cache-Control": "no-store" },
+    body: "",
+  };
 };
