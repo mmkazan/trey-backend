@@ -1,8 +1,16 @@
-// TEST HELPER (admin-gated) — fires a fake review ALERT (the single-link flow)
-// at a phone number so you can walk the real approve page end to end without a
-// live Google review. Delete this file once you've finished testing.
+// TEST HELPER (admin-gated) — fires a review ALERT (the single-link flow) at a
+// phone number so you can walk the real approve page end to end without a live
+// Google review. Delete this file once you've finished testing.
 //
 //   GET /.netlify/functions/test-review-alert?to=+447941052034&token=ADMIN_TOKEN
+//        [&loc=trey-demo]        which client's data the alert belongs to
+//        [&reviewId=demo-0]      alert on a SPECIFIC existing review
+//
+// With loc/reviewId it alerts on a real review that already lives in that
+// client's Inbox — so tapping the link opens that review's approve page, and
+// "Back to your reviews" shows the client's full list. Default loc is
+// "trey-demo" (the seeded showcase). If no matching review is found it falls
+// back to creating a synthetic one so the helper still works standalone.
 //
 // The recipient must have messaged the Trey WhatsApp number within the last 24h
 // — the alert is sent as a free-form session message, so no template is needed.
@@ -36,34 +44,56 @@ exports.handler = async (event) => {
   const approveToken = process.env.TREY_TAPPY_SECRET_TOKEN;
   if (!approveToken) return { statusCode: 500, body: JSON.stringify({ error: "TREY_TAPPY_SECRET_TOKEN not set" }) };
 
-  // Create a demo pending review (+ its permanent record) so the approve page
-  // has something real to load.
   const base = process.env.URL || "https://treyv1.netlify.app";
-  const now = new Date();
-  const reviewId = `test-${now.getTime()}`;
-  const monthKey = now.toISOString().slice(0, 7);
-  const record = {
-    reviewId,
-    locationId: "trey-test",
-    businessName: "Mik's Cars",
-    reviewerName: "Sarah J",
-    rating: 5,
-    comment: "Brilliant service, car was ready early!",
-    replyDraft: "Hi Sarah, thanks so much — really glad we got you sorted quickly. See you next time! — Mik",
-    status: "pending",
-    recordKey: `review:trey-test:${monthKey}:${reviewId}`,
-    createdAt: now.toISOString(),
-    demo: true,
-  };
+  const loc = (params.loc || "trey-demo").trim();
   const reviewsStore = blobsStore("reviews");
-  await reviewsStore.setJSON(`pending:${reviewId}`, record);
-  await reviewsStore.setJSON(record.recordKey, record);
 
-  const approveUrl = `${base}/.netlify/functions/approve?reviewId=${reviewId}&token=${encodeURIComponent(approveToken)}`;
+  // Prefer a real, existing review so the alert links into the client's real
+  // Inbox. Order: an explicit reviewId, then the first waiting review in loc,
+  // then a synthetic fallback.
+  let record = null;
+  if (params.reviewId) {
+    record = await reviewsStore.get(`pending:${params.reviewId}`, { type: "json" });
+  }
+  if (!record) {
+    try {
+      const { blobs } = await reviewsStore.list({ prefix: `review:${loc}:` });
+      const recs = (await Promise.all(blobs.map((b) => reviewsStore.get(b.key, { type: "json" })))).filter(Boolean);
+      record = recs
+        .filter((r) => r.status !== "approved" && r.status !== "skipped")
+        .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))[0] || null;
+    } catch (e) {
+      console.error("[test-review-alert] list failed:", e.message);
+    }
+  }
+  if (!record) {
+    // Synthetic fallback — create a demo pending review under `loc`.
+    const now = new Date();
+    const reviewId = `test-${now.getTime()}`;
+    const monthKey = now.toISOString().slice(0, 7);
+    record = {
+      reviewId, locationId: loc, businessName: "Mik's Cars", reviewerName: "Sarah J",
+      rating: 5, comment: "Brilliant service, car was ready early!",
+      replyDraft: "Hi Sarah, thanks so much — really glad we got you sorted quickly. See you next time! — Mik",
+      status: "pending", recordKey: `review:${loc}:${monthKey}:${reviewId}`,
+      createdAt: now.toISOString(), demo: true,
+    };
+    await reviewsStore.setJSON(`pending:${reviewId}`, record);
+    await reviewsStore.setJSON(record.recordKey, record);
+  }
+
+  const hasComment = record.comment && String(record.comment).trim();
+  const commentLine = hasComment
+    ? `"${String(record.comment).replace(/\s+/g, " ").trim()}"`
+    : "(rating only — no written review)";
+  const replyDraft = (record.replyDraft && String(record.replyDraft).trim())
+    || "Thanks so much for the rating — really appreciate you taking the time!";
+
+  const approveUrl = `${base}/.netlify/functions/approve?reviewId=${encodeURIComponent(record.reviewId)}&token=${encodeURIComponent(approveToken)}`;
   const body =
-    `New review for ${record.businessName}\n\n` +
-    `${record.rating}⭐ from ${record.reviewerName}\n"${record.comment}"\n\n` +
-    `Suggested reply:\n${record.replyDraft}\n\n` +
+    `New review for ${record.businessName || "your business"}\n\n` +
+    `${record.rating}⭐ from ${record.reviewerName || "A customer"}\n${commentLine}\n\n` +
+    `Suggested reply:\n${replyDraft}\n\n` +
     `Review & respond 👉 ${approveUrl}`;
 
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
@@ -87,5 +117,5 @@ exports.handler = async (event) => {
     return { statusCode: 502, body: JSON.stringify({ error: "Twilio " + resp.status, detail: out }) };
   }
 
-  return { statusCode: 200, body: JSON.stringify({ sent: true, to, reviewId, approveUrl, sid: out.sid }) };
+  return { statusCode: 200, body: JSON.stringify({ sent: true, to, loc, reviewId: record.reviewId, hasComment: !!hasComment, approveUrl, sid: out.sid }) };
 };
