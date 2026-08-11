@@ -98,7 +98,7 @@ function trialBanner(client, locationId) {
   if (!onTrial && !ended) return ""; // grandfathered / unknown → no banner
   const payBase = process.env.STRIPE_PAYMENT_LINK || "";
   const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
-  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:${INDIGO2};font-weight:800;text-decoration:underline">${t}</a>` : `<strong>${t}</strong>`);
+  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:${INDIGO2};font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
   let msg;
   if (ended) {
     msg = `Your free trial has ended — ${link("resubscribe")} to switch Trey back on.`;
