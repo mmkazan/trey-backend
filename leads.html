@@ -54,6 +54,24 @@
   .gate{max-width:420px;margin:80px auto;text-align:center;}
   .muted{color:var(--muted);font-size:13px;}
   a{color:var(--accent2);}
+  .draft-pill{background:#eef2ff;color:#4338ca;}
+  .draft-pill:hover{background:#e0e7ff;}
+  /* Draft-outreach modal */
+  .modal-bg{display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:60;padding:24px;overflow:auto;}
+  .modal{max-width:680px;margin:0 auto;background:#fff;border-radius:14px;padding:22px 22px 26px;box-shadow:0 20px 60px rgba(15,23,42,.25);}
+  .modal h3{margin:0;font-size:17px;}
+  .modal .msub{color:var(--muted);font-size:12.5px;margin:4px 0 16px;}
+  .modal-close{float:right;cursor:pointer;color:var(--muted);font-size:24px;line-height:.8;font-weight:400;}
+  .senderbox{background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
+  .senderbox label{margin-top:0;}
+  .chanhdr{font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--accent2);margin:18px 0 8px;}
+  .msgblock{border:1px solid var(--border);border-radius:10px;padding:10px 12px 12px;margin-bottom:10px;}
+  .msgblock .mhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
+  .msgblock .mlabel{font-weight:700;font-size:13px;}
+  .msgblock textarea{min-height:92px;font-size:13px;line-height:1.45;}
+  .copybtn{background:#f1f5f9;color:#0f172a;padding:5px 11px;font-size:12px;border-radius:6px;}
+  .copybtn.ok{background:#dcfce7;color:#166534;}
+  .linkbtn{background:#eef2ff;color:#4338ca;padding:5px 11px;font-size:12px;border-radius:6px;border:none;cursor:pointer;}
 </style>
 </head>
 <body>
@@ -93,9 +111,28 @@
       <div id="status"></div>
     </div>
 
+    <div class="card" style="padding:14px 18px;">
+      <div class="row" style="align-items:center;margin:0;">
+        <div style="flex:2;"><input id="leadSearch" placeholder="Search leads — name, category, address…" oninput="render()" /></div>
+        <div style="flex:0;min-width:150px;">
+          <select id="leadStatusFilter" onchange="render()">
+            <option value="">All statuses</option>
+            <option>New</option><option>Contacted</option><option>On trial</option><option>Converted</option><option>Lost</option>
+          </select>
+        </div>
+        <div style="flex:0;min-width:130px;">
+          <select id="leadTierFilter" onchange="render()">
+            <option value="">All tiers</option>
+            <option value="1">Tier 1</option><option value="2">Tier 2</option><option value="3">Tier 3</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div class="counts" id="counts"></div>
     <div id="leadList"></div>
   </main>
+  <div id="draftModal" class="modal-bg" onclick="if(event.target===this)closeDraft()"></div>
 </div>
 
 <script>
@@ -103,6 +140,7 @@
   const STATUSES = ["New","Contacted","On trial","Converted","Lost"];
   let token = sessionStorage.getItem("treyAdminToken") || "";
   let LEADS = [];
+  let DRAFT_STATE = { phone:"", email:"" };
 
   function saveToken(){ const v=document.getElementById("tokenInput").value.trim(); if(!v)return; token=v; sessionStorage.setItem("treyAdminToken",v); boot(); }
   function logout(){ sessionStorage.removeItem("treyAdminToken"); token=""; document.getElementById("app").style.display="none"; document.getElementById("gate").style.display="block"; }
@@ -222,13 +260,26 @@
     }catch(e){ list.innerHTML='<div class="muted" style="padding:10px;">Failed to load: '+esc(e.message)+'</div>'; }
   }
   function render(){
-    // counts
+    // counts (always the full pipeline, not the filtered view)
     const c={}; STATUSES.forEach(s=>c[s]=0); LEADS.forEach(l=>{ c[l.outreachStatus]=(c[l.outreachStatus]||0)+1; });
     document.getElementById("counts").innerHTML='<span class="count"><b>'+LEADS.length+'</b>total</span>'+
       STATUSES.map(s=>'<span class="count"><b>'+(c[s]||0)+'</b>'+s+'</span>').join("");
-    // leads
     if(!LEADS.length){ document.getElementById("leadList").innerHTML='<div class="card muted">No leads yet — add one above or upload a CSV.</div>'; return; }
-    document.getElementById("leadList").innerHTML=LEADS.map((l,i)=>leadCard(l,i)).join("");
+    // filter — keep each lead's ORIGINAL index so the row actions still target LEADS[i]
+    const el=document.getElementById("leadSearch"); const q=(el&&el.value||"").toLowerCase().trim();
+    const sf=document.getElementById("leadStatusFilter"); const st=sf&&sf.value||"";
+    const tf=document.getElementById("leadTierFilter"); const tier=tf&&tf.value||"";
+    const rows=LEADS.map((l,i)=>({l,i})).filter(function(o){
+      const l=o.l;
+      const hay=[l.businessName,l.category,l.address,l.contactName,l.phone,l.email].filter(Boolean).join(" ").toLowerCase();
+      const okQ=!q||hay.indexOf(q)>-1;
+      const okSt=!st||(l.outreachStatus||"New")===st;
+      const okT=!tier||String(l.tier||"")===tier;
+      return okQ&&okSt&&okT;
+    });
+    document.getElementById("leadList").innerHTML = rows.length
+      ? rows.map(function(o){return leadCard(o.l,o.i);}).join("")
+      : '<div class="card muted">No leads match your search.</div>';
   }
   function leadCard(l,i){
     const tier=l.tier?("t"+l.tier):"t3";
@@ -241,6 +292,7 @@
         '<span class="tier '+tier+'">'+(l.tier?("T"+l.tier):"—")+'</span>'+
         '<span class="score">'+(l.score!=null?l.score:"—")+'</span>'+
         '<span class="lead-main"><div class="lead-name">'+esc(l.businessName||"(no name)")+' '+badges+'</div><div class="lead-sub">'+esc(sub)+'</div></span>'+
+        '<button class="pill draft-pill" onclick="event.stopPropagation();openDraft('+i+')" title="Draft outreach messages">✍ Draft</button>'+
         '<button class="pill '+clsStatus(l.outreachStatus)+'" onclick="event.stopPropagation();cycleStatus('+i+')">'+esc(l.outreachStatus||"New")+'</button>'+
       '</div>'+
       '<div class="lead-detail" id="detail_'+i+'">'+
@@ -275,6 +327,115 @@
     const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8;"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trey-leads.csv"; a.click();
   }
+
+  // ---------- outreach drafting ----------
+  // Saved on this device so you don't retype your name/contact/demo link each time.
+  const OUT = {
+    get(k,d){ try{ return localStorage.getItem("treyOut_"+k) || d; }catch(e){ return d; } },
+    set(k,v){ try{ localStorage.setItem("treyOut_"+k, v); }catch(e){} }
+  };
+  const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  // Parse the scored hook  [1★ 01/08/2026] "text..."  → {stars, month, snippet}
+  function parseHook(h){
+    if(!h) return null;
+    const m=String(h).match(/^\s*\[\s*(\d+)\s*★\s*([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{2,4})?\s*\]\s*"?([\s\S]*?)"?\s*$/);
+    if(!m) return null;
+    let month="recently";
+    if(m[2]){ const p=m[2].split("/"); const mi=parseInt(p[1],10); if(mi>=1&&mi<=12) month=MONTHS[mi-1]; }
+    let snip=(m[3]||"").replace(/\s+/g," ").trim();
+    const w=snip.split(" "); if(w.length>8) snip=w.slice(0,8).join(" ");
+    snip=snip.replace(/[.,;:!?"'\-–—]+$/,"").trim();
+    return { stars:m[1], month:month, snippet:snip };
+  }
+  // Best-effort town/city from a scraped address (strip country + postcode).
+  function guessCity(addr){
+    if(!addr) return "";
+    let parts=String(addr).split(",").map(s=>s.trim()).filter(Boolean).filter(p=>!/^(uk|united kingdom|england|scotland|wales)$/i.test(p));
+    if(!parts.length) return "";
+    let last=parts[parts.length-1].replace(/\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i,"").trim();
+    if(last) return last;
+    return parts.length>1 ? parts[parts.length-2] : parts[0];
+  }
+  function waNumber(p){ if(!p) return ""; let d=String(p).replace(/[^\d]/g,""); if(!d) return ""; if(d.charAt(0)==="0") d="44"+d.slice(1); return d; }
+
+  function draftMessages(l){
+    const sender=OUT.get("sender","")||"[your name]";
+    const contact=OUT.get("contact","")||"[your phone / email / site]";
+    const demo=OUT.get("demo","")||"[your demo link]";
+    const link=demo;
+    const biz=(l.businessName||"there").toString().trim();
+    const firstName=(l.contactName&&l.contactName.trim())?l.contactName.trim().split(/\s+/)[0]:"there";
+    const cat=((l.category||"business").toString().toLowerCase().trim())||"business";
+    const city=guessCity(l.address)||"your area";
+    const ratingTxt=(l.rating!=null&&l.rating!=="")?(" — "+l.rating+"★"):"";
+    const h=parseHook(l.hook);
+    const d={ hasHook:!!h, hook:h };
+    if(h){
+      d.wa1='Hi, is this the owner of '+biz+'? 👋\n\nI had a look at your Google reviews and noticed a '+h.stars+'★ from '+h.month+' — the one mentioning "'+h.snippet+'" — still hasn\'t had a reply.\n\nI help '+city+' '+cat+' owners turn those around, and bring in fresh 5★ ones so the odd bad review doesn\'t sit on top.\n\nWant me to send you the reply I\'d post? Takes me 30 seconds.\n\n— '+sender+', Trey';
+      d.wa2='Morning '+biz+' 🙂 following up on that '+h.stars+'★ review from '+h.month+'.\n\nNo pressure at all. Here\'s a 20-second look at how Trey handles it: '+link+'\n\nOr I can just WhatsApp you the draft reply — whichever\'s easier?';
+      d.emSub1=biz+' — a review you might\'ve missed';
+      d.emBody1='Hi '+firstName+',\n\nI was going through Google reviews for a few '+cat+' businesses around '+city+' and noticed '+biz+' has a '+h.stars+'★ from '+h.month+' — the one mentioning "'+h.snippet+'" — that hasn\'t had a reply yet.\n\nAn unanswered review like that quietly puts off more people than it should.\n\nI run Trey, a small East Midlands tool that does two things: it drafts a reply for you to approve in one tap on your phone, and it adds a little tap-card on your counter that brings in fresh 5★ reviews so the odd bad one doesn\'t sit on top.\n\nHappy to send you the exact reply I\'d post to that '+h.stars+'★ — or walk you through the whole thing in a quick 10-minute demo. Which is easier?\n\nCheers,\n'+sender+'\nTrey · '+contact+'\n\nNot for you? Reply "no thanks" and I won\'t email again.';
+      d.emBody2='Hi '+firstName+',\n\nFloating this back up in case it slipped past. Here\'s a 60-second look at how Trey handles a review like that '+h.stars+'★ one: '+demo+'\n\nOr just reply "draft" and I\'ll send you the reply I\'d post to it — no strings.\n\n'+sender;
+    } else {
+      d.wa1='Hi, is this '+biz+'? 👋 You\'re doing well on Google'+ratingTxt+'. I help '+cat+' owners near '+city+' get more of those 5★ reviews with a tap-card on the counter, and reply to every review in a single tap. Want to see how it\'d look for you? '+link+'\n\n— '+sender+', Trey';
+      d.wa2='Morning '+biz+' 🙂 just floating this back up.\n\nHere\'s a 20-second look at how Trey brings in more 5★ reviews: '+link+'\n\nWorth a quick look?';
+      d.emSub1='more 5★ for '+biz+'?';
+      d.emBody1='Hi '+firstName+',\n\n'+biz+' is doing well on Google'+ratingTxt+'. I help East Midlands '+cat+' owners turn that into more reviews: a tap-card on the counter that brings in fresh 5★, plus one-tap replies to every review that comes in.\n\nWorth a quick 10-minute demo? I can show you exactly how it\'d look for '+biz+': '+demo+'\n\nCheers,\n'+sender+'\nTrey · '+contact+'\n\nNot for you? Reply "no thanks" and I won\'t email again.';
+      d.emBody2='Hi '+firstName+',\n\nFloating this back up in case it slipped past. Here\'s a 60-second look at how Trey brings in more 5★ reviews: '+demo+'\n\n'+sender;
+    }
+    // Shared final touches (channel-agnostic wording)
+    d.wa3='Last one from me, promise!\n\nRight now most of '+biz+'\'s recent Google reviews don\'t have an owner reply — customers (and Google) quietly notice.\n\nTrey drafts every reply for you to approve in one tap, and adds a little tap-card on your counter that brings in new 5★ reviews.\n\nIf it\'s not for you, no worries — I\'ll leave you be. '+link;
+    d.emBody3='Hi '+firstName+',\n\nI\'ll leave it here so I\'m not cluttering your inbox. Short version:\n\nMost of '+biz+'\'s recent Google reviews don\'t have an owner reply, and that costs you the odd customer who\'s checking you out. Trey fixes that in one tap and helps bring in new reviews — and as I\'m local to the East Midlands, I\'m happy to drop the tap-card round in person.\n\nIf you ever fancy a look: '+demo+'\n\nEither way, all the best with '+biz+'.\n\n'+sender;
+    d.emSub2="Re: "+d.emSub1;
+    d.emSub3="Re: "+d.emSub1;
+    return d;
+  }
+
+  function openDraft(i){
+    const l=LEADS[i]; if(!l) return;
+    const d=draftMessages(l);
+    DRAFT_STATE={ phone:waNumber(l.phone), email:(l.email||"").trim() };
+    const waAct=id=>'<button class="copybtn" onclick="copyTa(\''+id+'\',this)">Copy</button>'+(DRAFT_STATE.phone?' <button class="linkbtn" onclick="openWa(\''+id+'\')">Open WhatsApp</button>':'');
+    const emAct=(s,b)=>'<button class="copybtn" onclick="copyTa(\''+b+'\',this)">Copy body</button>'+(DRAFT_STATE.email?' <button class="linkbtn" onclick="composeEmail(\''+s+'\',\''+b+'\')">Compose</button>':'');
+    const waBlock=(label,id)=>'<div class="msgblock"><div class="mhead"><span class="mlabel">'+label+'</span><span>'+waAct(id)+'</span></div><textarea id="'+id+'"></textarea></div>';
+    const emBlock=(label,s,b)=>'<div class="msgblock"><div class="mhead"><span class="mlabel">'+label+'</span><span>'+emAct(s,b)+'</span></div><label style="margin:0 0 4px;">Subject</label><input id="'+s+'"/><label>Body</label><textarea id="'+b+'"></textarea></div>';
+    const subline=d.hasHook?('Leading with the '+d.hook.stars+'★ from '+d.hook.month):'No unanswered review on file — using the “more reviews” angle.';
+    const html='<div class="modal">'+
+      '<span class="modal-close" onclick="closeDraft()">×</span>'+
+      '<h3>Draft outreach — '+esc(l.businessName||"(no name)")+'</h3>'+
+      '<div class="msub">'+esc(subline)+' · everything below is editable before you send.</div>'+
+      '<div class="senderbox"><div style="font-size:12px;color:#475569;font-weight:700;margin-bottom:6px;">Your details — saved on this device, used in every draft</div>'+
+        '<div class="row">'+
+          '<div><label>Your name</label><input id="out_sender" value="'+esc(OUT.get("sender",""))+'"/></div>'+
+          '<div><label>Your contact (phone / email / site)</label><input id="out_contact" value="'+esc(OUT.get("contact",""))+'"/></div>'+
+          '<div><label>Demo / booking link</label><input id="out_demo" value="'+esc(OUT.get("demo",""))+'"/></div>'+
+        '</div>'+
+        '<div style="margin-top:8px;"><button class="btn-secondary" onclick="regenDraft('+i+')">↻ Apply my details</button></div>'+
+      '</div>'+
+      '<div class="chanhdr">WhatsApp / SMS</div>'+
+      waBlock("First touch","wa_1")+waBlock("Follow-up (2–3 days)","wa_2")+waBlock("Final touch (4–5 days)","wa_3")+
+      '<div class="chanhdr">Email</div>'+
+      emBlock("First touch","em_sub_1","em_body_1")+emBlock("Follow-up (3–4 days)","em_sub_2","em_body_2")+emBlock("Final touch (5–7 days)","em_sub_3","em_body_3")+
+    '</div>';
+    const m=document.getElementById("draftModal"); m.innerHTML=html; m.style.display="block";
+    val("wa_1",d.wa1); val("wa_2",d.wa2); val("wa_3",d.wa3);
+    val("em_sub_1",d.emSub1); val("em_body_1",d.emBody1);
+    val("em_sub_2",d.emSub2); val("em_body_2",d.emBody2);
+    val("em_sub_3",d.emSub3); val("em_body_3",d.emBody3);
+  }
+  function val(id,v){ const e=document.getElementById(id); if(e) e.value=v; }
+  function closeDraft(){ const m=document.getElementById("draftModal"); m.style.display="none"; m.innerHTML=""; }
+  function saveOut(){ const g=id=>{const e=document.getElementById(id);return e?e.value.trim():"";}; OUT.set("sender",g("out_sender")); OUT.set("contact",g("out_contact")); OUT.set("demo",g("out_demo")); }
+  function regenDraft(i){ saveOut(); openDraft(i); }
+  function copyTa(id,btn){
+    const e=document.getElementById(id); if(!e) return;
+    const done=function(){ if(btn){ const o=btn.textContent; btn.textContent="Copied ✓"; btn.classList.add("ok"); setTimeout(function(){ btn.textContent=o; btn.classList.remove("ok"); },1400); } };
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(e.value).then(done).catch(fb); } else { fb(); }
+    function fb(){ e.focus(); e.select(); try{ document.execCommand("copy"); done(); }catch(_){} }
+  }
+  function openWa(id){ const e=document.getElementById(id); if(!e||!DRAFT_STATE.phone) return; window.open("https://wa.me/"+DRAFT_STATE.phone+"?text="+encodeURIComponent(e.value),"_blank"); }
+  function composeEmail(s,b){ const se=document.getElementById(s), be=document.getElementById(b); const sub=se?se.value:"", body=be?be.value:""; window.location.href="mailto:"+DRAFT_STATE.email+"?subject="+encodeURIComponent(sub)+"&body="+encodeURIComponent(body); }
 
   function boot(){ document.getElementById("gate").style.display="none"; document.getElementById("app").style.display="block"; loadLeads(); }
   if(token) boot();
