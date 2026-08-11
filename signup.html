@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Start your free trial | Trey</title>
+<meta name="description" content="Start your 14-day free Trey trial — more 5-star Google reviews, replies drafted for you, approved from your phone." />
+<style>
+  :root {
+    --bg:#e4eefc; --card:#ffffff; --border:#cfe0f6; --text:#0f172a;
+    --muted:#5b6b86; --accent:#4f46e5; --accent-hover:#4338ca; --danger:#e11d48;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; }
+  header { display:flex; align-items:center; gap:10px; padding:16px 20px; }
+  header .wm { font-weight:800; font-size:19px; letter-spacing:-.4px; }
+  main { max-width:480px; margin:0 auto; padding:6px 20px 60px; }
+  .hero { text-align:center; margin:8px 0 20px; }
+  .hero h1 { font-size:24px; letter-spacing:-.6px; margin:6px 0; }
+  .hero p { color:var(--muted); font-size:15px; margin:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:0 12px 34px rgba(15,23,42,.06); }
+  label { display:block; font-size:13px; font-weight:600; color:#334155; margin:14px 0 4px; }
+  label .req { color:var(--accent); }
+  input, select, textarea {
+    width:100%; padding:10px 12px; border:1px solid #cbd5e1; border-radius:10px;
+    font-size:15px; background:#fff; color:var(--text); font-family:inherit;
+  }
+  textarea { min-height:64px; resize:vertical; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(79,70,229,.15); }
+  input::placeholder, textarea::placeholder { color:#94a3b8; }
+  .err { border-color:var(--danger) !important; }
+  .err-msg { color:var(--danger); font-size:12px; margin-top:4px; min-height:0; }
+  .hint { color:var(--muted); font-size:12px; margin-top:4px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
+  .segmented { display:flex; border:1px solid #cbd5e1; border-radius:10px; background:#f1f5f9; padding:3px; margin-top:4px; }
+  .segmented button { flex:1; border:none; background:transparent; padding:9px; border-radius:8px; font-size:14px; font-weight:600; color:var(--muted); cursor:pointer; }
+  .segmented button.active { background:#fff; color:var(--accent); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+  .consent { border:1px solid var(--border); background:#f3f8ff; border-radius:12px; padding:14px; margin-top:18px; }
+  .consent.err { background:#fff1f2; border-color:#fecdd3; }
+  .consent label { display:flex; gap:10px; align-items:flex-start; font-size:12px; color:var(--muted); line-height:1.5; margin:0; font-weight:400; cursor:pointer; }
+  .consent input { width:auto; margin-top:2px; accent-color:var(--accent); }
+  .hp { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+  button.submit { width:100%; margin-top:20px; background:var(--accent); color:#fff; border:none; border-radius:12px; padding:14px; font-size:16px; font-weight:700; cursor:pointer; }
+  button.submit:hover { background:var(--accent-hover); }
+  button.submit:disabled { opacity:.6; cursor:default; }
+  #status { font-size:13px; margin-top:10px; min-height:18px; text-align:center; }
+  #status.error { color:var(--danger); }
+  .foot { text-align:center; color:#8091ad; font-size:12px; margin-top:20px; }
+  .foot a { color:var(--muted); }
+  #successOverlay { display:none; position:fixed; inset:0; background:rgba(15,23,42,.55); align-items:center; justify-content:center; padding:20px; z-index:100; }
+  #successOverlay.show { display:flex; }
+  .successCard { background:#fff; border-radius:20px; padding:36px 28px; max-width:380px; width:100%; text-align:center; box-shadow:0 24px 50px rgba(0,0,0,.2); }
+  .successIcon { width:72px; height:72px; border-radius:50%; background:#ecfdf5; display:flex; align-items:center; justify-content:center; margin:0 auto 18px; font-size:36px; }
+  .successCard h2 { margin:0 0 8px; font-size:20px; }
+  .successCard p { color:var(--muted); font-size:15px; line-height:1.5; margin:0 0 22px; }
+  .btn-lg { display:inline-block; width:100%; padding:13px; border-radius:12px; border:none; font-size:15px; font-weight:700; cursor:pointer; text-decoration:none; }
+  .btn-primary-lg { background:var(--accent); color:#fff; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="treyMark" viewBox="0 0 100 100">
+    <g transform="rotate(-20 50 50)">
+      <path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" opacity="0.30"/>
+      <path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" opacity="0.58"/>
+      <path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <rect x="37" y="39" width="26" height="8" rx="2" fill="currentColor"/>
+    <rect x="46" y="39" width="8" height="25" rx="2" fill="currentColor"/>
+  </symbol>
+</svg>
+
+<header>
+  <svg viewBox="0 0 100 100" width="34" height="34" style="color:#4338ca"><use href="#treyMark"/></svg>
+  <span class="wm">trey</span>
+</header>
+
+<main>
+  <div class="hero">
+    <h1>Start your 14-day free trial</h1>
+    <p>Tell us a little about your business and we'll get you set up. No card needed.</p>
+  </div>
+
+  <form class="card" id="signupForm" autocomplete="on">
+    <div class="row2">
+      <div>
+        <label>First name<span class="req"> *</span></label>
+        <input id="f_firstName" autocomplete="given-name" />
+        <div class="err-msg" id="e_firstName"></div>
+      </div>
+      <div>
+        <label>Surname<span class="req"> *</span></label>
+        <input id="f_surname" autocomplete="family-name" />
+        <div class="err-msg" id="e_surname"></div>
+      </div>
+    </div>
+
+    <label>WhatsApp number<span class="req"> *</span></label>
+    <input id="f_phone" placeholder="+44 7941 052034" inputmode="tel" autocomplete="tel" value="+44 " />
+    <div class="hint">Where your review alerts get sent.</div>
+    <div class="err-msg" id="e_phone"></div>
+
+    <label>Email<span class="req"> *</span></label>
+    <input id="f_email" placeholder="you@yourbusiness.co.uk" autocomplete="email" />
+    <div class="err-msg" id="e_email"></div>
+
+    <label>Business name<span class="req"> *</span></label>
+    <input id="f_businessName" autocomplete="organization" />
+    <div class="err-msg" id="e_businessName"></div>
+
+    <label>Business type<span class="req"> *</span></label>
+    <input id="f_businessType" placeholder="e.g. MOT garage, nail salon, cafe" />
+    <div class="err-msg" id="e_businessType"></div>
+
+    <label>Business address</label>
+    <textarea id="f_companyAddress" placeholder="e.g. 12 High Street, Cobham, Surrey, KT11 1AA" style="min-height:52px;"></textarea>
+
+    <label>How does your business sound?</label>
+    <textarea id="f_brandVoice" placeholder="e.g. We're a family-run garage — friendly, straight-talking, and grateful for every customer."></textarea>
+    <div class="hint">One or two sentences. We use this so your review replies sound like you.</div>
+
+    <label>Reply voice</label>
+    <div class="segmented">
+      <button type="button" id="voice_Individual" class="active" onclick="setVoice('Individual')">Just me (I/my)</button>
+      <button type="button" id="voice_Company" onclick="setVoice('Company')">The team (we/our)</button>
+    </div>
+
+    <label>Sign-off name<span class="req"> *</span></label>
+    <input id="f_publicSignOffName" placeholder="e.g. Mik" />
+    <div class="hint">The name shown at the end of your replies.</div>
+    <div class="err-msg" id="e_publicSignOffName"></div>
+
+    <label>Google review link <span style="font-weight:400;color:#94a3b8;">(optional)</span></label>
+    <input id="f_googleReviewUrl" placeholder="Paste it if you have it — we'll sort the rest" inputmode="url" />
+    <div class="hint">Don't worry if you can't find it — we'll help you set this up.</div>
+
+    <!-- honeypot: hidden from people, tempting to bots -->
+    <div class="hp" aria-hidden="true"><label>Website</label><input id="f_website" tabindex="-1" autocomplete="off" /></div>
+
+    <div class="consent" id="consentBox">
+      <label>
+        <input type="checkbox" id="f_terms" />
+        <span>I agree to Trey's <a href="/terms.html" target="_blank">Terms</a> and <a href="/privacy.html" target="_blank">Privacy Policy</a>, and consent to Trey processing my review data and sending WhatsApp alerts on my behalf. My 14-day free trial starts today; the tap-stand page pauses unless a subscription is set up.</span>
+      </label>
+      <div class="err-msg" id="e_terms" style="margin-left:26px;"></div>
+    </div>
+
+    <button type="button" class="submit" id="submitBtn" onclick="handleSubmit()">Start my free trial</button>
+    <div id="status"></div>
+  </form>
+
+  <div class="foot">Already set up? <a href="/admin.html">Business owner login</a></div>
+</main>
+
+<div id="successOverlay">
+  <div class="successCard">
+    <div class="successIcon">🎉</div>
+    <h2>You're in!</h2>
+    <p id="successSub">Your 14-day free trial has started. We'll be in touch shortly to set up and send your tap-stand QR.</p>
+    <a class="btn-lg btn-primary-lg" href="/">Back to Trey</a>
+  </div>
+</div>
+
+<script>
+  const API = "/.netlify/functions/signup";
+  let voicePerspective = "Individual";
+
+  function setVoice(v) {
+    voicePerspective = v;
+    document.getElementById("voice_Individual").classList.toggle("active", v === "Individual");
+    document.getElementById("voice_Company").classList.toggle("active", v === "Company");
+  }
+
+  function formatUKPhone(raw) {
+    let digits = raw.replace(/[^\d+]/g, "").replace(/^\+/, "");
+    if (digits.startsWith("44")) digits = digits.slice(2);
+    else if (digits.startsWith("0")) digits = digits.slice(1);
+    return "+44" + (digits ? " " + digits : " ");
+  }
+  document.getElementById("f_phone").addEventListener("input", function (e) { e.target.value = formatUKPhone(e.target.value); });
+
+  function val(id) { return document.getElementById(id).value.trim(); }
+  function setErr(key, msg) {
+    const el = document.getElementById("e_" + key); if (el) el.textContent = msg;
+    const input = document.getElementById("f_" + key); if (input) input.classList.add("err");
+    if (key === "terms") document.getElementById("consentBox").classList.add("err");
+  }
+  function clearErrors() {
+    ["firstName","surname","phone","email","businessName","businessType","publicSignOffName","terms"].forEach(function (k) {
+      const el = document.getElementById("e_" + k); if (el) el.textContent = "";
+      const input = document.getElementById("f_" + k); if (input) input.classList.remove("err");
+    });
+    document.getElementById("consentBox").classList.remove("err");
+  }
+  function setStatus(msg, type) { const el = document.getElementById("status"); el.textContent = msg; el.className = type || ""; }
+
+  function validate() {
+    clearErrors();
+    let ok = true;
+    const req = function (key) { if (!val("f_" + key)) { setErr(key, "Required"); ok = false; } };
+    req("firstName"); req("surname"); req("businessName"); req("businessType"); req("publicSignOffName");
+    if (!val("f_phone") || val("f_phone") === "+44") { setErr("phone", "Required"); ok = false; }
+    else if (!/^\+?[0-9\s]{8,}$/.test(val("f_phone"))) { setErr("phone", "Use a valid number"); ok = false; }
+    if (!val("f_email")) { setErr("email", "Required"); ok = false; }
+    else if (!/^\S+@\S+\.\S+$/.test(val("f_email"))) { setErr("email", "Enter a valid email"); ok = false; }
+    if (!document.getElementById("f_terms").checked) { setErr("terms", "Please accept to continue"); ok = false; }
+    return ok;
+  }
+
+  async function handleSubmit() {
+    if (!validate()) return;
+    const btn = document.getElementById("submitBtn");
+    btn.disabled = true; setStatus("Setting up your trial…", "");
+    const payload = {
+      firstName: val("f_firstName"), surname: val("f_surname"),
+      phone: val("f_phone"), email: val("f_email"),
+      businessName: val("f_businessName"), businessType: val("f_businessType"),
+      companyAddress: val("f_companyAddress"), brandVoice: val("f_brandVoice"),
+      voicePerspective: voicePerspective, publicSignOffName: val("f_publicSignOffName"),
+      googleReviewUrl: val("f_googleReviewUrl"),
+      website: val("f_website"), // honeypot
+      termsAccepted: true,
+    };
+    try {
+      const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) { const err = await res.json().catch(function () { return {}; }); throw new Error(err.error || ("HTTP " + res.status)); }
+      document.getElementById("successSub").textContent =
+        "Thanks " + val("f_firstName") + " — your 14-day free trial has started. We'll be in touch shortly to set up and send " + val("f_businessName") + "'s tap-stand QR.";
+      document.getElementById("successOverlay").classList.add("show");
+    } catch (e) {
+      setStatus("Couldn't sign you up: " + e.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+</script>
+
+</body>
+</html>
