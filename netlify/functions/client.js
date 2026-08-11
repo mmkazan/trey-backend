@@ -121,6 +121,12 @@ exports.handler = async (event) => {
     if (isNewClient && !record.subscriptionStatus) {
       record.subscriptionStatus = "trial";
     }
+    // New clients use the on-tap trial model: the clock starts on the stand's
+    // first tap once a go-live date is set (tap.js), not at creation. Existing
+    // clients keep whatever they have, so no live stand's clock shifts.
+    if (isNewClient && record.trialStartsOnTap === undefined) {
+      record.trialStartsOnTap = true;
+    }
     delete record.token;
     await clientsStore.setJSON(locationId, record);
     return { statusCode: 200, body: JSON.stringify({ success: true, client: record }) };
