@@ -87,7 +87,7 @@ function trialBanner(client, locationId) {
   if (!onTrial && !ended) return "";
   const payBase = process.env.STRIPE_PAYMENT_LINK || "";
   const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
-  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#4f46e5;font-weight:800;text-decoration:underline">${t}</a>` : `<strong>${t}</strong>`);
+  const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#4f46e5;font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
   let msg;
   if (ended) {
     msg = `Your free trial has ended — ${link("resubscribe")} to switch Trey back on.`;
@@ -445,8 +445,8 @@ function renderReport(locationId, month, data, theme) {
   .treylogo{max-height:56px;max-width:180px;object-fit:contain;display:block;margin:0 auto 16px}
   .treylogo-svg{height:64px;width:auto;display:block;margin:0 auto 14px;color:var(--slate)}
   .bname{font-size:22px;font-weight:800;letter-spacing:-0.4px;margin:0}
-  .clogo{display:inline-block;background:#fff;border-radius:14px;padding:10px 16px;margin:14px auto 0;box-shadow:0 4px 14px rgba(15,23,42,0.08)}
-  .clogo img{max-height:52px;max-width:170px;object-fit:contain;display:block}
+  .clogo{display:inline-block;background:#fff;border-radius:14px;padding:11px 18px;margin:0 auto 18px;box-shadow:0 4px 14px rgba(15,23,42,0.08)}
+  .clogo img{max-height:60px;max-width:200px;object-fit:contain;display:block}
   .subtitle{font-size:14px;color:#64748b;margin:12px 0 0}
   .hero{text-align:center;padding:26px 20px}
   .hero .section-label{margin-bottom:14px}
@@ -512,8 +512,8 @@ ${trialBanner(client, locationId)}
   <div class="wrap">
     <div class="head">
       ${treyLockup}
-      <h1 class="bname">${businessName}</h1>
       ${clientLogo}
+      <h1 class="bname">${businessName}</h1>
       <p class="subtitle">Your month with Trey — ${escapeHtml(monthLabel(month))}</p>
     </div>
 
