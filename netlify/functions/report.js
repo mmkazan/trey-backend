@@ -77,20 +77,27 @@ function trialBanner(client, locationId) {
   const status = client.subscriptionStatus;
   if (status === "active") return "";
   const TRIAL_DAYS = 14;
-  let daysLeft = null;
-  if (client.createdAt) {
-    const ends = new Date(client.createdAt).getTime() + TRIAL_DAYS * 86400000;
-    if (!isNaN(ends)) daysLeft = Math.ceil((ends - Date.now()) / 86400000);
-  }
   const onTrial = status === "trial";
-  const ended = status === "paused" || status === "cancelled" || (onTrial && daysLeft !== null && daysLeft <= 0);
-  if (!onTrial && !ended) return "";
+  // Effective trial start: trialStartedAt (set on the stand's first live tap)
+  // or, for legacy clients without the new flag, createdAt.
+  let startedMs = null;
+  if (client.trialStartedAt) { const t = new Date(client.trialStartedAt).getTime(); if (!isNaN(t)) startedMs = t; }
+  else if (!client.trialStartsOnTap && client.createdAt) { const t = new Date(client.createdAt).getTime(); if (!isNaN(t)) startedMs = t; }
   const payBase = process.env.STRIPE_PAYMENT_LINK || "";
   const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
+  const bar = (inner) => `<div style="background:#fff1f2;border-bottom:1px solid #fecdd3;color:#9f1239;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:10px 14px">${inner}</div>`;
   const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#4f46e5;font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
+  // On-tap trial that hasn't started yet — waiting on the stand's first tap.
+  if (onTrial && startedMs === null) {
+    return bar(`Your 14-day free trial starts once you activate your Trey stand.`);
+  }
+  let daysLeft = null;
+  if (startedMs !== null) daysLeft = Math.ceil((startedMs + TRIAL_DAYS * 86400000 - Date.now()) / 86400000);
+  const ended = status === "paused" || status === "past_due" || status === "cancelled" || status === "canceled" || (onTrial && daysLeft !== null && daysLeft <= 0);
+  if (!onTrial && !ended) return "";
   let msg;
   if (ended) {
-    msg = `Your free trial has ended — ${link("resubscribe")} to switch Trey back on.`;
+    msg = `Your Trey stand is paused — ${link("resubscribe")} to switch it back on.`;
   } else if (daysLeft !== null && daysLeft <= 3) {
     msg = `Just ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left of your free trial — ${link("keep Trey going")} whenever you're ready.`;
   } else if (daysLeft !== null) {
@@ -98,7 +105,7 @@ function trialBanner(client, locationId) {
   } else {
     msg = `You're on your free trial — ${link("set up your subscription")} whenever you're ready.`;
   }
-  return `<div style="background:#fff1f2;border-bottom:1px solid #fecdd3;color:#9f1239;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:10px 14px">${msg}</div>`;
+  return bar(msg);
 }
 
 // YYYY-MM of the last COMPLETE calendar month (the default when m is omitted).
