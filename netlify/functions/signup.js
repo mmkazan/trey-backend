@@ -85,6 +85,9 @@ exports.handler = async (event) => {
     // admin resolves the real Place ID / account before going live.
     googleReviewUrl: clean(body.googleReviewUrl, 300),
     subscriptionStatus: "trial",
+    // The trial clock does NOT start now — it starts on the stand's first tap
+    // once the admin sets a go-live (delivery) date. See tap.js.
+    trialStartsOnTap: true,
     source: "self-serve",
     needsReview: true,
     termsAccepted: !!body.termsAccepted,
