@@ -141,7 +141,7 @@
     <div class="consent" id="consentBox">
       <label>
         <input type="checkbox" id="f_terms" />
-        <span>I agree to Trey's <a href="/terms.html" target="_blank">Terms</a> and <a href="/privacy.html" target="_blank">Privacy Policy</a>, and consent to Trey processing my review data and sending WhatsApp alerts on my behalf. My 14-day free trial starts today; the tap-stand page pauses unless a subscription is set up.</span>
+        <span>I agree to Trey's <a href="/terms.html" target="_blank">Terms</a> and <a href="/privacy.html" target="_blank">Privacy Policy</a>, and consent to Trey processing my review data and sending WhatsApp alerts on my behalf. My 14-day free trial starts when I activate my stand after it arrives; the tap-stand page pauses unless a subscription is set up.</span>
       </label>
       <div class="err-msg" id="e_terms" style="margin-left:26px;"></div>
     </div>
@@ -157,7 +157,7 @@
   <div class="successCard">
     <div class="successIcon">🎉</div>
     <h2>You're in!</h2>
-    <p id="successSub">Your 14-day free trial has started. We'll be in touch shortly to set up and send your tap-stand QR.</p>
+    <p id="successSub">We'll be in touch shortly to set up and send your tap-stand QR. Your 14-day free trial starts when you activate your stand after it arrives — no time lost while it's in the post.</p>
     <a class="btn-lg btn-primary-lg" href="/">Back to Trey</a>
   </div>
 </div>
@@ -226,7 +226,7 @@
       const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) { const err = await res.json().catch(function () { return {}; }); throw new Error(err.error || ("HTTP " + res.status)); }
       document.getElementById("successSub").textContent =
-        "Thanks " + val("f_firstName") + " — your 14-day free trial has started. We'll be in touch shortly to set up and send " + val("f_businessName") + "'s tap-stand QR.";
+        "Thanks " + val("f_firstName") + " — you're all set. We'll set up and send " + val("f_businessName") + "'s tap-stand QR; your 14-day free trial starts when you activate your stand after it arrives.";
       document.getElementById("successOverlay").classList.add("show");
     } catch (e) {
       setStatus("Couldn't sign you up: " + e.message, "error");
