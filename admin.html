@@ -313,11 +313,14 @@
           <input id="f_publicSignOffName" placeholder="e.g. Mik" />
         </div>
         <div>
-          <label>Subscription status</label>
-          <select id="f_subscriptionStatus">
-            <option value="trial">Trial (14-day)</option>
-            <option value="active">Active (paid)</option>
-            <option value="paused">Paused</option>
+          <label>Stand state <span class="muted" style="font-weight:400;text-transform:none;">— the one control for where this stand is in its life</span></label>
+          <select id="f_standState">
+            <option value="test">Test — taps go to Google (for your checking)</option>
+            <option value="ship">Ready to send — shows the activation page</option>
+            <option value="live">Live — activated / trial running</option>
+            <option value="active">Active — subscribed (paid)</option>
+            <option value="deact_payment">Deactivated — payment failed</option>
+            <option value="deact_cancelled">Deactivated — cancelled</option>
           </select>
         </div>
         <div>
@@ -451,7 +454,7 @@
      "contactFirstName", "contactSurname", "companyAddress"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
-    document.getElementById("f_subscriptionStatus").value = "trial";
+    document.getElementById("f_standState").value = "test";
     document.getElementById("f_locationId").disabled = false;
     document.getElementById("formTitle").textContent = "Add a client";
     setStatus("", "");
@@ -497,6 +500,8 @@
     ["Public sign-off name", "publicSignOffName"],
     ["Brand voice", "brandVoice"],
     ["Subscription", "subscriptionStatus"],
+    ["Stand", "_standState"],
+    ["Trial started", "_trialStarted"],
     ["Taps since sign-up", "tapsSinceSignup"],
     ["Taps this month", "tapsThisMonth"],
     ["Taps this week", "tapsThisWeek"],
@@ -521,11 +526,46 @@
     return `<span class="subpill ${cls}">${esc(label)}</span>`;
   }
 
+  // Which single Stand-state option is a client currently in (for the edit form).
+  function currentStandState(c) {
+    const s = String(c.subscriptionStatus || "").toLowerCase();
+    if (s === "active" || s === "") return "active"; // no status = grandfathered active
+    if (s === "paused" || s === "past_due") return "deact_payment";
+    if (s === "cancelled" || s === "canceled" || s === "expired") return "deact_cancelled";
+    // status is "trial"
+    if (c.trialStartedAt) return "live";
+    if (c.standMode === "ship") return "ship";
+    return "test";
+  }
+
+  // Plain-English stand state for the detail view (mirrors tap.js logic).
+  function standState(c) {
+    const s = String(c.subscriptionStatus || "").toLowerCase();
+    if (s === "active") return "Live · subscribed";
+    if (s === "paused" || s === "past_due") return "Deactivated · payment problem";
+    if (s === "cancelled" || s === "canceled" || s === "expired") return "Deactivated · cancelled";
+    if (c.trialStartedAt) {
+      const expired = new Date(c.trialStartedAt).getTime() + 14 * 86400000 < Date.now();
+      return expired ? "Deactivated · trial ended" : "Live · trial running";
+    }
+    if (c.trialStartsOnTap) {
+      return c.standMode === "ship" ? "Ready to send · shows activation page" : "Test · taps go to Google (for checking)";
+    }
+    // Legacy trial (no flag): the clock runs from sign-up.
+    if (c.createdAt) {
+      const expired = new Date(c.createdAt).getTime() + 14 * 86400000 < Date.now();
+      return expired ? "Deactivated · trial ended" : "Live · trial running (from sign-up)";
+    }
+    return "Trial (from sign-up)";
+  }
+
   function showDetail(c) {
     document.getElementById("formCard").style.display = "none";
     document.getElementById("detailTitle").textContent = c.businessName || c.locationId;
     const cc = { ...c };
     cc._contactName = [c.contactFirstName, c.contactSurname].filter(Boolean).join(" ");
+    cc._standState = standState(c);
+    cc._trialStarted = c.trialStartedAt ? new Date(c.trialStartedAt).toLocaleString() : "Not started yet";
     const ir = num(c.initialGoogleRating), nr = num(c.googleRating);
     if (ir !== null && nr !== null) {
       const d = nr - ir;
@@ -690,8 +730,7 @@
     document.getElementById("f_contactFirstName").value = c.contactFirstName || "";
     document.getElementById("f_contactSurname").value = c.contactSurname || "";
     document.getElementById("f_companyAddress").value = c.companyAddress || "";
-    // No status recorded = grandfathered active; show that so a save keeps them on.
-    document.getElementById("f_subscriptionStatus").value = c.subscriptionStatus || "active";
+    document.getElementById("f_standState").value = currentStandState(c);
     document.getElementById("f_initialGoogleRating").value = c.initialGoogleRating ?? "";
     document.getElementById("f_initialReviewCount").value = c.initialReviewCount ?? "";
     document.getElementById("f_googleRating").value = c.googleRating ?? "";
@@ -726,12 +765,20 @@
       contactFirstName: document.getElementById("f_contactFirstName").value.trim(),
       contactSurname: document.getElementById("f_contactSurname").value.trim(),
       companyAddress: document.getElementById("f_companyAddress").value.trim(),
-      subscriptionStatus: document.getElementById("f_subscriptionStatus").value,
       initialGoogleRating: numOrEmpty("f_initialGoogleRating"),
       initialReviewCount: numOrEmpty("f_initialReviewCount"),
       googleRating: numOrEmpty("f_googleRating"),
       reviewCount: numOrEmpty("f_reviewCount"),
     };
+    // Translate the single Stand-state control into the underlying fields.
+    const existing = clientsCache.find((x) => x.locationId === locationId);
+    const ss = document.getElementById("f_standState").value;
+    if (ss === "test") { payload.standMode = "test"; payload.subscriptionStatus = "trial"; payload.trialStartsOnTap = true; payload.trialStartedAt = ""; }
+    else if (ss === "ship") { payload.standMode = "ship"; payload.subscriptionStatus = "trial"; payload.trialStartsOnTap = true; payload.trialStartedAt = ""; }
+    else if (ss === "live") { payload.subscriptionStatus = "trial"; payload.trialStartsOnTap = true; payload.trialStartedAt = (existing && existing.trialStartedAt) ? existing.trialStartedAt : new Date().toISOString(); }
+    else if (ss === "active") { payload.subscriptionStatus = "active"; }
+    else if (ss === "deact_payment") { payload.subscriptionStatus = "paused"; }
+    else if (ss === "deact_cancelled") { payload.subscriptionStatus = "cancelled"; }
     setStatus("Saving…", "");
     try {
       const res = await fetch(API, {
