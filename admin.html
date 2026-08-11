@@ -183,6 +183,35 @@
   .subpill.p-trial  { background: #fffbeb; color: #b45309; border-color: #fde68a; }
   .subpill.p-paused { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
   .subpill.p-none   { background: #f1f5f9; color: #64748b; border-color: #e2e8f0; }
+
+  /* New self-serve signup that still needs the admin to verify + add Google details */
+  .newpill {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #e11d48;
+    color: #fff;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  tr.needs-row { background: #fff8f9; }
+  .needs-banner {
+    display: none;
+    background: #fff1f2;
+    border: 1px solid #fecdd3;
+    color: #9f1239;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    cursor: pointer;
+  }
+  .needs-banner:hover { background: #ffe4e6; }
 </style>
 </head>
 <body>
@@ -353,18 +382,32 @@
         <h2>All clients</h2>
         <button class="btn-primary" onclick="openAddForm()">+ Add new client</button>
       </div>
+      <div id="needsBanner" class="needs-banner" onclick="showNeedsReview()"></div>
+      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+        <input id="clientSearch" placeholder="Search name, location, phone, contact…" oninput="filterClients()" style="flex:1;min-width:220px;" />
+        <select id="clientStatusFilter" onchange="filterClients()" style="width:auto;min-width:150px;flex:0 0 auto;">
+          <option value="">All statuses</option>
+          <option value="needsreview">Needs review</option>
+          <option value="trial">Trial</option>
+          <option value="active">Active</option>
+          <option value="paused">Paused</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="none">No status</option>
+        </select>
+      </div>
       <table>
         <thead>
           <tr>
             <th>Location ID</th>
             <th>Business</th>
+            <th>Status</th>
             <th>WhatsApp</th>
             <th>Taps</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="clientRows">
-          <tr><td colspan="5" class="muted">Loading…</td></tr>
+          <tr><td colspan="6" class="muted">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -566,22 +609,70 @@
       const clients = await res.json();
       clientsCache = Array.isArray(clients) ? clients : [];
       if (clientsCache.length === 0) {
-        rowsEl.innerHTML = '<tr><td colspan="5" class="muted">No clients yet.</td></tr>';
+        rowsEl.innerHTML = '<tr><td colspan="6" class="muted">No clients yet.</td></tr>';
         return;
       }
-      rowsEl.innerHTML = clientsCache.map((c, i) => `
-        <tr onclick="showDetail(clientsCache[${i}])">
-          <td>${esc(c.locationId || "")}</td>
-          <td>${esc(c.businessName || "")}<br><span class="muted" style="font-size:11px;">${esc(c.businessType || "")}</span></td>
-          <td>${c.phone ? esc(c.phone) : '<span class="muted">—</span>'}</td>
-          <td>${esc(c.tapsSinceSignup || 0)} <span class="muted" style="font-size:11px;">(${esc(c.tapsThisMonth || 0)} this mo)</span></td>
-          <td><span class="muted-link" onclick='event.stopPropagation(); editClient(clientsCache[${i}])'>Edit</span></td>
-        </tr>
-      `).join("");
+      filterClients();
     } catch (err) {
-      rowsEl.innerHTML = `<tr><td colspan="5" class="muted">Failed to load: ${esc(err.message)}</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="6" class="muted">Failed to load: ${esc(err.message)}</td></tr>`;
     }
   }
+
+  function clientRowHtml(c) {
+    const newBadge = c.needsReview ? '<span class="newpill">New</span>' : "";
+    return `
+      <tr class="${c.needsReview ? "needs-row" : ""}" onclick="showDetailByLoc('${esc(c.locationId)}')">
+        <td>${esc(c.locationId || "")}</td>
+        <td>${esc(c.businessName || "")}${newBadge}<br><span class="muted" style="font-size:11px;">${esc(c.businessType || "")}</span></td>
+        <td>${subPill(c.subscriptionStatus)}</td>
+        <td>${c.phone ? esc(c.phone) : '<span class="muted">—</span>'}</td>
+        <td>${esc(c.tapsSinceSignup || 0)} <span class="muted" style="font-size:11px;">(${esc(c.tapsThisMonth || 0)} this mo)</span></td>
+        <td><span class="muted-link" onclick='event.stopPropagation(); editClientByLoc("${esc(c.locationId)}")'>Edit</span></td>
+      </tr>`;
+  }
+  function renderClientRows(list) {
+    document.getElementById("clientRows").innerHTML = list.length
+      ? list.map(clientRowHtml).join("")
+      : '<tr><td colspan="6" class="muted">No clients match your search.</td></tr>';
+  }
+  function filterClients() {
+    const q = (document.getElementById("clientSearch").value || "").toLowerCase().trim();
+    const st = document.getElementById("clientStatusFilter").value;
+    const filtered = clientsCache.filter((c) => {
+      const hay = [c.locationId, c.businessName, c.businessType, c.phone, c.email, c.contactFirstName, c.contactSurname].filter(Boolean).join(" ").toLowerCase();
+      const okQ = !q || hay.includes(q);
+      const cs = (c.subscriptionStatus || "").toLowerCase();
+      const okSt = !st
+        ? true
+        : st === "needsreview" ? !!c.needsReview
+        : st === "none" ? !cs
+        : cs === st;
+      return okQ && okSt;
+    });
+    renderClientRows(filtered);
+    updateNeedsBanner();
+  }
+
+  // Count of self-serve signups still awaiting admin verification, shown as a
+  // dismissible-by-filtering banner above the client list.
+  function updateNeedsBanner() {
+    const n = clientsCache.filter((c) => c.needsReview).length;
+    const b = document.getElementById("needsBanner");
+    if (n > 0) {
+      b.style.display = "block";
+      b.textContent = `${n} new signup${n === 1 ? "" : "s"} awaiting review — tap to view`;
+    } else {
+      b.style.display = "none";
+    }
+  }
+
+  function showNeedsReview() {
+    document.getElementById("clientSearch").value = "";
+    document.getElementById("clientStatusFilter").value = "needsreview";
+    filterClients();
+  }
+  function showDetailByLoc(loc) { const c = clientsCache.find((x) => x.locationId === loc); if (c) showDetail(c); }
+  function editClientByLoc(loc) { const c = clientsCache.find((x) => x.locationId === loc); if (c) editClient(c); }
 
   function editClient(c) {
     document.getElementById("f_locationId").value = c.locationId || "";
