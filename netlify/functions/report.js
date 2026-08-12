@@ -153,7 +153,7 @@ function plural(n, one, many) {
 function treyMarkHtml() {
   const logo = process.env.TREY_LOGO_URL;
   if (logo) {
-    return `<img class="treylogo" src="${escapeHtml(logo)}" alt="Trey">`;
+    return `<img class="treylogo" src="${escapeHtml(logo)}" alt="Trey" referrerpolicy="no-referrer">`;
   }
   return `<svg class="treylogo-svg" viewBox="54 88 228 192" role="img" aria-label="Trey" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -187,6 +187,7 @@ function treyBadgeSvg(cls) {
 function noticePage(statusCode, title, message) {
   const body = `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
 <style>
   *{box-sizing:border-box}
@@ -296,7 +297,7 @@ function renderReport(locationId, month, data, theme) {
 
   // --- Client's own logo, sat in a clean chip under their name ---
   const clientLogo = logoUrl
-    ? `<div class="clogo"><img src="${logoUrl}" alt="${businessName}"></div>`
+    ? `<div class="clogo"><img src="${logoUrl}" alt="${businessName}" referrerpolicy="no-referrer"></div>`
     : "";
 
   // --- "Since you joined" figures (lifetime): sign-up rating -> current ---
@@ -437,6 +438,7 @@ function renderReport(locationId, month, data, theme) {
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
 <title>${title}</title>
 <style>
   *{box-sizing:border-box}
