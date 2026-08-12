@@ -42,7 +42,9 @@ exports.handler = async (event) => {
   }
 
   const { locationId, reviewerName, rating, comment } = body;
-  const reviewId = body.reviewId || `rev_${Date.now()}`;
+  // Auto-generated IDs get real randomness (not just a timestamp) so a
+  // `pending:<id>` record can't be enumerated/guessed on the approve route.
+  const reviewId = body.reviewId || `rev_${Date.now()}_${require("crypto").randomBytes(8).toString("hex")}`;
 
   if (!locationId) {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
