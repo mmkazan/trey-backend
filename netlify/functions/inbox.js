@@ -261,6 +261,7 @@ exports.handler = async (event) => {
       ${pendingBlock}
       ${repliedBlock}
       <a class="xlink" href="${base}/.netlify/functions/report?loc=${encodeURIComponent(loc)}&k=${params.k}">View your monthly report &rarr;</a>
+      <a class="xlink" href="${base}/.netlify/functions/account?loc=${encodeURIComponent(loc)}&k=${params.k}">Update your account details &rarr;</a>
       <div class="foot">Powered by Trey</div>
     </div>`;
 
