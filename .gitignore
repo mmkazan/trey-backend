@@ -1,0 +1,13 @@
+# Dependencies (installed locally by `npm install`, never committed)
+node_modules/
+
+# Netlify CLI local state + local dev
+.netlify/
+
+# Environment/secrets — never commit these
+.env
+.env.*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
