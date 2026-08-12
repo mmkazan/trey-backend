@@ -35,6 +35,20 @@ function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Constant-time compare for the shared approve token, matching the rest of the
+// backend, so a wrong token can't be recovered by response timing. Fails closed
+// if the token is missing or the env var isn't set.
+function tokenValid(provided) {
+  const expected = process.env.TREY_TAPPY_SECRET_TOKEN || "";
+  const got = String(provided || "");
+  if (!expected || got.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+  } catch (e) {
+    return false;
+  }
+}
+
 // A gentle "days of free trial left + Subscribe" banner. Shows only while the
 // client is on trial (or lapsed); nothing once subscribed. Needs STRIPE_PAYMENT_LINK.
 function trialBanner(client, locationId) {
@@ -76,7 +90,7 @@ function trialBanner(client, locationId) {
 function page(body) {
   return {
     statusCode: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     body: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Trey \u2014 Approve Reply</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#e4eefc;">${body}</body></html>`,
   };
 }
@@ -84,7 +98,7 @@ function page(body) {
 function errorPage(title, message, statusCode) {
   return {
     statusCode: statusCode || 400,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     body: page(`
       <div style="max-width:420px;margin:80px auto;text-align:center;padding:0 24px;">
         <div style="font-size:40px;">\u26d4</div>
@@ -208,7 +222,7 @@ exports.handler = async (event) => {
 
   const { reviewId, token, replyText } = params;
 
-  if (!token || token !== process.env.TREY_TAPPY_SECRET_TOKEN) {
+  if (!tokenValid(token)) {
     return errorPage("Unauthorized", "Invalid security token. Please try again from WhatsApp.", 403);
   }
   if (!reviewId) {
