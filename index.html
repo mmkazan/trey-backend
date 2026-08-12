@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trey — more 5-star Google reviews, on autopilot</title>
 <meta name="description" content="Trey's tap-to-review stands get you more Google reviews at the counter, draft the perfect reply with AI, and let you approve from your phone. No dashboard, no faff.">
+<link rel="canonical" href="https://trey.today/">
+<meta name="theme-color" content="#4338ca">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<!-- Open Graph / social share (WhatsApp, iMessage, Facebook, LinkedIn) -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Trey">
+<meta property="og:url" content="https://trey.today/">
+<meta property="og:title" content="Trey — more 5-star Google reviews, on autopilot">
+<meta property="og:description" content="Tap-to-review stands get you more Google reviews at the counter, draft the perfect reply with AI, and let you approve from your phone. No dashboard, no faff.">
+<meta property="og:image" content="https://trey.today/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Trey — more 5-star Google reviews, on autopilot">
+<meta name="twitter:description" content="Tap-to-review stands, AI-drafted replies, approved from your phone.">
+<meta name="twitter:image" content="https://trey.today/og-image.png">
 <style>
   :root{
     --green:#4f46e5;--green-d:#4338ca;--green-l:#6366f1;--slate:#0f172a;
@@ -82,16 +100,84 @@
   footer .wrap{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
   footer a{text-decoration:none;color:var(--muted);margin-left:16px}
   .draft{background:#fffbeb;border:1px dashed #fcd34d;color:#92400e;font-size:12.5px;text-align:center;padding:8px;border-radius:10px;max-width:1000px;margin:14px auto 0}
+
+  /* hero logo */
+  .heromark{display:block;margin:0 auto 18px}
+
+  /* demo — inbox replies */
+  .demo{max-width:600px;margin:0 auto}
+  .rev{background:#fff;border:1px solid #cfe0f6;border-radius:16px;padding:16px 18px;box-shadow:0 8px 24px rgba(15,23,42,.05);text-align:left;margin-bottom:14px}
+  .rev-top{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .rev-av{width:36px;height:36px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:800;display:flex;align-items:center;justify-content:center;font-size:14px;flex:0 0 auto}
+  .rev-id .nm{font-weight:700;font-size:15px;line-height:1.15}
+  .rev-id .st{font-size:13px;letter-spacing:1.5px;color:var(--gold)}
+  .rev-meta{margin-left:auto;display:flex;align-items:center;gap:9px;flex:0 0 auto}
+  .g-badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:#64748b;font-weight:600}
+  .ps{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+  .ps.rep{background:#ecfdf5;color:#047857;border-color:#a7f3d0}
+  .ps.urg{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
+  .rev-text{font-size:14.5px;color:#334155;margin:0 0 12px}
+  .reply{background:#eef2ff;border:1px solid #d7defe;border-radius:12px;padding:12px 14px}
+  .reply .rh{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:800;color:#4338ca;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  .reply .rt{font-size:14px;color:#475569;margin:0;line-height:1.5}
+
+  /* demo — report */
+  .report{max-width:430px;margin:0 auto;background:#f3f8ff;border:1px solid #cfe0f6;border-radius:20px;padding:26px 24px;text-align:center;box-shadow:0 16px 44px rgba(79,70,229,.10)}
+  .report .rlogo{display:inline-block;background:#0f766e;color:#fff;font-weight:800;font-size:13px;letter-spacing:.6px;padding:9px 16px;border-radius:12px;margin-top:12px}
+  .report .rmon{font-size:13px;color:#64748b;margin-top:10px}
+  .report .rmove{font-size:30px;font-weight:800;letter-spacing:-.5px;margin-top:18px}
+  .report .rmove .to{color:var(--green)}
+  .report .rup{display:inline-block;margin-top:10px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-weight:800;font-size:12px;padding:4px 12px;border-radius:999px}
+  .report .rtiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+  .report .tile{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 6px}
+  .report .tile .n{font-size:22px;font-weight:800;color:#0f172a;letter-spacing:-.5px}
+  .report .tile .l{font-size:11px;color:#64748b;margin-top:2px}
+  .report .rsince{font-size:12.5px;color:#64748b;margin-top:18px;border-top:1px solid #dbe7f7;padding-top:14px}
+  .report .rsince b{color:#0f172a}
+
+  /* why-it-matters stats */
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:720px;margin:0 auto}
+  @media(max-width:640px){.stats{grid-template-columns:1fr}}
+  .stat{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px 20px;text-align:center}
+  .stat .sn{font-size:40px;font-weight:800;letter-spacing:-1px;color:var(--green)}
+  .stat .sl{font-size:14px;color:#475569;margin-top:6px;line-height:1.5}
+  .stat .src{display:block;color:#94a3b8;font-size:12px;margin-top:8px;font-weight:600}
+
+  /* faq */
+  .faq{max-width:680px;margin:0 auto}
+  .faq details{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:12px;overflow:hidden}
+  .faq summary{list-style:none;cursor:pointer;padding:16px 18px;font-weight:700;font-size:15.5px;display:flex;justify-content:space-between;align-items:center;gap:14px}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary:after{content:"+";color:var(--green);font-weight:800;font-size:22px;line-height:1;flex:0 0 auto}
+  .faq details[open] summary:after{content:"\2013"}
+  .faq .fa{padding:0 18px 16px;color:var(--muted);font-size:14.5px;line-height:1.6;margin:0}
+
+  /* footer extras */
+  footer .flinks{display:flex;flex-wrap:wrap;align-items:center}
+  .copyline{max-width:1000px;margin:12px auto 0;padding:0 20px;font-size:12px;color:#94a3b8;line-height:1.5}
+  .copyline a{color:#94a3b8;margin:0;text-decoration:underline}
+
+  /* muted "from" value in any rating movement, so the "to" pops */
+  .gfrom{color:#94a3b8}
 </style>
 </head>
 <body>
 
 <nav><div class="wrap">
-  <div class="brand"><svg class="mark" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="100" height="100" rx="24" fill="#4338ca"/><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#fff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#fff"/></svg>Trey</div>
+  <div class="brand"><svg class="mark" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="100" height="100" rx="24" fill="#4338ca"/><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#fff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#fff"/></svg>trey</div>
   <a class="btn" href="/signup.html">Start free trial</a>
 </div></nav>
 
 <header class="hero"><div class="wrap">
+  <svg width="94" height="94" viewBox="0 0 100 100" class="heromark" xmlns="http://www.w3.org/2000/svg" aria-label="Trey">
+    <g transform="rotate(-20 50 50)">
+      <path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.28"/>
+      <path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+      <path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/>
+    <rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/>
+  </svg>
   <span class="pill">⭐ Reputation on autopilot</span>
   <h1>More 5-star Google reviews, <span class="hl">without the chasing</span></h1>
   <p class="lede">Trey's tap-to-review stand gets more reviews at your counter, drafts the perfect reply with AI, and lets you approve it from your phone. No dashboard. No faff.</p>
@@ -103,7 +189,7 @@
 
   <div class="strip">
     <div>
-      <div class="climb">4.5<span class="g"> → 4.8</span></div>
+      <div class="climb"><span class="gfrom">4.5</span><span class="g"> → 4.8</span></div>
       <div class="stars">★★★★★</div>
       <div class="cap">Mik's Cars · this quarter</div>
     </div>
@@ -134,6 +220,116 @@
   </div>
 </div></section>
 
+<section id="demo"><div class="wrap">
+  <div class="kicker">See it in action</div>
+  <h2>Real reviews. Real replies. Your voice.</h2>
+  <p class="sub">Every review that lands gets a warm, on-brand reply drafted for you — the good ones and the tricky ones. Here's a real month at Mik's Cars.</p>
+  <div class="demo">
+
+    <div class="rev">
+      <div class="rev-top">
+        <div class="rev-av">SM</div>
+        <div class="rev-id">
+          <div class="nm">Sarah M.</div>
+          <div class="st">★★★★★</div>
+        </div>
+        <div class="rev-meta">
+          <span class="g-badge"><svg width="14" height="14" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/></svg> Google</span>
+          <span class="ps rep">Replied</span>
+        </div>
+      </div>
+      <p class="rev-text">Absolutely brilliant — MOT sorted within the hour and they even sent me a photo of the worn brake pad before doing anything. Honest, friendly, fair price. Won't go anywhere else.</p>
+      <div class="reply">
+        <div class="rh">
+          <svg width="14" height="14" viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+          Reply · drafted by Trey
+        </div>
+        <p class="rt">Thanks so much, Sarah — that means a lot! We always want you to see exactly what we're doing and why before we touch the car. Really glad the MOT was quick and painless. See you next time! — Mik</p>
+      </div>
+    </div>
+
+    <div class="rev">
+      <div class="rev-top">
+        <div class="rev-av">TR</div>
+        <div class="rev-id">
+          <div class="nm">Tom R.</div>
+          <div class="st">★★★★<span style="color:#cbd5e1">★</span></div>
+        </div>
+        <div class="rev-meta">
+          <span class="g-badge"><svg width="14" height="14" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/></svg> Google</span>
+          <span class="ps rep">Replied</span>
+        </div>
+      </div>
+      <p class="rev-text">Good, honest garage and the work was spot on. Only shout would be the waiting room — the coffee machine was out of order! Small thing though, would still recommend.</p>
+      <div class="reply">
+        <div class="rh">
+          <svg width="14" height="14" viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+          Reply · drafted by Trey
+        </div>
+        <p class="rt">Cheers, Tom — glad the work was spot on! And you're right, the coffee machine picked a bad week to give up. It's fixed now, so the next brew's on us. Thanks for recommending us. — Mik</p>
+      </div>
+    </div>
+
+    <div class="rev">
+      <div class="rev-top">
+        <div class="rev-av">DP</div>
+        <div class="rev-id">
+          <div class="nm">Dave P.</div>
+          <div class="st">★★<span style="color:#cbd5e1">★★★</span></div>
+        </div>
+        <div class="rev-meta">
+          <span class="g-badge"><svg width="14" height="14" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/></svg> Google</span>
+          <span class="ps urg">⚠ Needs a reply</span>
+        </div>
+      </div>
+      <p class="rev-text">Disappointed. Waited longer than quoted and nobody called to let me know what was happening. The work itself seems fine but the communication really let it down.</p>
+      <div class="reply">
+        <div class="rh">
+          <svg width="14" height="14" viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+          Reply · drafted by Trey
+        </div>
+        <p class="rt">Hi Dave — I'm sorry we let you down. Getting the job right but leaving you in the dark isn't good enough, and that's on us. I'd like to put it right — please pop in or give me a call and ask for Mik, and we'll sort it. — Mik</p>
+      </div>
+    </div>
+
+  </div>
+</div></section>
+
+<section style="background:var(--soft)"><div class="wrap">
+  <div class="kicker">Proof it's working</div>
+  <h2>A clean report, every month</h2>
+  <p class="sub">No dashboard to log into. Once a month Trey sends a simple summary of your rating climbing and the reviews it brought in — proof it's paying for itself.</p>
+  <div class="report">
+    <svg width="46" height="46" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Trey"><rect width="100" height="100" rx="24" fill="#4338ca"/><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#fff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#fff"/></svg>
+    <div class="rlogo">MIK&#39;S CARS</div>
+    <div class="rmon">Your month with Trey — July 2026</div>
+    <div class="rmove"><span class="gfrom">4.2★</span> <span class="to">→ 4.6★</span></div>
+    <div class="rup">▲ +0.4 this month</div>
+    <div class="rtiles">
+      <div class="tile"><div class="n">23</div><div class="l">New reviews</div></div>
+      <div class="tile"><div class="n">68</div><div class="l">Stand taps</div></div>
+      <div class="tile"><div class="n">23</div><div class="l">Replies sent</div></div>
+    </div>
+    <div class="rsince">Since Mik joined Trey: <b><span class="gfrom">4.0</span> → 4.6★</b> · <b>+82 reviews</b></div>
+  </div>
+</div></section>
+
+<section id="whyreviews"><div class="wrap">
+  <div class="kicker">Why it matters</div>
+  <h2>New customers judge you before they ever walk in</h2>
+  <p class="sub">Your Google rating is the first thing a would-be customer sees — it's your reputation working around the clock, either pulling people in or quietly sending them to the business down the road. More strong reviews mean more new customers through the door; replying to every one keeps them coming. Trey builds both — by actually asking your happy customers at the counter, not just sitting there hoping they will, and drafting every reply for you.</p>
+  <div class="stats">
+    <div class="stat">
+      <div class="sn">5&ndash;9%</div>
+      <div class="sl">more revenue from just one extra star on your Google rating<span class="src">— Harvard Business School</span></div>
+    </div>
+    <div class="stat">
+      <div class="sn">80%</div>
+      <div class="sl">of people are more likely to choose a business that replies to all its reviews<span class="src">— BrightLocal, 2026</span></div>
+    </div>
+  </div>
+</div></section>
+
 <section id="pricing" class="price-wrap"><div class="wrap">
   <div class="kicker">Pricing</div>
   <h2>Simple. One plan. No surprises.</h2>
@@ -151,15 +347,49 @@
   </div>
 </div></section>
 
+<section id="faq" style="background:var(--soft)"><div class="wrap">
+  <div class="kicker">Questions</div>
+  <h2>The bits people usually ask</h2>
+  <div class="faq">
+    <details>
+      <summary>Is this allowed by Google?</summary>
+      <p class="fa">Yes. Trey simply makes your Google review page easy to reach and helps you write a reply. It never chooses who can leave a review, hides bad ones, or offers rewards for reviews — so it stays firmly within Google's review policies.</p>
+    </details>
+    <details>
+      <summary>Do I need to change anything on my end?</summary>
+      <p class="fa">No dashboard and nothing to install. You connect your Google Business Profile once, pop the stand on your counter, and your review approvals come to you on WhatsApp. That's it.</p>
+    </details>
+    <details>
+      <summary>What actually turns up?</summary>
+      <p class="fa">A small tap-to-review stand for your counter. Customers tap it with their phone — or scan the QR code — and land straight on your Google review page, no app or searching needed.</p>
+    </details>
+    <details>
+      <summary>Which review sites does it work with?</summary>
+      <p class="fa">Trey focuses on Google, because for most local businesses that's where reputation is won or lost and where new customers look first. Getting your Google rating climbing is the fastest win.</p>
+    </details>
+    <details>
+      <summary>What happens with a bad review?</summary>
+      <p class="fa">Trey flags low-star reviews as urgent and drafts a calm, professional reply for you. Nothing is ever posted automatically — you approve every reply from your phone before it goes live.</p>
+    </details>
+    <details>
+      <summary>Is there a contract?</summary>
+      <p class="fa">No lock-in. It's £25 a month, cancel any time, and you start with a 14-day free trial — no card details needed to begin.</p>
+    </details>
+  </div>
+</div></section>
+
 <section class="final"><div class="wrap">
   <h2>Turn your next happy customer into your next 5-star review</h2>
   <a class="btn" href="/signup.html">Get started with Trey</a>
 </div></section>
 
-<footer><div class="wrap">
-  <div class="brand" style="font-size:16px"><svg class="mark" viewBox="0 0 100 100" width="26" height="26" style="width:26px;height:26px" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="100" height="100" rx="24" fill="#4338ca"/><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#fff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#fff"/></svg>Trey · Reputation on Autopilot</div>
-  <div><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a></div>
-</div></footer>
+<footer>
+  <div class="wrap">
+  <div class="brand" style="font-size:16px"><svg class="mark" viewBox="0 0 100 100" width="26" height="26" style="width:26px;height:26px" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="100" height="100" rx="24" fill="#4338ca"/><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.32"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#fff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#fff"/></svg>trey · Reputation on Autopilot</div>
+  <div class="flinks"><a href="mailto:info@trey.today">Contact</a><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a><a href="/privacy.html#subprocessors">Sub-processors</a></div>
+  </div>
+  <div class="copyline">© 2026 Trey · Made in the East Midlands, UK · Questions? <a href="mailto:info@trey.today">info@trey.today</a><!-- Once ICO-registered, add here e.g.: · ICO reg. ZXXXXXXX --></div>
+</footer>
 
 </body>
 </html>
