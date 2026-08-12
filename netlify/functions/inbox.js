@@ -208,9 +208,11 @@ exports.handler = async (event) => {
   // Urgent (low-star) reviews rise to the top of the waiting list.
   pending.sort((a, b) => (isUrgent(b) - isUrgent(a)) || (new Date(b.createdAt || 0) - new Date(a.createdAt || 0)));
 
-  const approveToken = process.env.TREY_TAPPY_SECRET_TOKEN || "";
   const base = process.env.URL || "https://treyv1.netlify.app";
-  const respondUrl = (id) => `${base}/.netlify/functions/approve?reviewId=${encodeURIComponent(id)}&token=${encodeURIComponent(approveToken)}`;
+  // Per-review signature — each Respond link only works for its own review
+  // (matches signReview() in approve.js). No shared token in the URL.
+  const approveSig = (id) => crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "").update("approve:" + String(id)).digest("hex").slice(0, 32);
+  const respondUrl = (id) => `${base}/.netlify/functions/approve?reviewId=${encodeURIComponent(id)}&sig=${approveSig(id)}`;
 
   const commentBlock = (r) => (r.comment
     ? `<p class="comment">"${escapeHtml(r.comment)}"</p>`

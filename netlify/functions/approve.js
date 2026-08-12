@@ -35,13 +35,22 @@ function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// Constant-time compare for the shared approve token, matching the rest of the
-// backend, so a wrong token can't be recovered by response timing. Fails closed
-// if the token is missing or the env var isn't set.
-function tokenValid(provided) {
-  const expected = process.env.TREY_TAPPY_SECRET_TOKEN || "";
+// Per-review capability signature. Each approve link carries a signature bound
+// to its OWN reviewId — sig = HMAC-SHA256("approve:" + reviewId, TREY_REPORT_SECRET)
+// truncated to 128 bits — so a leaked link only works for that one review and
+// can't be reused across reviews or tenants. Replaces the old shared global token.
+function signReview(reviewId) {
+  return crypto
+    .createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
+    .update("approve:" + String(reviewId))
+    .digest("hex")
+    .slice(0, 32);
+}
+function sigValid(reviewId, provided) {
+  if (!reviewId || !process.env.TREY_REPORT_SECRET) return false;
+  const expected = signReview(reviewId);
   const got = String(provided || "");
-  if (!expected || got.length !== expected.length) return false;
+  if (got.length !== expected.length) return false;
   try {
     return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
   } catch (e) {
@@ -135,84 +144,9 @@ function donePage(pending) {
   `);
 }
 
-// ContentSid for the "✅ done" confirmation. Created — and submitted for
-// WhatsApp approval — on first use, then cached in a config blob, so the line
-// can be sent business-initiated. Override with TWILIO_CONFIRM_CONTENT_SID.
-async function getConfirmContentSid() {
-  if (process.env.TWILIO_CONFIRM_CONTENT_SID) return process.env.TWILIO_CONFIRM_CONTENT_SID;
-  const cfg = blobsStore("config");
-  const sid = process.env.TWILIO_ACCOUNT_SID, auth = process.env.TWILIO_AUTH_TOKEN;
-  const authHeader = "Basic " + Buffer.from(`${sid}:${auth}`).toString("base64");
-  const NAME = "trey_review_handled_confirmation";
-
-  // Submit an existing template for WhatsApp approval; true only if accepted.
-  const submitForApproval = async (contentSid) => {
-    try {
-      const r = await fetch(`https://content.twilio.com/v1/Content/${contentSid}/ApprovalRequests/whatsapp`, {
-        method: "POST",
-        headers: { Authorization: authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({ name: NAME, category: "UTILITY" }),
-      });
-      return r.ok;
-    } catch (e) { return false; }
-  };
-
-  const cached = await cfg.get("confirmContentSid", { type: "json" });
-  if (cached && cached.sid) {
-    // Created before but the approval submit hadn't succeeded — retry it, so a
-    // one-off 4xx doesn't leave the confirmation permanently undeliverable.
-    if (!cached.approvalSubmitted) {
-      const ok = await submitForApproval(cached.sid);
-      if (ok) await cfg.setJSON("confirmContentSid", { ...cached, approvalSubmitted: true });
-    }
-    return cached.sid;
-  }
-
-  const createResp = await fetch("https://content.twilio.com/v1/Content", {
-    method: "POST",
-    headers: { Authorization: authHeader, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      friendly_name: NAME,
-      language: "en",
-      variables: { 1: "Reviewer", 2: "Business" },
-      types: { "twilio/text": { body: "✅ Sorted — {{1}}'s review for {{2}} is handled. Nothing more to do on that one." } },
-    }),
-  });
-  const cj = await createResp.json().catch(() => ({}));
-  if (!createResp.ok || !cj.sid) throw new Error("confirm template create failed: " + JSON.stringify(cj).slice(0, 200));
-  const approvalSubmitted = await submitForApproval(cj.sid);
-  await cfg.setJSON("confirmContentSid", { sid: cj.sid, approvalSubmitted, createdAt: new Date().toISOString() });
-  return cj.sid;
-}
-
-// Drop the "✅ done" line into the owner's WhatsApp. Best-effort: never blocks
-// the approval, and only actually delivers once the template is WhatsApp-approved.
-async function sendHandledConfirmation(pending) {
-  try {
-    const confirmSid = await getConfirmContentSid();
-    if (!confirmSid) return;
-    const client = await blobsStore("clients").get(pending.locationId, { type: "json" });
-    const digits = client && client.phone ? String(client.phone).replace(/\D/g, "") : "";
-    if (!digits) return;
-    const tSid = process.env.TWILIO_ACCOUNT_SID, tAuth = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_WHATSAPP_FROM, msgService = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    // Mirror review-webhook's sender selection (From and MessagingService are
-    // mutually exclusive) so a Messaging-Service-only setup doesn't send From=undefined.
-    const p = msgService
-      ? { To: `whatsapp:+${digits}`, MessagingServiceSid: msgService }
-      : { To: `whatsapp:+${digits}`, From: from };
-    p.ContentSid = confirmSid;
-    p.ContentVariables = JSON.stringify({ 1: pending.reviewerName || "the customer", 2: pending.businessName || "your business" });
-    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${tSid}/Messages.json`, {
-      method: "POST",
-      headers: { Authorization: "Basic " + Buffer.from(`${tSid}:${tAuth}`).toString("base64"), "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(p),
-    });
-    if (!r.ok) console.error("[approve] confirmation send returned", r.status, (await r.text().catch(() => "")).slice(0, 200));
-  } catch (e) {
-    console.error("[approve] handled-confirmation send failed:", e.message);
-  }
-}
+// (The post-approval "✅ Sorted" WhatsApp confirmation was removed on purpose:
+// WhatsApp is only the inbound "new review" prompt now, and the Inbox is the
+// source of truth for what's already been handled.)
 
 exports.handler = async (event) => {
   const params =
@@ -220,13 +154,17 @@ exports.handler = async (event) => {
       ? Object.fromEntries(new URLSearchParams(event.body || ""))
       : event.queryStringParameters || {};
 
-  const { reviewId, token, replyText } = params;
+  // Authorisation is a per-review signature. A link carries either explicit
+  // reviewId + sig, or a single combined `r` (sig[32] + reviewId) — the shape
+  // the WhatsApp template's one-variable button URL uses.
+  let { reviewId, sig, r, replyText } = params;
+  if (!reviewId && r) { sig = String(r).slice(0, 32); reviewId = String(r).slice(32); }
 
-  if (!tokenValid(token)) {
-    return errorPage("Unauthorized", "Invalid security token. Please try again from WhatsApp.", 403);
-  }
   if (!reviewId) {
     return errorPage("Missing review", "No review reference was provided.", 400);
+  }
+  if (!sigValid(reviewId, sig)) {
+    return errorPage("Unauthorized", "This link isn't valid. Please open the most recent link from your WhatsApp.", 403);
   }
 
   const reviewsStore = blobsStore("reviews");
@@ -287,9 +225,8 @@ exports.handler = async (event) => {
       const existingRecord = await reviewsStore.get(recordKey, { type: "json" });
       await reviewsStore.setJSON(recordKey, { ...(existingRecord || pending), finalReply, status: "approved" });
 
-      // Drop a "✅ done" line into the owner's WhatsApp so the thread stays a
-      // clean, scannable list of what still needs a response. Best-effort.
-      await sendHandledConfirmation(pending);
+      // No WhatsApp message after approval — WhatsApp is only the inbound
+      // "new review" prompt; the Inbox reflects what's already been handled.
 
       const okTitle = MOCK_MODE ? "Reply approved" : "Reply posted";
       const okMsg = MOCK_MODE
@@ -312,7 +249,7 @@ exports.handler = async (event) => {
       `);
     } catch (error) {
       console.error("Approve error:", error.message);
-      return errorPage("Posting failed", error.message, 500);
+      return errorPage("Posting failed", "Something went wrong posting your reply. Please try again in a moment.", 500);
     }
   }
 
@@ -344,7 +281,7 @@ exports.handler = async (event) => {
 
       <form method="POST" action="">
         <input type="hidden" name="reviewId" value="${escapeHtml(reviewId)}" />
-        <input type="hidden" name="token" value="${escapeHtml(token)}" />
+        <input type="hidden" name="sig" value="${escapeHtml(sig)}" />
         <label style="font-size:14px;font-weight:500;color:#334155;">Draft reply</label>
         <textarea name="replyText" rows="7" style="width:100%;box-sizing:border-box;margin-top:6px;border-radius:16px;border:1px solid #e2e8f0;padding:14px;font-size:14px;color:#334155;line-height:1.5;font-family:inherit;">${escapeHtml(pending.replyDraft)}</textarea>
         <button type="submit" style="width:100%;margin-top:20px;background:#4f46e5;color:white;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:700;">\u2713 Approve &amp; post reply</button>

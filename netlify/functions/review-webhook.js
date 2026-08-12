@@ -194,9 +194,16 @@ exports.handler = async (event) => {
   await reviewsStore.setJSON(recordKey, reviewRecord);
 
   // 6. Send the WhatsApp alert via Twilio — short message, link only.
+  // Per-review signature — the approve link only works for this one review
+  // (replaces the old shared token). Must match signReview() in approve.js.
+  const approveSig = require("crypto")
+    .createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
+    .update("approve:" + String(reviewId))
+    .digest("hex")
+    .slice(0, 32);
   const approveUrl =
     `${siteUrl}/.netlify/functions/approve?reviewId=${encodeURIComponent(reviewId)}` +
-    `&token=${encodeURIComponent(process.env.TREY_TAPPY_SECRET_TOKEN)}`;
+    `&sig=${approveSig}`;
 
   const messageBody =
     `\u2b50 *New review \u2014 ${client.businessName}* \u2b50\n` +
@@ -234,9 +241,9 @@ exports.handler = async (event) => {
       3: clean(rating, 12),
       4: clean(reviewerName, 60),
       5: reviewSnippet(comment, 150) || "(rating only — no written review)",
-      // Appended verbatim to the button URL's ?reviewId= — pre-encode so any
-      // special characters in a Google review id survive the round-trip.
-      6: encodeURIComponent(reviewId),
+      // Combined sig + reviewId for the template button's single URL variable.
+      // The Twilio template's button URL must be updated to: .../approve?r={{6}}
+      6: approveSig + reviewId,
     });
   } else {
     // Fallback: freeform session message. Only delivers if the client has
