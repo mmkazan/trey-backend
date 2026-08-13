@@ -45,6 +45,14 @@
   .b-client{background:#dcfce7;color:#166534;}.b-flag{background:#fee2e2;color:#991b1b;}.b-thin{background:#f1f5f9;color:#64748b;}
   .lead-detail{padding:0 16px 16px;border-top:1px solid var(--border);display:none;}
   .hook{background:#f8fafc;border-left:3px solid var(--accent2);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;margin:12px 0;color:#334155;}
+  .tsbadge{display:inline-block;color:#fff;font-weight:800;font-size:11px;padding:2px 8px;border-radius:999px;margin-left:6px;vertical-align:middle;white-space:nowrap;}
+  .tshint{background:#eef2ff;border:1px solid #e0e7ff;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#3730a3;margin:10px 0;line-height:1.45;}
+  .opp{font-weight:800;font-size:12px;padding:4px 8px;border-radius:8px;white-space:nowrap;color:#fff;text-align:center;min-width:62px;line-height:1.15;}
+  .opp b{display:block;font-size:14px;}
+  .opp small{font-weight:700;font-size:9px;letter-spacing:.04em;text-transform:uppercase;opacity:.9;}
+  .opphint{background:#f0fdf4;border:1px solid #dcfce7;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#14532d;margin:10px 0;line-height:1.45;}
+  .checkline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none;}
+  .checkline input{width:auto;margin:0;}
   .reasons{font-size:12px;color:var(--muted);margin:6px 0 12px;}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
   .statusbtns{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0;}
@@ -126,6 +134,11 @@
             <option value="1">Tier 1</option><option value="2">Tier 2</option><option value="3">Tier 3</option>
           </select>
         </div>
+        <div style="flex:0;">
+          <label class="checkline" title="Hide likely dead ends — rating under 3.0★ or fewer than 10 reviews. They stay in your list, just filtered from view.">
+            <input type="checkbox" id="hideDeadEnds" onchange="render()" /> Hide dead ends
+          </label>
+        </div>
       </div>
     </div>
 
@@ -157,6 +170,76 @@
   const esc=v=>{ v=(v==null?"":String(v)); const d=document.createElement("div"); d.textContent=v; return d.innerHTML.replace(/"/g,"&quot;").replace(/'/g,"&#39;"); };
   // Only allow http(s) links; anything else (javascript:, data:, …) is dropped.
   const safeUrl=u=>{ u=(u==null?"":String(u)); return /^https?:\/\//i.test(u)?u:""; };
+
+  // ---------- Trey Score (customer-facing Google-health estimate) ----------
+  // Mirrors scoreBusiness() in netlify/functions/profile-audit.js — keep in sync.
+  function pctToNum(v){ if(v==null)return null; var m=String(v).match(/(\d+(\.\d+)?)/); return m?Math.max(0,Math.min(1,parseFloat(m[1])/100)):null; }
+  function treyScore(inp){
+    var rep=inp.reputation||{},act=inp.activity||{},comp=inp.completeness||{};
+    var cl=function(x,a,b){return Math.max(a,Math.min(b,x));};
+    var rating=Number(rep.rating);
+    var ratingPts=isFinite(rating)&&rating>0?Math.round(cl((rating-3.0)/1.7,0,1)*22):0;
+    var rc=Number(rep.reviewCount)||0;
+    var rcPts=rc>=100?14:rc>=50?11:rc>=25?8:rc>=10?5:rc>=1?2:0;
+    var r90=Number(rep.reviewsLast90);
+    var recPts=!isFinite(r90)?4:r90>=6?8:r90>=3?5:r90>=1?3:0;
+    var rr=rep.replyRate; var rrPts=(rr==null||isNaN(rr))?2:Math.round(cl(rr,0,1)*6);
+    var repPts=ratingPts+rcPts+recPts+rrPts;
+    var actPts=(act.postedRecently?10:0)+(act.photosFresh?10:0);
+    var compPts=(comp.primaryCategory?6:0)+((comp.secondaryCount||0)>=2?5:0)+(comp.description&&String(comp.description).length>=120?5:0)+((comp.serviceCount||0)>=3?5:0)+(comp.hoursSet?3:0)+(comp.website?3:0)+(comp.phone?2:0)+((comp.attributeCount||0)>=1?1:0);
+    var total=cl(Math.round(repPts+actPts+compPts),0,100);
+    var band=total>=90?{label:"Excellent",color:"#16a34a"}:total>=75?{label:"Strong",color:"#16a34a"}:total>=50?{label:"Getting there",color:"#f59e0b"}:{label:"Needs work",color:"#ef4444"};
+    return {total:total,band:band.label,color:band.color};
+  }
+  function estTreyFromLead(l){
+    return treyScore({reputation:{rating:Number(l.rating),reviewCount:Number(l.reviewCount)||0,reviewsLast90:l.reviewsLast90,replyRate:pctToNum(l.ownerResponseRate)},
+      activity:{postedRecently:false,photosFresh:false},
+      completeness:{primaryCategory:!!l.category,secondaryCount:l.secondaryCount||0,website:!!l.website,phone:!!l.phone,hoursSet:!!l.hoursSet}});
+  }
+
+  // ---------- Opportunity score (who to ring first) ----------
+  // Trey Score says how healthy a business's profile is. Opportunity says how
+  // much *Trey* can move the needle × how winnable they are — so the best leads
+  // float to the top and we don't chase businesses we can't help or reach.
+  // Mirrors opportunityScore() in netlify/functions/profile-audit.js — keep in sync.
+  function opportunityScore(l){
+    var cl=function(x,a,b){return Math.max(a,Math.min(b,x));};
+    var rating=Number(l.rating);                      // may be NaN (unknown)
+    var rc=Number(l.reviewCount)||0;
+    var replyRate=pctToNum(l.ownerResponseRate);      // 0..1 or null
+    var r90=Number(l.reviewsLast90);                  // may be NaN
+    var recent=Number(l.recentUnanswered)||0;
+    // size — how real an audience is behind those reviews (caps at 150).
+    var size=cl(rc/150,0,1);
+    // 1) reply gap (0-40) — Trey's core value: reviews coming in, nobody replying.
+    var gap=(replyRate==null)?0.5:(1-replyRate);
+    var replyGapPts=gap*size*40;
+    // 2) activity (0-20) — established & still getting reviews = worth the effort.
+    var actPts=rc>=10?16:rc>=3?8:0;
+    if(isFinite(r90)&&r90>=1)actPts=Math.min(actPts+4,20);
+    // 3) pain (0-20) — recent unanswered poor reviews create urgency.
+    var painPts=Math.min(recent*7,20);
+    // 4) completeness gap (0-20) — missing basics Trey tidies up quickly.
+    var compPts=(l.website?0:8)+(l.category?0:8)+(l.phone?0:4);
+    var raw=cl(replyGapPts+actPts+painPts+compPts,0,100);
+    // winnability (0-1) — low ratings are hard to save & hard to convert; no
+    // contact route makes them harder still.
+    var win;
+    if(!isFinite(rating)||rating<=0)win=0.7;
+    else if(rating<2.8)win=0.25;
+    else if(rating<3.3)win=0.6;
+    else if(rating<3.8)win=0.85;
+    else win=1.0;
+    if(!l.phone&&!l.email)win*=0.7;
+    var total=Math.round(cl(raw*win,0,100));
+    var band=total>=60?{label:"Hot",color:"#16a34a"}:total>=33?{label:"Warm",color:"#f59e0b"}:{label:"Cold",color:"#94a3b8"};
+    return {total:total,band:band.label,color:band.color};
+  }
+  // Dead end = same bar as the LOW RATING / THIN flags: sub-3.0★ or under 10 reviews.
+  function isDeadEnd(l){
+    var rating=Number(l.rating);
+    return (isFinite(rating)&&rating>0&&rating<3.0)||((Number(l.reviewCount)||0)<10);
+  }
 
   // ---------- v2 scoring (mirrors docs/lead-scoring-spec.md) ----------
   function scoreApify(row){
@@ -192,8 +275,11 @@
     const flag=(rating!==null&&rating<3.0)?"LOW RATING":(reviewCount<10?"THIN":"");
     let hook=""; const pool=recent.length?recent:poor;
     if(pool.length){ const L=pool.slice().sort((a,b)=>(b.dt||0)-(a.dt||0))[0]; const t=L.text.slice(0,120)+(L.text.length>120?"...":""); hook="["+L.stars+"★ "+fmtDate(L.dt)+"] \""+t+"\""; }
+    const reviewsLast90=revs.filter(r=>r.dt&&(REF-r.dt)/86400000<=90).length;
+    let secondaryCount=0,ci=1; while(("categories/"+ci) in row){ if((row["categories/"+ci]||"").trim())secondaryCount++; ci++; }
     return {placeId:(row["placeId"]||"").trim(),businessName:(row["title"]||"").trim(),category:fne(row,["categoryName","categories/0"]),
       email,phone,website,rating,reviewCount,ownerResponseRate:rate===null?"n/a":Math.round(rate*100)+"%",recentUnanswered:recent.length,
+      reviewsLast90:(revs.length?reviewsLast90:undefined),secondaryCount,
       hook,scoreReasons:R.join(" · "),flag,reviewUrl:(row["placeId"]?"https://search.google.com/local/writereview?placeid="+row["placeId"]:""),
       address:(row["address"]||"").trim(),tier,score:total,outreachStatus:"New"};
   }
@@ -255,7 +341,8 @@
     try{
       const r=await fetch(API,{headers:{Authorization:"Bearer "+token}}); if(r.status===403){logout();return;}
       LEADS=await r.json(); if(!Array.isArray(LEADS))LEADS=[];
-      LEADS.sort((a,b)=>((a.tier||3)-(b.tier||3))||((b.score||-1)-(a.score||-1)));
+      // Default sort: Opportunity high→low (ring the best first), then old lead score.
+      LEADS.sort((a,b)=>(opportunityScore(b).total-opportunityScore(a).total)||((b.score||-1)-(a.score||-1)));
       render();
     }catch(e){ list.innerHTML='<div class="muted" style="padding:10px;">Failed to load: '+esc(e.message)+'</div>'; }
   }
@@ -269,35 +356,43 @@
     const el=document.getElementById("leadSearch"); const q=(el&&el.value||"").toLowerCase().trim();
     const sf=document.getElementById("leadStatusFilter"); const st=sf&&sf.value||"";
     const tf=document.getElementById("leadTierFilter"); const tier=tf&&tf.value||"";
+    const hd=document.getElementById("hideDeadEnds"); const hideDead=!!(hd&&hd.checked);
     const rows=LEADS.map((l,i)=>({l,i})).filter(function(o){
       const l=o.l;
       const hay=[l.businessName,l.category,l.address,l.contactName,l.phone,l.email].filter(Boolean).join(" ").toLowerCase();
       const okQ=!q||hay.indexOf(q)>-1;
       const okSt=!st||(l.outreachStatus||"New")===st;
       const okT=!tier||String(l.tier||"")===tier;
-      return okQ&&okSt&&okT;
+      const okDead=!hideDead||!isDeadEnd(l);
+      return okQ&&okSt&&okT&&okDead;
     });
     document.getElementById("leadList").innerHTML = rows.length
       ? rows.map(function(o){return leadCard(o.l,o.i);}).join("")
       : '<div class="card muted">No leads match your search.</div>';
   }
   function leadCard(l,i){
-    const tier=l.tier?("t"+l.tier):"t3";
+    const ts=estTreyFromLead(l);
+    const op=opportunityScore(l);
+    const hasData=(l.rating!=null||l.reviewCount);
     const badges=(l.isClient?'<span class="badge b-client">Client ✓</span>':'')+
       (l.flag==="LOW RATING"?'<span class="badge b-flag">LOW RATING</span>':'')+
-      (l.flag==="THIN"?'<span class="badge b-thin">THIN</span>':'');
+      (l.flag==="THIN"?'<span class="badge b-thin">THIN</span>':'')+
+      (isDeadEnd(l)?'<span class="badge b-thin">DEAD END?</span>':'');
     const sub=[l.category,(l.rating!=null?l.rating+"★":""),(l.reviewCount!=null?l.reviewCount+" reviews":""),(l.ownerResponseRate?l.ownerResponseRate+" replies":"")].filter(Boolean).join(" · ");
     return '<div class="lead">'+
       '<div class="lead-head" onclick="toggle('+i+')">'+
-        '<span class="tier '+tier+'">'+(l.tier?("T"+l.tier):"—")+'</span>'+
-        '<span class="score">'+(l.score!=null?l.score:"—")+'</span>'+
-        '<span class="lead-main"><div class="lead-name">'+esc(l.businessName||"(no name)")+' '+badges+'</div><div class="lead-sub">'+esc(sub)+'</div></span>'+
+        '<span class="opp" style="background:'+op.color+'" title="Opportunity — how much Trey can help × how winnable they are. List is sorted highest first."><b>'+op.total+'</b><small>'+op.band+'</small></span>'+
+        '<span class="lead-main"><div class="lead-name">'+esc(l.businessName||"(no name)")+' '+badges+(hasData?'<span class="tsbadge" style="background:'+ts.color+'" title="Trey Score — estimated Google-health, out of 100">Trey '+ts.total+'</span>':'')+'</div><div class="lead-sub">'+esc(sub)+'</div></span>'+
         '<button class="pill draft-pill" onclick="event.stopPropagation();openDraft('+i+')" title="Draft outreach messages">✍ Draft</button>'+
         '<button class="pill '+clsStatus(l.outreachStatus)+'" onclick="event.stopPropagation();cycleStatus('+i+')">'+esc(l.outreachStatus||"New")+'</button>'+
       '</div>'+
       '<div class="lead-detail" id="detail_'+i+'">'+
+        '<div class="opphint"><b>Opportunity '+op.total+'/100 · '+op.band+'</b> — how much Trey can move the needle here × how winnable they are. This is the sort order.'+
+          (l.tier||l.score!=null?' <span style="color:#166534;">Lead quality: '+(l.tier?"T"+l.tier:"—")+(l.score!=null?" · score "+l.score:"")+'.</span>':'')+
+          (isDeadEnd(l)?' <span style="color:#b91c1c;">Flagged a possible dead end (low rating or very few reviews) — kept in the list, hide with the toggle.</span>':'')+'</div>'+
         (l.hook?'<div class="hook">'+esc(l.hook)+'</div>':'')+
         (l.scoreReasons?'<div class="reasons">'+esc(l.scoreReasons)+'</div>':'')+
+        (hasData?'<div class="tshint"><b>Trey Score '+ts.total+'/100</b> · '+esc(ts.band)+' — ≈'+(100-ts.total)+' points Trey can add (mostly activity + profile). This is your outreach hook.</div>':'')+
         '<div class="statusbtns">'+STATUSES.map(s=>'<button class="pill '+clsStatus(s)+(l.outreachStatus===s?' active':'')+'" onclick="setStatusTo('+i+',\''+s+'\')">'+s+'</button>').join("")+'</div>'+
         '<div class="grid2">'+
           '<div><label>Business type</label><input id="bt_'+i+'" value="'+esc(l.businessType||"")+'" /></div>'+
