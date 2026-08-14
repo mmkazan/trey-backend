@@ -94,7 +94,9 @@ exports.handler = async (event) => {
       <div class="hint" style="margin-top:14px">${escapeHtml(pending.summary || "")}</div></div>`);
   }
 
-  const canPublish = googleApi.isEnabled();
+  // Publishing needs BOTH ids — a client record predating googleAccountId would
+  // otherwise show an Approve button that throws. Those fall back to copy/paste.
+  const canPublish = googleApi.isEnabled() && !!pending.accountId && !!pending.locationId;
 
   if (event.httpMethod === "POST") {
     const text = String(params.summary || pending.summary || "").trim();

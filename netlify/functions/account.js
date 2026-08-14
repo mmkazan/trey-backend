@@ -115,7 +115,7 @@ function shell(title, inner) {
   .locked{font-size:12.5px;color:#64748b;line-height:1.55;background:#eef3fc;border:1px dashed #b6cdf0;border-radius:12px;padding:13px 14px}
   .locked b{color:${SLATE}}
   .locked a{color:${INDIGO2};font-weight:700}
-  .sec{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#64748b;margin:20px 4px 10px;font-weight:700}
+  .sec{font-size:12px;letter-spacing:.07em;color:#64748b;margin:20px 4px 10px;font-weight:700}
   .xlink{display:block;text-align:center;margin-top:22px;color:${ACCENT};font-weight:700;text-decoration:none;font-size:14px}
   .foot{text-align:center;color:#8091ad;font-size:12px;margin-top:26px}
   .saved{background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:12px;padding:14px 15px;font-size:14px;font-weight:600;text-align:center;margin-bottom:14px}

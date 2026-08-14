@@ -4,7 +4,8 @@ const { getStore } = require("@netlify/blobs");
 //
 //  - Logs the tap so review-webhook.js can attribute a review to it.
 //  - Counts taps per month for reporting ("6 taps -> 4 completed reviews").
-//  - Enforces the 14-day free-trial pause promised in the Terms: once a
+//  - Enforces the free-trial pause promised in the Terms (14 days, or 30 if
+//    the business arrived through a referral link): once a
 //    client's trial has ended and they haven't subscribed, the stand shows an
 //    "unavailable" page (with a billing link) instead of the Google review page.
 //  - Active clients are redirected straight to Google to leave a review.
@@ -12,7 +13,13 @@ const { getStore } = require("@netlify/blobs");
 // Clients with no subscriptionStatus are treated as active ("grandfathered"),
 // so stands that were live before this feature shipped never pause by surprise.
 
-const TRIAL_DAYS = 14;
+// How long is this client's free trial? Normally 14 days; a business that came
+// in through a referral link gets 30 (set by signup.js). Anything odd falls back
+// to 14 so a bad value can never hand out an unlimited trial.
+function trialDaysFor(client) {
+  const n = Number(client && client.trialDays);
+  return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : 14;
+}
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
@@ -155,7 +162,7 @@ function activationPage(client, locationId) {
    <div class="recipient">${logoChip}<div class="bizname">${name}</div></div>
    <div class="card">
      <h1>Is this you, ${name}? &#128075;</h1>
-     <p>Your Trey stand is ready. Press the button below to start your <b>14-day free trial</b> &mdash; the countdown only begins now, not while it was in the post.</p>
+     <p>Your Trey stand is ready. Press the button below to start your <b>${trialDaysFor(client)}-day free trial</b> &mdash; the countdown only begins now, not while it was in the post.</p>
      <form method="POST" action="${action}"><button class="btn" type="submit">Activate my stand &rarr;</button></form>
      <div class="fine">Only press this once your stand is set up and ready for customers.</div>
    </div>
@@ -183,7 +190,7 @@ function activatedPage(client, target) {
    <div class="card">
      <div class="tick">&#10003;</div>
      <h1>You're live!</h1>
-     <p>Your 14-day free trial has started. From now on, anyone who taps your stand goes straight to your Google review page.</p>
+     <p>Your ${trialDaysFor(client)}-day free trial has started. From now on, anyone who taps your stand goes straight to your Google review page.</p>
      <a class="preview" href="${safeTarget}">Preview your review page &rarr;</a>
    </div>
    <div class="foot">${treyMarkSvg(24)} Powered by Trey</div>
@@ -201,7 +208,7 @@ function isPaused(client) {
   if (status === "trial") {
     const started = trialStartMs(client);
     if (started === null) return false; // trial hasn't started yet -> stand still works (test)
-    return Date.now() > started + TRIAL_DAYS * 24 * 60 * 60 * 1000;
+    return Date.now() > started + trialDaysFor(client) * 24 * 60 * 60 * 1000;
   }
   return false; // no status recorded = grandfathered active
 }
@@ -217,7 +224,7 @@ function displayName(client) {
 // Why is the stand deactivated? Drives which message the pause page shows.
 //   "payment"     — a subscription payment failed (status paused / past_due)
 //   "cancelled"   — the subscription was cancelled
-//   "trial_ended" — the 14-day trial elapsed without subscribing
+//   "trial_ended" — the free trial (14 days, or 30 if referred) elapsed without subscribing
 function pauseReason(client) {
   if (!client) return null;
   const s = client.subscriptionStatus;
@@ -225,7 +232,7 @@ function pauseReason(client) {
   if (s === "cancelled" || s === "canceled" || s === "expired") return "cancelled";
   if (s === "trial") {
     const started = trialStartMs(client);
-    if (started !== null && Date.now() > started + TRIAL_DAYS * 24 * 60 * 60 * 1000) return "trial_ended";
+    if (started !== null && Date.now() > started + trialDaysFor(client) * 24 * 60 * 60 * 1000) return "trial_ended";
   }
   return null;
 }
@@ -249,7 +256,7 @@ function pausedPage(client, locationId, reasonOverride) {
     ownerMsg = `<strong>${name}</strong> &mdash; your Trey subscription has been cancelled, so your stand is switched off. Resubscribe whenever you'd like it back on.`;
     btnLabel = "Resubscribe";
   } else {
-    ownerMsg = `<strong>${name}</strong> &mdash; your 14-day free trial has ended. Subscribe to switch your Trey stand back on and keep every review answered.`;
+    ownerMsg = `<strong>${name}</strong> &mdash; your ${trialDaysFor(client)}-day free trial has ended. Subscribe to switch your Trey stand back on and keep every review answered.`;
     btnLabel = "Subscribe via Stripe";
   }
   const payButton = payUrl

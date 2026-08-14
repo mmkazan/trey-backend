@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trey — Google Post & Photo nudge previews</title>
+<style>
+  :root{ --indigo:#4f46e5; --ink:#0f172a; --muted:#64748b; --wa:#008069; --wabg:#efeae2; --bubble:#fff; --line:#e2e8f0; }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:#f1f5f9;line-height:1.5;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px;}
+  h1{font-size:22px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 26px;}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:34px 0 14px;border-top:1px solid var(--line);padding-top:22px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px;align-items:start;}
+  /* phone */
+  .phone{background:#111b21;border-radius:26px;padding:9px;box-shadow:0 10px 30px rgba(2,6,23,.18);}
+  .screen{background:var(--wabg);border-radius:18px;overflow:hidden;}
+  .wahead{background:var(--wa);color:#fff;display:flex;align-items:center;gap:10px;padding:11px 12px;}
+  .ava{width:34px;height:34px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+  .ava svg{width:22px;height:22px;}
+  .waname{font-weight:600;font-size:14px;line-height:1.1;}
+  .wastatus{font-size:11px;opacity:.85;}
+  .chat{padding:14px 12px 16px;min-height:120px;background-image:linear-gradient(rgba(255,255,255,.35),rgba(255,255,255,.35));}
+  .bubble{background:var(--bubble);border-radius:10px;border-top-left-radius:2px;padding:9px 11px 7px;font-size:13.5px;box-shadow:0 1px 1px rgba(2,6,23,.08);max-width:92%;position:relative;margin-bottom:8px;}
+  .bubble .t{color:var(--ink);}
+  .bubble .draft{margin:8px 0;padding:9px 11px;background:#f7f8fa;border-left:3px solid var(--indigo);border-radius:6px;color:#1e293b;font-style:italic;}
+  .bubble .time{font-size:10px;color:#94a3b8;text-align:right;margin-top:3px;}
+  .btn{display:block;text-align:center;background:#f0f2f5;color:var(--indigo);font-weight:700;font-size:13.5px;border-top:1px solid #e6e9ee;margin:8px -11px -7px;padding:10px;border-radius:0 0 10px 10px;}
+  .cap{font-size:12.5px;color:var(--muted);margin:9px 2px 0;}
+  .cap b{color:var(--ink);}
+  /* template copy blocks */
+  .tpl{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:14px;}
+  .tpl h3{margin:0 0 4px;font-size:14px;}
+  .tpl .meta{font-size:12px;color:var(--muted);margin:0 0 10px;}
+  pre{white-space:pre-wrap;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px 14px;font-size:12.5px;line-height:1.55;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto;margin:0;}
+  .var{color:#fbbf24;}
+  .note{background:#eef2ff;border:1px solid #e0e7ff;border-radius:10px;padding:12px 15px;font-size:13px;color:#3730a3;margin:16px 0 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>What lands in their WhatsApp each month &amp; quarter</h1>
+  <p class="sub">Real examples for your first clients + a prospect. The monthly post is AI-drafted per business; the quarterly photo list is tailored to their trade. This is the recurring drumbeat a subscription keeps alive.</p>
+
+  <h2>① Monthly Google Post — 5th of each month</h2>
+  <div class="grid">
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="wahead"><div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"><path d="M12 20a1 1 0 100-2 1 1 0 000 2z" fill="#4f46e5" stroke="none"/><path d="M8.5 15.5a5 5 0 017 0"/><path d="M6 12.5a8.5 8.5 0 0112 0"/></svg></div><div><div class="waname">Trey</div><div class="wastatus">business account</div></div></div>
+        <div class="chat">
+          <div class="bubble">
+            <div class="t">Hi <b>Raven Holistics</b> 👋 Here's your Google post for August — ready to go:</div>
+            <div class="draft">August at Raven Holistics 🌿 A calm hour that's entirely yours — massage, reiki or reflexology to help you reset before autumn. New clients always welcome, and if we've helped you unwind lately a quick Google review means the world.</div>
+            <div class="t">Posting once a month keeps your profile active and helps you show up in local searches. Tap to approve &amp; publish — tweak it first if you like.</div>
+            <div class="btn">✓ Approve &amp; post</div>
+            <div class="time">09:00</div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>Raven Holistics</b> · holistic therapy</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="wahead"><div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"><path d="M12 20a1 1 0 100-2 1 1 0 000 2z" fill="#4f46e5" stroke="none"/><path d="M8.5 15.5a5 5 0 017 0"/><path d="M6 12.5a8.5 8.5 0 0112 0"/></svg></div><div><div class="waname">Trey</div><div class="wastatus">business account</div></div></div>
+        <div class="chat">
+          <div class="bubble">
+            <div class="t">Hi <b>[Gardener]</b> 👋 Here's your Google post for August — ready to go:</div>
+            <div class="draft">Long summer evenings are made for a well-kept garden — let us handle the mowing, hedges and borders so you can just enjoy it. One-off tidy or regular upkeep, we're happy to help. And if we've looked after your garden lately, a quick Google review helps other locals find us. 🌱</div>
+            <div class="t">Posting once a month keeps your profile active and helps you show up in local searches. Tap to approve &amp; publish — tweak it first if you like.</div>
+            <div class="btn">✓ Approve &amp; post</div>
+            <div class="time">09:00</div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>Your brother-in-law</b> · gardener / landscaper</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="wahead"><div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"><path d="M12 20a1 1 0 100-2 1 1 0 000 2z" fill="#4f46e5" stroke="none"/><path d="M8.5 15.5a5 5 0 017 0"/><path d="M6 12.5a8.5 8.5 0 0112 0"/></svg></div><div><div class="waname">Trey</div><div class="wastatus">business account</div></div></div>
+        <div class="chat">
+          <div class="bubble">
+            <div class="t">Hi <b>Troy Barbers</b> 👋 Here's your Google post for August — ready to go:</div>
+            <div class="draft">August at Troy Barbers ✂️ Walk-ins welcome — no appointment needed for a sharp fade or a quick tidy-up before the weekend. We'll have you looking your best. If you left happy last time, a quick Google review really helps us out.</div>
+            <div class="t">Posting once a month keeps your profile active and helps you show up in local searches. Tap to approve &amp; publish — tweak it first if you like.</div>
+            <div class="btn">✓ Approve &amp; post</div>
+            <div class="time">09:00</div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>Troy Barbers</b> · barber (prospect example)</div>
+    </div>
+
+  </div>
+
+  <div class="tpl">
+    <h3>Twilio template to create — <code>trey_google_post</code></h3>
+    <p class="meta">Category: Marketing · with a URL (call-to-action) button. Variables: {{1}} business name · {{2}} the drafted post · {{3}} link query for the button.</p>
+    <pre>Hi <span class="var">{{1}}</span> 👋 Here's your Google post for this month — ready to go:
+
+"<span class="var">{{2}}</span>"
+
+Posting once a month keeps your profile active and helps you show
+up in local searches. Tap below to approve &amp; publish — you can
+tweak it first.
+
+[ Button ]  ✓ Approve &amp; post
+URL:  https://trey.today/.netlify/functions/google-post?<span class="var">{{3}}</span></pre>
+  </div>
+
+  <h2>② Quarterly photo refresh — 8th of Jan / Apr / Jul / Oct</h2>
+  <div class="grid">
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="wahead"><div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"><path d="M12 20a1 1 0 100-2 1 1 0 000 2z" fill="#4f46e5" stroke="none"/><path d="M8.5 15.5a5 5 0 017 0"/><path d="M6 12.5a8.5 8.5 0 0112 0"/></svg></div><div><div class="waname">Trey</div><div class="wastatus">business account</div></div></div>
+        <div class="chat">
+          <div class="bubble">
+            <div class="t">Hi <b>Raven Holistics</b> 👋 Quick one to keep your Google profile fresh — profiles with new photos get seen more. This quarter, try grabbing just 3–4 shots:</div>
+            <div class="draft">• a bright, welcoming reception&nbsp;&nbsp;• a treatment room (tidy + modern)&nbsp;&nbsp;• a friendly team member&nbsp;&nbsp;• the exterior / signage</div>
+            <div class="t">Snap them on your phone and add them in the Google app — 5 minutes, big difference. Reply here if you'd like a hand. 📸</div>
+            <div class="time">09:00</div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>Raven Holistics</b> · health/therapy shot-list</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="wahead"><div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"><path d="M12 20a1 1 0 100-2 1 1 0 000 2z" fill="#4f46e5" stroke="none"/><path d="M8.5 15.5a5 5 0 017 0"/><path d="M6 12.5a8.5 8.5 0 0112 0"/></svg></div><div><div class="waname">Trey</div><div class="wastatus">business account</div></div></div>
+        <div class="chat">
+          <div class="bubble">
+            <div class="t">Hi <b>[Gardener]</b> 👋 Quick one to keep your Google profile fresh — profiles with new photos get seen more. This quarter, try grabbing just 3–4 shots:</div>
+            <div class="draft">• a finished job you're proud of&nbsp;&nbsp;• a clean before/after&nbsp;&nbsp;• you or the team on site (van + logo)&nbsp;&nbsp;• tools or materials laid out neatly</div>
+            <div class="t">Snap them on your phone and add them in the Google app — 5 minutes, big difference. Reply here if you'd like a hand. 📸</div>
+            <div class="time">09:00</div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>Your brother-in-law</b> · trades shot-list</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="wahead"><div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"><path d="M12 20a1 1 0 100-2 1 1 0 000 2z" fill="#4f46e5" stroke="none"/><path d="M8.5 15.5a5 5 0 017 0"/><path d="M6 12.5a8.5 8.5 0 0112 0"/></svg></div><div><div class="waname">Trey</div><div class="wastatus">business account</div></div></div>
+        <div class="chat">
+          <div class="bubble">
+            <div class="t">Hi <b>Troy Barbers</b> 👋 Quick one to keep your Google profile fresh — profiles with new photos get seen more. This quarter, try grabbing just 3–4 shots:</div>
+            <div class="draft">• a fresh before/after&nbsp;&nbsp;• your styling station or chairs&nbsp;&nbsp;• the reception / waiting area&nbsp;&nbsp;• your team mid-treatment</div>
+            <div class="t">Snap them on your phone and add them in the Google app — 5 minutes, big difference. Reply here if you'd like a hand. 📸</div>
+            <div class="time">09:00</div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>Troy Barbers</b> · salon/barber shot-list</div>
+    </div>
+
+  </div>
+
+  <div class="tpl">
+    <h3>Twilio template to create — <code>trey_photo_refresh</code></h3>
+    <p class="meta">Category: Marketing · no button (Phase 1). Variables: {{1}} business name · {{2}} the tailored shot-list.</p>
+    <pre>Hi <span class="var">{{1}}</span> 👋 Quick one to keep your Google profile fresh —
+profiles with new photos get seen more. This quarter, try grabbing
+just 3–4 shots:
+
+<span class="var">{{2}}</span>
+
+Snap them on your phone and add them in the Google app — 5 minutes,
+big difference. Reply here if you'd like a hand. 📸</pre>
+  </div>
+
+  <div class="note"><b>Phase 2 (once the Google API + photo upload are on):</b> the photo message swaps to “<i>…just reply to this message with your photos and we'll add them to your Google profile for you</i>” — then whatsapp-inbound.js uploads them automatically. Same nudge, zero effort for the owner. That's the version worth building toward.</div>
+
+</div>
+</body>
+</html>

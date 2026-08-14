@@ -76,9 +76,11 @@ const SVG_DEFS = `
   </symbol>
 </svg>`;
 
-const treyBadge = `<span class="badge tbadge" title="Via a Trey tap"><svg viewBox="0 0 100 100" style="width:20px;height:20px;color:#fff"><use href="#treyMark"/></svg></span>`;
+const treyBadge = `<span class="badge tbadge" title="Came in via a Trey tap"><svg viewBox="0 0 100 100" style="width:20px;height:20px;color:#fff"><use href="#treyMark"/></svg></span>`;
 const googleBadge = `<span class="badge gbadge" title="Direct Google review"><svg viewBox="0 0 48 48" style="width:17px;height:17px"><use href="#googleG"/></svg></span>`;
-const sourceBadge = (r) => (viaGoogle(r) ? googleBadge : treyBadge);
+// Icon + a small "Review via" label, so the client knows the badge shows where
+// the review came from (their Trey stand vs. straight from Google).
+const sourceBadge = (r) => `<span class="src"><span class="srclbl">Review via</span>${viaGoogle(r) ? googleBadge : treyBadge}</span>`;
 
 // A gentle "days of free trial left + Subscribe" banner (coral, so it stands out
 // without shouting). Shows only while the client is on trial (or lapsed); nothing
@@ -87,7 +89,9 @@ function trialBanner(client, locationId) {
   if (!client) return "";
   const status = client.subscriptionStatus;
   if (status === "active") return "";
-  const TRIAL_DAYS = 14;
+  // 14 days normally; 30 for a business that arrived via a referral link.
+  const TRIAL_DAYS = (function(){ const n = Number(client && client.trialDays);
+    return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : 14; })();
   const onTrial = status === "trial";
   // Effective trial start: trialStartedAt (set on the stand's first live tap)
   // or, for legacy clients without the new flag, createdAt.
@@ -100,7 +104,7 @@ function trialBanner(client, locationId) {
   const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:${INDIGO2};font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
   // On-tap trial that hasn't started yet — waiting on the stand's first tap.
   if (onTrial && startedMs === null) {
-    return bar(`Your 14-day free trial starts once you activate your Trey stand.`);
+    return bar(`Your ${TRIAL_DAYS}-day free trial starts once you activate your Trey stand.`);
   }
   let daysLeft = null;
   if (startedMs !== null) daysLeft = Math.ceil((startedMs + TRIAL_DAYS * 86400000 - Date.now()) / 86400000);
@@ -136,7 +140,7 @@ function shell(title, inner) {
   h1{font-size:21px;margin:14px 0 2px;letter-spacing:-.4px}
   .sub{font-size:13.5px;opacity:.9}
   .main{padding:18px 16px 60px}
-  .sec{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#64748b;margin:22px 4px 10px;font-weight:700}
+  .sec{font-size:12px;letter-spacing:.07em;color:#64748b;margin:22px 4px 10px;font-weight:700}
   .card{background:#f3f8ff;border:1px solid #cfe0f6;border-radius:14px;padding:14px 15px;margin-bottom:11px}
   .card.urgent{border-color:#fecaca;background:#fff7f7}
   .row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
@@ -151,10 +155,12 @@ function shell(title, inner) {
   .badge{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center}
   .badge.tbadge{background:${INDIGO}}
   .badge.gbadge{background:#fff;border:1px solid #e2e8f0}
+  .src{display:flex;align-items:center;gap:6px}
+  .srclbl{font-size:10px;color:#8091ad;font-weight:700;letter-spacing:.03em;white-space:nowrap}
   .comment{font-size:14px;color:#334155;line-height:1.5;margin:11px 0 0;font-style:italic}
   .nocomment{font-size:13px;color:#8091ad;line-height:1.5;margin:11px 0 0;font-style:italic}
   .reply{font-size:13px;color:#334155;background:#e9f1fe;border:1px solid #cfe0f6;border-radius:10px;padding:10px 12px;margin-top:11px;white-space:pre-line}
-  .reply b{color:#6b7c99;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px}
+  .reply b{color:#6b7c99;font-weight:600;font-size:11px;letter-spacing:.04em;display:block;margin-bottom:3px}
   .respond{display:inline-block;margin-top:12px;background:${ACCENT};color:#fff;text-decoration:none;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:700}
   .allgood{background:#f3f8ff;border:1px dashed #b6cdf0;border-radius:14px;padding:26px 16px;text-align:center;color:#64748b;font-size:14px}
   .xlink{display:block;text-align:center;margin-top:24px;color:${ACCENT};font-weight:700;text-decoration:none;font-size:14px}
@@ -264,6 +270,8 @@ exports.handler = async (event) => {
       ${repliedBlock}
       <a class="xlink" href="${base}/.netlify/functions/report?loc=${encodeURIComponent(loc)}&k=${params.k}">View your monthly report &rarr;</a>
       <a class="xlink" href="${base}/.netlify/functions/account?loc=${encodeURIComponent(loc)}&k=${params.k}">Update your account details &rarr;</a>
+      <a class="xlink" href="${base}/.netlify/functions/profile-check?loc=${encodeURIComponent(loc)}&k=${params.k}">Tune your Google profile &rarr;</a>
+      <a class="xlink" href="${base}/.netlify/functions/refer?loc=${encodeURIComponent(loc)}&k=${params.k}">Refer a business, get a month free &rarr;</a>
       <div class="foot">Powered by Trey</div>
     </div>`;
 

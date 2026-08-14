@@ -81,8 +81,12 @@
 
 <main>
   <div class="hero">
-    <h1>Start your 14-day free trial</h1>
-    <p>Tell us a little about your business and we'll get you set up. No card needed.</p>
+    <h1 id="heroTitle">Start your 14-day free trial</h1>
+    <p id="heroSub">Tell us a little about your business and we'll get you set up. No card needed.</p>
+    <p style="font-size:13.5px;color:#64748b;line-height:1.55;margin:12px auto 0;max-width:520px;">Your free trial covers the review side — the stand or key fob, unlimited AI-drafted replies, WhatsApp approvals, your monthly report and your Trey Score. The profile work (categories, services, description, monthly posts, photo prompts) switches on when you subscribe.</p>
+    <div id="refBanner" style="display:none;background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;border-radius:12px;padding:11px 14px;font-size:14px;line-height:1.5;margin:14px auto 0;max-width:520px;">
+      <b>You've been referred &mdash; that's 30 days free instead of 14.</b><br>Same everything else, just twice as long to see it working.
+    </div>
   </div>
 
   <form class="card" id="signupForm" autocomplete="on">
@@ -100,7 +104,7 @@
     </div>
 
     <label>WhatsApp number<span class="req"> *</span></label>
-    <input id="f_phone" placeholder="+44 7941 052034" inputmode="tel" autocomplete="tel" value="+44 " />
+    <input id="f_phone" placeholder="+44 7700 900123" inputmode="tel" autocomplete="tel" value="+44 " />
     <div class="hint">Where your review alerts get sent.</div>
     <div class="err-msg" id="e_phone"></div>
 
@@ -144,7 +148,7 @@
     <div class="consent" id="consentBox">
       <label>
         <input type="checkbox" id="f_terms" />
-        <span>I agree to Trey's <a href="/terms.html" target="_blank">Terms</a> and <a href="/privacy.html" target="_blank">Privacy Policy</a>, and consent to Trey processing my review data and sending WhatsApp alerts on my behalf. My 14-day free trial starts when I activate my stand after it arrives; the tap-stand page pauses unless a subscription is set up.</span>
+        <span>I agree to Trey's <a href="/terms.html" target="_blank">Terms</a> and <a href="/privacy.html" target="_blank">Privacy Policy</a>, and consent to Trey processing my review data, sending me WhatsApp alerts, and posting my approved replies to Google on my behalf. My 14-day free trial starts when I activate my stand after it arrives, and my stand pauses at the end of the trial unless I subscribe.</span>
       </label>
       <div class="err-msg" id="e_terms" style="margin-left:26px;"></div>
     </div>
@@ -166,6 +170,20 @@
 </div>
 
 <script>
+  // Referral code from the share link (?ref=...). Kept as-is and validated
+  // server-side in signup.js — the client never decides its own trial length.
+  var REF = (function () {
+    try {
+      var m = /[?&]ref=([A-Za-z0-9]{1,20})/.exec(window.location.search || "");
+      return m ? m[1].toLowerCase() : "";
+    } catch (e) { return ""; }
+  })();
+  if (REF) {
+    document.addEventListener("DOMContentLoaded", function () {
+      var b = document.getElementById("refBanner"); if (b) b.style.display = "block";
+      var t = document.getElementById("heroTitle"); if (t) t.textContent = "Start your 30-day free trial";
+    });
+  }
   const API = "/.netlify/functions/signup";
   let voicePerspective = "Individual";
 
@@ -224,12 +242,13 @@
       googleReviewUrl: val("f_googleReviewUrl"),
       website: val("f_website"), // honeypot
       termsAccepted: true,
+      ref: REF,   // referral code from ?ref= (empty if none)
     };
     try {
       const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) { const err = await res.json().catch(function () { return {}; }); throw new Error(err.error || ("HTTP " + res.status)); }
       document.getElementById("successSub").textContent =
-        "Thanks " + val("f_firstName") + " — you're all set. We'll set up and send " + val("f_businessName") + "'s tap-stand QR; your 14-day free trial starts when you activate your stand after it arrives.";
+        "Thanks " + val("f_firstName") + " — you're all set. We'll set up and send " + val("f_businessName") + "'s tap-stand QR; your " + (REF ? "30" : "14") + "-day free trial starts when you activate your stand after it arrives.";
       document.getElementById("successOverlay").classList.add("show");
     } catch (e) {
       setStatus("Couldn't sign you up: " + e.message, "error");

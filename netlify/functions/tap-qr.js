@@ -18,10 +18,13 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
   }
 
-  // Keep in step with admin.html's makeTapUrl() and tap.js — the stand link is
-  // /tap?locationId=<loc>, which counts the visit and redirects to Google.
+  // Keep in step with admin.html's makeTapUrl() and tap.js. We encode the SHORT
+  // form (/t/<loc>, rewritten by _redirects) rather than the long function URL:
+  // fewer characters means a lower-density QR, which matters on a ~30mm key fob
+  // where a dense code scans badly. The long URL still works for anything already
+  // printed or programmed.
   const base = process.env.URL || "https://treyv1.netlify.app";
-  const tapUrl = `${base}/.netlify/functions/tap?locationId=${encodeURIComponent(loc)}`;
+  const tapUrl = `${base}/t/${encodeURIComponent(loc)}`;
 
   // Clamp size so a stray ?size= can't ask for a huge render.
   let size = parseInt(params.size, 10);

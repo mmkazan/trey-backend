@@ -64,7 +64,9 @@ function trialBanner(client, locationId) {
   if (!client) return "";
   const status = client.subscriptionStatus;
   if (status === "active") return "";
-  const TRIAL_DAYS = 14;
+  // 14 days normally; 30 for a business that arrived via a referral link.
+  const TRIAL_DAYS = (function(){ const n = Number(client && client.trialDays);
+    return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : 14; })();
   const onTrial = status === "trial";
   // Effective trial start: trialStartedAt (set on the stand's first live tap)
   // or, for legacy clients without the new flag, createdAt.
@@ -77,7 +79,7 @@ function trialBanner(client, locationId) {
   const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#4f46e5;font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
   // On-tap trial that hasn't started yet — waiting on the stand's first tap.
   if (onTrial && startedMs === null) {
-    return bar(`Your 14-day free trial starts once you activate your Trey stand.`);
+    return bar(`Your ${TRIAL_DAYS}-day free trial starts once you activate your Trey stand.`);
   }
   let daysLeft = null;
   if (startedMs !== null) daysLeft = Math.ceil((startedMs + TRIAL_DAYS * 86400000 - Date.now()) / 86400000);

@@ -218,7 +218,13 @@ function opportunityScore(lead) {
 function isDeadEnd(lead) {
   lead = lead || {};
   const rating = Number(lead.rating);
-  return (isFinite(rating) && rating > 0 && rating < 3.0) || ((Number(lead.reviewCount) || 0) < 10);
+  const rc = Number(lead.reviewCount);
+  // Only judge a lead we actually have data for. A quick-added lead with no
+  // scrape yet is unknown, not a dead end — flagging it would hide it behind the
+  // "hide dead ends" filter before anyone has looked at it.
+  if (!isFinite(rating) && !isFinite(rc)) return false;
+  if (isFinite(rating) && rating > 0 && rating < 3.0) return true;
+  return isFinite(rc) && rc < 10;
 }
 
 module.exports = { tradeOf, suggestCategories, draftServices, draftDescriptionFallback, scoreProfile, scoreBusiness, estimateFromLead, parsePct, opportunityScore, isDeadEnd };

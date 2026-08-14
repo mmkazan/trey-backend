@@ -40,22 +40,29 @@ function monthName(now) {
 }
 function monthKey(now) { return now.toISOString().slice(0, 7); }
 
+// Only a genuinely subscribed client should get these nudges. An ALLOW-list, not
+// a deny-list: Stripe has statuses we haven't thought of (unpaid, incomplete,
+// incomplete_expired, …) and a deny-list silently lets every new one through.
+// "" = a grandfathered client from before statuses were recorded — treat as live.
+// Trial clients are deliberately EXCLUDED: the profile work, including these
+// nudges, is what subscribing pays for (see profile-check.js).
+function isActiveSubscriber(c) {
+  const s = String((c && c.subscriptionStatus) || "").toLowerCase();
+  return s === "active" || s === "";
+}
+
 function isSendable(c) {
   if (!c || !c.phone) return false;
   if (c.nudgesOptOut === true || c.reportsOptOut === true) return false;
-  const status = (c.subscriptionStatus || "").toLowerCase();
-  if (status === "paused" || status === "past_due" || status === "cancelled" || status === "canceled" || status === "expired") return false;
-  return true;
+  return isActiveSubscriber(c);
 }
 
 // A safe, on-brand fallback post if the AI call is unavailable — so we always
 // have something sensible to send.
 function fallbackPost(client, mName) {
-  const name = client.businessName || "us";
+  const name = client.businessName || "our place";
   const type = client.businessType || "business";
-  return `${mName} at ${name}! We're open and ready to help — whether it's your first visit or your tenth, we'd love to see you. Pop in or get in touch, and if we've looked after you recently a quick Google review always makes our day. ⭐`
-    .replace("business business", "business")
-    + (type && type !== "business" ? "" : "");
+  return `${mName} at ${name} — we're open and ready to help, whether it's your first visit or your tenth. Pop in or get in touch, and if we've looked after you recently a quick Google review always makes our day. ⭐`;
 }
 
 // Draft a short Google Post with Gemini (same model as generate-reply), tailored
@@ -98,8 +105,13 @@ export default async () => {
     console.log("[google-post-send] TWILIO_POST_CONTENT_SID not set — nothing sent (feature not configured yet).");
     return new Response("not configured");
   }
+  // Hard stop, not a warning: signPost() would sign with "" and google-post.js
+  // rejects every such signature, so we'd send a batch of real WhatsApps whose
+  // Approve button lands on "Link not valid" — and those signatures stay dead
+  // even after the secret is set later.
   if (!process.env.TREY_REPORT_SECRET) {
-    console.warn("[google-post-send] TREY_REPORT_SECRET not set — links will not validate.");
+    console.error("[google-post-send] TREY_REPORT_SECRET not set — nothing sent (approve links would be dead).");
+    return new Response("not configured");
   }
 
   const now = new Date();
@@ -155,7 +167,8 @@ export default async () => {
 
     try {
       await sendWhatsApp(params);
-      await sentStore.setJSON(`post:${loc}:${mKey}`, { at: new Date().toISOString() });
+      try { await sentStore.setJSON(`post:${loc}:${mKey}`, { at: new Date().toISOString() }); }
+      catch (e) { console.error(`[google-post-send] ${loc} sent but marker failed:`, e.message); }
       summary.sent++;
     } catch (err) {
       summary.failed++;

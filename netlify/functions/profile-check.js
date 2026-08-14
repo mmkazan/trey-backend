@@ -76,7 +76,7 @@ function shell(inner, code = 200) {
   .card{background:#fff;border:1px solid #eef2f7;border-radius:16px;padding:16px 16px;margin-bottom:14px;box-shadow:0 8px 24px rgba(15,23,42,.05)}
   .score{display:flex;align-items:center;gap:16px}
   .ring{width:76px;height:76px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:24px;color:#fff;flex:0 0 auto}
-  .sec{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;font-weight:800;margin:18px 4px 8px}
+  .sec{font-size:12px;letter-spacing:.06em;color:#64748b;font-weight:800;margin:18px 4px 8px}
   .gap{display:flex;gap:10px;padding:10px 0;border-top:1px solid #f1f5f9;font-size:14px}
   .gap:first-child{border-top:0}
   .gap .dot{width:8px;height:8px;border-radius:50%;background:${ACCENT};margin-top:6px;flex:0 0 auto}
@@ -115,8 +115,23 @@ exports.handler = async (event) => {
   const description = audit.draftDescriptionFallback(client);
   const canApi = googleApi.isEnabled();
 
+  // --- Trial gating -----------------------------------------------------------
+  // Decided 2026-08-14. The free trial covers the REVIEW engine plus the Trey
+  // Score as a read-only diagnosis — a business can see exactly where they stand
+  // and what's holding them back. The drafted profile work (categories, services,
+  // description) is the labour they're paying for, so it unlocks on subscribing.
+  //
+  // Without this, the one-and-done profile fix could be taken during a free trial
+  // and banked, with nothing left to renew. Diagnosis free, treatment paid.
+  //
+  // "Grandfathered" clients with no recorded status are treated as subscribers so
+  // this can never lock out an existing paying customer.
+  const status = String(client.subscriptionStatus || "").toLowerCase();
+  const isSubscriber = status === "active" || status === "";
+
   // POST — apply the description (the one clean auto-apply). Phase 2 only.
   if (event.httpMethod === "POST") {
+    if (!isSubscriber) return notice("Part of your subscription", "Applying profile changes is included once you subscribe. Your free trial covers the review side — see your Trey Score on the previous page.", 200);
     if (!canApi) return notice("Not available yet", "Applying changes automatically switches on once your Google connection is live. For now, copy and paste.", 200);
     try {
       const text = String(params.text || description).trim();
@@ -135,20 +150,64 @@ exports.handler = async (event) => {
       const location = await googleApi.getLocation(loc);
       let photoCount = 0;
       try { photoCount = await googleApi.listPhotoCount(client.googleAccountId, loc); } catch (e) {}
-      const { score, gaps } = audit.scoreProfile(normalise(location, photoCount));
-      const colour = score >= 80 ? "#16a34a" : score >= 55 ? "#f59e0b" : "#ef4444";
+      // The gaps list comes from the completeness checker, but the NUMBER on the
+      // ring must stay the same metric the client sees everywhere else — the
+      // composite Trey Score. Showing scoreProfile()'s completeness-only figure
+      // here made the score appear to lurch (different formula, different bands)
+      // the moment the Google connection went live.
+      const norm = normalise(location, photoCount);
+      const { gaps } = audit.scoreProfile(norm);
+      const live = audit.scoreBusiness({
+        reputation: {
+          rating: Number(client.googleRating),
+          reviewCount: Number(client.reviewCount) || 0,
+          reviewsLast90: client.reviewsLast90,
+          replyRate: audit.parsePct(client.ownerResponseRate),
+        },
+        activity: { postedRecently: !!client.postedRecently, photosFresh: (photoCount || 0) > 0 },
+        completeness: norm,
+      });
+      const score = live.total;
+      const colour = score >= 75 ? "#16a34a" : score >= 50 ? "#f59e0b" : "#ef4444";
       const gapsHtml = gaps.length
         ? gaps.map((g) => `<div class="gap"><span class="dot"></span><div><b>${escapeHtml(g.label)}${g.partial ? " (nearly)" : ""}</b><br><span>${escapeHtml(g.fix)}</span></div></div>`).join("")
         : `<p class="hint">Nice — your profile is in great shape. Keep the posts and photos coming.</p>`;
       scoreBlock = `<div class="card"><div class="score"><div class="ring" style="background:${colour}">${score}</div>
-        <div><div style="font-weight:800;font-size:16px">Profile score</div><div class="sub" style="margin:2px 0 0">${gaps.length} quick ${gaps.length === 1 ? "win" : "wins"} below to climb higher.</div></div></div></div>
+        <div><div style="font-weight:800;font-size:16px">Your Trey Score</div><div class="sub" style="margin:2px 0 0">${gaps.length} quick ${gaps.length === 1 ? "win" : "wins"} below to climb higher.</div></div></div></div>
         <div class="sec">Your quick wins</div><div class="card">${gapsHtml}</div>`;
     } catch (err) {
       console.error("[profile-check] read failed:", err.message);
       scoreBlock = `<div class="card"><p class="hint">We couldn't read your live profile just now — the tuned suggestions below still apply.</p></div>`;
     }
   } else {
-    scoreBlock = `<div class="card"><h1 style="margin:0 0 4px">Tune your Google profile — ${bn}</h1><p class="sub" style="margin:0">A few high-impact tweaks Google rewards. Here's everything drafted and ready to paste.</p></div>`;
+    // No live Google connection yet, so we estimate the Trey Score from what we
+    // already hold on the client (their rating and review count, plus the basics
+    // we know are set). Reputation is real; Activity and the finer Completeness
+    // points can't be seen without the API, so the estimate is a FLOOR and is
+    // labelled as such — never dress an estimate up as a measurement.
+    const rating = Number(client.googleRating);
+    const reviewCount = Number(client.reviewCount) || 0;
+    let estBlock = "";
+    if (isFinite(rating) && rating > 0) {
+      // Every unknown is scored as ZERO, not "middling". scoreBusiness() gives
+      // unknown recency 4/8 and unknown reply-rate 2/6 by default, which is right
+      // for ranking cold leads but wrong here: it would make the number FALL when
+      // the real data arrives. Passing explicit zeros makes this a true floor —
+      // once the Google connection is live the score can only go up.
+      const est = audit.scoreBusiness({
+        reputation: { rating, reviewCount, reviewsLast90: 0, replyRate: 0 },
+        activity: { postedRecently: false, photosFresh: false },
+        completeness: { primaryCategory: !!client.businessType, phone: !!client.phone, website: !!client.website },
+      });
+      const colour = est.total >= 75 ? "#16a34a" : est.total >= 50 ? "#f59e0b" : "#ef4444";
+      estBlock = `<div class="card"><div class="score"><div class="ring" style="background:${colour}">${est.total}</div>
+        <div><div style="font-weight:800;font-size:16px">Your Trey Score &mdash; at least ${est.total}</div>
+        <div class="sub" style="margin:2px 0 0">${escapeHtml(est.band)} &middot; at least ${Math.max(0, 100 - est.total)} points to gain</div></div></div>
+        <p class="hint" style="margin:10px 0 0">A cautious estimate from your rating and review count &mdash; anything we can't see yet counts as zero, so your real score can only be higher. Once your Google connection is live we read your profile itself, and the number gets sharper.</p></div>`;
+    }
+    scoreBlock = `<div class="card"><h1 style="margin:0 0 4px">Tune your Google profile — ${bn}</h1><p class="sub" style="margin:0">${isSubscriber
+      ? "A few high-impact tweaks Google rewards. Here's everything drafted and ready to paste."
+      : "A few high-impact tweaks Google rewards. Here's where you stand — we'll write and apply the fixes when you subscribe."}</p></div>${estBlock}`;
   }
 
   const catsHtml = cats.primary
@@ -175,7 +234,23 @@ exports.handler = async (event) => {
       ${applyBtn}
     </div></form>`;
 
+
+  // What a trial user sees in place of the drafted work. Deliberately not a
+  // teaser wall: they've already seen their score and every specific gap above,
+  // so this states plainly what's included rather than dangling it.
+  const payBase = process.env.STRIPE_PAYMENT_LINK || "";
+  const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(loc) : "";
+  const lockedBlock = `<div class="sec">Fixing it</div><div class="card">
+      <p style="margin:0 0 8px"><b>Your subscription includes the profile work.</b></p>
+      <p class="hint" style="margin:0 0 12px">We write your categories, services and description, apply them to Google for you, then keep the profile active with a monthly post and a photo prompt each quarter. Your free trial covers the review side — the taps, the AI replies and your Trey Score.</p>
+      ${payUrl ? `<a class="btn primary" href="${escapeHtml(payUrl)}">Subscribe and switch it on</a>` : `<p class="hint" style="margin:0">Talk to us at info@trey.today to switch it on.</p>`}
+    </div>`;
   const openGoogle = `<a class="btn ghost" href="https://business.google.com/edit" target="_blank" rel="noopener noreferrer">Open Google Business Profile &rarr;</a>`;
 
-  return shell(`${scoreBlock}${catsHtml}${svcHtml}${descHtml}<div class="card">${openGoogle}<p class="hint">Also worth two minutes: set your <b>holiday hours</b>, tick your <b>attributes</b> (parking, accessibility, payments), and add a <b>logo + cover photo</b>.</p></div>`);
+  // Subscribers get the drafted work; trial users get their score, their gaps and
+  // a plain statement of what subscribing switches on.
+  const body = isSubscriber
+    ? `${scoreBlock}${catsHtml}${svcHtml}${descHtml}<div class="card">${openGoogle}<p class="hint">Also worth two minutes: set your <b>holiday hours</b>, tick your <b>attributes</b> (parking, accessibility, payments), and add a <b>logo + cover photo</b>.</p></div>`
+    : `${scoreBlock}${lockedBlock}`;
+  return shell(body);
 };

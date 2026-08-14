@@ -1,0 +1,15 @@
+# Short, print-friendly links for tap stands, key fobs and QR codes.
+#
+# A key fob is ~30mm across, so the QR printed on it has to encode as little as
+# possible — a long /.netlify/functions/... URL makes a dense QR that scans badly
+# at that size. These rewrites give us:
+#
+#   https://trey.today/t/<locationId>    (was /.netlify/functions/tap?locationId=…)
+#   https://trey.today/q/<locationId>    (the printable QR PNG)
+#
+# 200 = rewrite, not redirect: the short URL stays in the address bar AND the
+# function still runs, counts the tap and forwards to Google. The original long
+# URLs keep working, so anything already printed or programmed is unaffected.
+
+/t/*   /.netlify/functions/tap?locationId=:splat      200
+/q/*   /.netlify/functions/tap-qr?locationId=:splat   200

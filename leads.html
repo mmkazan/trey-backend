@@ -49,7 +49,7 @@
   .tshint{background:#eef2ff;border:1px solid #e0e7ff;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#3730a3;margin:10px 0;line-height:1.45;}
   .opp{font-weight:800;font-size:12px;padding:4px 8px;border-radius:8px;white-space:nowrap;color:#fff;text-align:center;min-width:62px;line-height:1.15;}
   .opp b{display:block;font-size:14px;}
-  .opp small{font-weight:700;font-size:9px;letter-spacing:.04em;text-transform:uppercase;opacity:.9;}
+  .opp small{font-weight:700;font-size:9px;letter-spacing:.04em;opacity:.9;}
   .opphint{background:#f0fdf4;border:1px solid #dcfce7;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#14532d;margin:10px 0;line-height:1.45;}
   .checkline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none;}
   .checkline input{width:auto;margin:0;}
@@ -72,7 +72,7 @@
   .modal-close{float:right;cursor:pointer;color:var(--muted);font-size:24px;line-height:.8;font-weight:400;}
   .senderbox{background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px;}
   .senderbox label{margin-top:0;}
-  .chanhdr{font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--accent2);margin:18px 0 8px;}
+  .chanhdr{font-weight:800;font-size:12px;letter-spacing:.6px;color:var(--accent2);margin:18px 0 8px;}
   .msgblock{border:1px solid var(--border);border-radius:10px;padding:10px 12px 12px;margin-bottom:10px;}
   .msgblock .mhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
   .msgblock .mlabel{font-weight:700;font-size:13px;}
@@ -194,7 +194,7 @@
   function estTreyFromLead(l){
     return treyScore({reputation:{rating:Number(l.rating),reviewCount:Number(l.reviewCount)||0,reviewsLast90:l.reviewsLast90,replyRate:pctToNum(l.ownerResponseRate)},
       activity:{postedRecently:false,photosFresh:false},
-      completeness:{primaryCategory:!!l.category,secondaryCount:l.secondaryCount||0,website:!!l.website,phone:!!l.phone,hoursSet:!!l.hoursSet}});
+      completeness:{primaryCategory:!!l.category,secondaryCount:l.secondaryCount||0,description:l.description,serviceCount:l.serviceCount||0,hoursSet:!!l.hoursSet,website:!!l.website,phone:!!l.phone,attributeCount:l.attributeCount||0}});
   }
 
   // ---------- Opportunity score (who to ring first) ----------
@@ -237,8 +237,12 @@
   }
   // Dead end = same bar as the LOW RATING / THIN flags: sub-3.0★ or under 10 reviews.
   function isDeadEnd(l){
-    var rating=Number(l.rating);
-    return (isFinite(rating)&&rating>0&&rating<3.0)||((Number(l.reviewCount)||0)<10);
+    var rating=Number(l.rating), rc=Number(l.reviewCount);
+    // Unknown != dead end — a hand-added lead with no scrape data isn't judged,
+    // or it would be hidden by the filter before anyone had looked at it.
+    if(!isFinite(rating)&&!isFinite(rc))return false;
+    if(isFinite(rating)&&rating>0&&rating<3.0)return true;
+    return isFinite(rc)&&rc<10;
   }
 
   // ---------- v2 scoring (mirrors docs/lead-scoring-spec.md) ----------
@@ -281,7 +285,9 @@
       email,phone,website,rating,reviewCount,ownerResponseRate:rate===null?"n/a":Math.round(rate*100)+"%",recentUnanswered:recent.length,
       reviewsLast90:(revs.length?reviewsLast90:undefined),secondaryCount,
       hook,scoreReasons:R.join(" · "),flag,reviewUrl:(row["placeId"]?"https://search.google.com/local/writereview?placeid="+row["placeId"]:""),
-      address:(row["address"]||"").trim(),tier,score:total,outreachStatus:"New"};
+      address:(row["address"]||"").trim(),tier,score:total};
+      // NB: no outreachStatus here on purpose — the server keeps any existing
+      // pipeline status on re-import, so re-scraping never resets a lead to "New".
   }
   function fromScored(row){
     return {businessName:(row["Business Name"]||"").trim(),category:(row["Category"]||"").trim(),email:(row["Primary Email"]||"").trim(),
@@ -375,9 +381,9 @@
     const op=opportunityScore(l);
     const hasData=(l.rating!=null||l.reviewCount);
     const badges=(l.isClient?'<span class="badge b-client">Client ✓</span>':'')+
-      (l.flag==="LOW RATING"?'<span class="badge b-flag">LOW RATING</span>':'')+
-      (l.flag==="THIN"?'<span class="badge b-thin">THIN</span>':'')+
-      (isDeadEnd(l)?'<span class="badge b-thin">DEAD END?</span>':'');
+      (l.flag==="LOW RATING"?'<span class="badge b-flag">Low rating</span>':'')+
+      (l.flag==="THIN"?'<span class="badge b-thin">Thin</span>':'')+
+      (isDeadEnd(l)?'<span class="badge b-thin">Dead end?</span>':'');
     const sub=[l.category,(l.rating!=null?l.rating+"★":""),(l.reviewCount!=null?l.reviewCount+" reviews":""),(l.ownerResponseRate?l.ownerResponseRate+" replies":"")].filter(Boolean).join(" · ");
     return '<div class="lead">'+
       '<div class="lead-head" onclick="toggle('+i+')">'+

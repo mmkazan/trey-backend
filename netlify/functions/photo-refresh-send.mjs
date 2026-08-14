@@ -31,12 +31,21 @@ function quarterKey(now) {
   return `${now.getUTCFullYear()}-Q${Math.floor(now.getUTCMonth() / 3) + 1}`;
 }
 
+// Only a genuinely subscribed client should get these nudges. An ALLOW-list, not
+// a deny-list: Stripe has statuses we haven't thought of (unpaid, incomplete,
+// incomplete_expired, …) and a deny-list silently lets every new one through.
+// "" = a grandfathered client from before statuses were recorded — treat as live.
+// Trial clients are deliberately EXCLUDED: the profile work, including these
+// nudges, is what subscribing pays for (see profile-check.js).
+function isActiveSubscriber(c) {
+  const s = String((c && c.subscriptionStatus) || "").toLowerCase();
+  return s === "active" || s === "";
+}
+
 function isSendable(c) {
   if (!c || !c.phone) return false;
   if (c.nudgesOptOut === true || c.reportsOptOut === true) return false;
-  const status = (c.subscriptionStatus || "").toLowerCase();
-  if (status === "paused" || status === "past_due" || status === "cancelled" || status === "canceled" || status === "expired") return false;
-  return true;
+  return isActiveSubscriber(c);
 }
 
 // A tailored 4-idea shot-list by business type. Falls back to a solid generic.
@@ -109,7 +118,8 @@ export default async () => {
 
     try {
       await sendWhatsApp(params);
-      await sentStore.setJSON(`photo:${loc}:${qKey}`, { at: new Date().toISOString() });
+      try { await sentStore.setJSON(`photo:${loc}:${qKey}`, { at: new Date().toISOString() }); }
+      catch (e) { console.error(`[photo-refresh-send] ${loc} sent but marker failed:`, e.message); }
       // Phase 2: open a 21-day window so photos they reply with get uploaded.
       if (uploadsOn) {
         const digits = String(client.phone || "").replace(/\D/g, "");

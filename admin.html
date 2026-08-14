@@ -190,7 +190,6 @@
     font-size: 10px;
     font-weight: 800;
     letter-spacing: .4px;
-    text-transform: uppercase;
     padding: 2px 7px;
     border-radius: 999px;
     background: #e11d48;
@@ -361,7 +360,7 @@
         <span class="muted-link" onclick="hideDetail()">Close</span>
       </div>
       <div class="tapstand" id="tapStand" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:18px;">
-        <label style="display:block;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#64748b;font-weight:700;margin-bottom:8px;">Tap-stand URL</label>
+        <label style="display:block;font-size:11px;letter-spacing:.6px;color:#64748b;font-weight:700;margin-bottom:8px;">Tap-stand URL</label>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <code id="tapUrl" style="flex:1;min-width:220px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:9px 11px;font-size:12.5px;color:#0f172a;word-break:break-all;"></code>
           <button class="btn-secondary" id="copyBtn" onclick="copyTapUrl()">Copy</button>
@@ -500,6 +499,10 @@
     ["Public sign-off name", "publicSignOffName"],
     ["Brand voice", "brandVoice"],
     ["Subscription", "subscriptionStatus"],
+    ["Trial length", "_trialLength"],
+    ["Referred by", "_referredBy"],
+    ["Referrals sent", "_referralsSent"],
+    ["Free months owed", "_creditsOwed"],
     ["Stand", "_standState"],
     ["Trial started", "_trialStarted"],
     ["Taps since sign-up", "tapsSinceSignup"],
@@ -576,6 +579,26 @@
       const d = nc - ic;
       cc._reviewChange = (d > 0 ? "+" : "") + d;
     }
+
+    // --- Referrals -----------------------------------------------------------
+    // Stripe credits aren't automated yet, so this is where you see what to apply
+    // by hand. "Free months owed" counts businesses this client referred that
+    // have actually SUBSCRIBED but haven't been credited — credit is never earned
+    // at signup, only on conversion.
+    cc._trialLength = (Number(c.trialDays) || 14) + " days";
+    if (c.referredBy) {
+      const ref = (clientsCache || []).find((x) => x.locationId === c.referredBy);
+      cc._referredBy = ref ? (ref.businessName || c.referredBy) : c.referredBy;
+    }
+    const sent = (clientsCache || []).filter((x) => x.referredBy === c.locationId);
+    if (sent.length) {
+      const live = sent.filter((x) => String(x.subscriptionStatus).toLowerCase() === "active");
+      const owed = live.filter((x) => !x.referralCredited);
+      cc._referralsSent = sent.length + " (" + live.length + " subscribed)";
+      cc._creditsOwed = owed.length
+        ? owed.length + " — " + owed.map((x) => x.businessName || x.locationId).join(", ")
+        : "None outstanding";
+    }
     const STAR_KEYS = new Set(["initialGoogleRating", "googleRating"]);
     document.getElementById("detailGrid").innerHTML = DETAIL_FIELDS.map(([label, key]) => {
       const v = cc[key];
@@ -598,7 +621,11 @@
   // --- Tap stand: unique URL + QR (each client's stand link is derived from
   // their locationId; tap.js counts the visit and redirects to Google) ---
   function makeTapUrl(loc) {
-    return location.origin + "/.netlify/functions/tap?locationId=" + encodeURIComponent(loc);
+    // Short form (/t/<loc>, rewritten by _redirects) — this is what gets written
+    // to the NFC chip and encoded in the QR. Short matters on a key fob, where a
+    // dense QR scans badly. The long /.netlify/functions/tap?locationId=… URL
+    // still works for anything already programmed.
+    return location.origin + "/t/" + encodeURIComponent(loc);
   }
 
   function renderTapStand(loc) {

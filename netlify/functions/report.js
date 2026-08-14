@@ -76,7 +76,9 @@ function trialBanner(client, locationId) {
   if (!client) return "";
   const status = client.subscriptionStatus;
   if (status === "active") return "";
-  const TRIAL_DAYS = 14;
+  // 14 days normally; 30 for a business that arrived via a referral link.
+  const TRIAL_DAYS = (function(){ const n = Number(client && client.trialDays);
+    return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.round(n) : 14; })();
   const onTrial = status === "trial";
   // Effective trial start: trialStartedAt (set on the stand's first live tap)
   // or, for legacy clients without the new flag, createdAt.
@@ -89,7 +91,7 @@ function trialBanner(client, locationId) {
   const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:#4f46e5;font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
   // On-tap trial that hasn't started yet — waiting on the stand's first tap.
   if (onTrial && startedMs === null) {
-    return bar(`Your 14-day free trial starts once you activate your Trey stand.`);
+    return bar(`Your ${TRIAL_DAYS}-day free trial starts once you activate your Trey stand.`);
   }
   let daysLeft = null;
   if (startedMs !== null) daysLeft = Math.ceil((startedMs + TRIAL_DAYS * 86400000 - Date.now()) / 86400000);
@@ -307,6 +309,10 @@ function renderReport(locationId, month, data, theme) {
   // --- Hero: this month's rating movement (this month vs last month) ---
   const curR = fmtRating(monthRating);       // this month's snapshot (fallback: live rating)
   const prevR = fmtRating(prevMonthRating);   // last month's snapshot
+  // Did the rating actually improve this month? (mDelta below is block-scoped;
+  // this outer flag is what the referral line keys off.)
+  const ratingImproved = curR !== null && prevR !== null &&
+    Math.round((monthRating - prevMonthRating) * 10) / 10 > 0;
   let hero;
   if (curR !== null && prevR !== null) {
     const mDelta = Math.round((monthRating - prevMonthRating) * 10) / 10;
@@ -433,6 +439,16 @@ function renderReport(locationId, month, data, theme) {
   const inboxBase = process.env.URL || "https://treyv1.netlify.app";
   const inboxLink = `<a class="glink" href="${inboxBase}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}">See &amp; reply to your reviews →</a>`;
 
+  // --- Referral line ---------------------------------------------------------
+  // Deliberately restrained: we only ask on a month that actually went well, so
+  // it reads as "pleased with this? pass it on" rather than a monthly plea. A
+  // good month = at least 3 new reviews, OR the rating went up. Everyone else
+  // sees nothing at all. It's one quiet line under the footer, never a banner.
+  const goodMonth = newReviews >= 3 || ratingImproved;
+  const referLine = goodMonth
+    ? `<div class="refer"><a class="glink" href="${inboxBase}/.netlify/functions/refer?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}">Know another business who'd want a month like this? Send them your link →</a></div>`
+    : "";
+
   const title = `${businessName} — Your month with Trey`;
 
   return `<!DOCTYPE html><html lang="en"><head>
@@ -472,7 +488,8 @@ function renderReport(locationId, month, data, theme) {
   .tiles .tile{flex:1;background:#fff;border-radius:18px;padding:22px 14px;text-align:center;box-shadow:0 6px 20px rgba(15,23,42,0.06)}
   .tnum{font-size:40px;font-weight:800;color:var(--slate);line-height:1;letter-spacing:-1px}
   .tlabel{font-size:13px;color:#64748b;margin-top:8px;line-height:1.35}
-  .section-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--green)}
+  .section-label{font-size:12px;font-weight:700;letter-spacing:0.6px;color:var(--green)}
+  .refer{margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:13px;opacity:.85}
   .big{font-size:19px;line-height:1.45;margin:10px 0 0;color:var(--slate)}
   .big strong{color:var(--green)}
   .sub{font-size:14px;color:#64748b;margin:10px 0 0}
@@ -497,7 +514,7 @@ function renderReport(locationId, month, data, theme) {
   blockquote{margin:0;font-size:18px;line-height:1.5;color:var(--slate);font-weight:500}
   .qwho{font-size:14px;color:#64748b;margin-top:12px}
   .treyreply{margin-top:16px;padding:14px 16px;background:#eef2ff;border-radius:12px;border-left:3px solid var(--green)}
-  .treyreply .tr-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--green)}
+  .treyreply .tr-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;letter-spacing:0.6px;color:var(--green)}
   .treyreply .tr-mark{width:20px;height:20px;border-radius:5px;object-fit:cover}
   .treyreply .tr-body{margin:8px 0 0;font-size:15px;line-height:1.5;color:#475569}
   .foot{text-align:center;padding:26px 12px 0;color:#94a3b8;font-size:13px}
@@ -541,6 +558,7 @@ ${trialBanner(client, locationId)}
       <div class="powered">Powered by Trey</div>
       ${inboxLink}
       ${footerLink}
+      ${referLine}
     </div>
   </div>
 </body></html>`;

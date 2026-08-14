@@ -92,9 +92,22 @@ exports.handler = async (event) => {
     await Promise.all(incoming.map(async (raw) => {
       const key = leadKey(raw);
       const existing = (await leadsStore.get(key, { type: "json" })) || {};
+      // Enrichment upsert. Re-importing the same business (matched on placeId, or
+      // name+phone) UPDATES its record in place — it never creates a duplicate.
+      // Two safeguards make a re-scrape non-destructive:
+      //   1) Only NON-EMPTY incoming values overwrite, so a run that leaves a field
+      //      blank (e.g. Apify didn't find a phone/email) can't wipe data you already
+      //      have — a number you typed by hand, notes, etc. survive.
+      //   2) An existing outreach status always wins, so re-scraping a lead you've
+      //      moved to Contacted / On trial / Converted never resets it to "New".
+      const incomingClean = {};
+      for (const [k, v] of Object.entries(raw)) {
+        if (v === "" || v === null || v === undefined) continue;
+        incomingClean[k] = v;
+      }
       const record = {
-        ...existing, ...raw, id: key,
-        outreachStatus: raw.outreachStatus || existing.outreachStatus || "New",
+        ...existing, ...incomingClean, id: key,
+        outreachStatus: existing.outreachStatus || incomingClean.outreachStatus || "New",
         createdAt: existing.createdAt || now,
         updatedAt: now,
       };
