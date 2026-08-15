@@ -165,11 +165,36 @@
     <div class="successIcon">🎉</div>
     <h2>You're in!</h2>
     <p id="successSub">We'll be in touch shortly to set up and send your tap-stand QR. Your 14-day free trial starts when you activate your stand after it arrives — no time lost while it's in the post.</p>
+    <!-- Say hello on WhatsApp.
+         Added 15 Aug after the first real signup: filling this form in and then
+         hearing nothing at all is a poor first impression from a service asking
+         to look after your reputation. One tap here does four jobs — proves the
+         number works, gets Trey saved in their contacts BEFORE the first review
+         alert arrives from it (otherwise that reads like a scam), opens
+         WhatsApp's 24-hour window so later replies can be free-form instead of a
+         Meta-approved template, and whatsapp-inbound.js answers with their inbox
+         link. Hidden entirely unless TREY_WA_NUMBER is set — better no button
+         than a dead one. -->
+    <a id="waHello" class="btn-lg" style="display:none;background:#25D366;color:#fff;margin-bottom:8px" href="#" rel="noopener">💬 Say hello on WhatsApp</a>
+    <p id="waWhy" style="display:none;font-size:12.5px;color:var(--muted);margin:0 0 16px;line-height:1.5">
+      Takes a second — and it means your review alerts arrive from a number you already recognise.
+    </p>
     <a class="btn-lg btn-primary-lg" href="/">Back to Trey</a>
   </div>
 </div>
 
 <script>
+  // ---------------------------------------------------------------------------
+  // Trey's WhatsApp sender, digits only, country code first, no "+" or spaces.
+  // This is the number Twilio sends review alerts FROM (TWILIO_WHATSAPP_FROM) —
+  // NOT the personal support number. It has to be hardcoded because this page is
+  // static and can't read environment variables.
+  //
+  // Leave it "" and the WhatsApp button simply doesn't appear. A missing button
+  // is invisible; a dead one gets tapped by a real customer on day one.
+  var TREY_WA_NUMBER = "447476909484";   // Twilio WhatsApp sender: +44 7476 909484
+  // ---------------------------------------------------------------------------
+
   // Referral code from the share link (?ref=...). Kept as-is and validated
   // server-side in signup.js — the client never decides its own trial length.
   var REF = (function () {
@@ -249,6 +274,18 @@
       if (!res.ok) { const err = await res.json().catch(function () { return {}; }); throw new Error(err.error || ("HTTP " + res.status)); }
       document.getElementById("successSub").textContent =
         "Thanks " + val("f_firstName") + " — you're all set. We'll set up and send " + val("f_businessName") + "'s tap-stand QR; your " + (REF ? "30" : "14") + "-day free trial starts when you activate your stand after it arrives.";
+
+      // Build the WhatsApp deep link. The message is pre-filled so the reply
+      // arrives with a name attached, and so the person doesn't have to think of
+      // something to say — "what do I even write?" is enough friction to lose them.
+      if (TREY_WA_NUMBER) {
+        var hello = "Hi Trey - it's " + val("f_firstName") + " from " + val("f_businessName") + ". Just signed up!";
+        var a = document.getElementById("waHello");
+        a.href = "https://wa.me/" + TREY_WA_NUMBER + "?text=" + encodeURIComponent(hello);
+        a.style.display = "inline-block";
+        document.getElementById("waWhy").style.display = "block";
+      }
+
       document.getElementById("successOverlay").classList.add("show");
     } catch (e) {
       setStatus("Couldn't sign you up: " + e.message, "error");
