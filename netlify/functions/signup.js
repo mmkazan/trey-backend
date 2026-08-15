@@ -56,6 +56,21 @@ const CODE_LEN = 8;
 const RESEND_FROM = "Trey <hello@send.trey.today>";
 const RESEND_REPLY_TO = "info@trey.today";
 const EMAIL_TIMEOUT_MS = 5000;
+const KEY_LEN = 32;
+
+// Signed inbox link — same derivation as inbox.js / approve.js / report.js.
+// Trey has no login by design, so this URL *is* the account. It goes in the
+// welcome email because the email is the one thing every signup gets: the
+// WhatsApp route only exists if they message us first, which not everyone will.
+// (Found the hard way — a real signup had no way into their inbox at all.)
+function reportKey(locationId) {
+  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
+    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+}
+function inboxUrl(locationId) {
+  const base = process.env.URL || "https://trey.today";
+  return `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}`;
+}
 
 /**
  * Send the welcome email. Never throws, never blocks a signup.
@@ -83,6 +98,7 @@ async function sendWelcomeEmail(record) {
   const days = record.trialDays === REFERRED_TRIAL_DAYS ? "30" : "14";
   const wa = "https://wa.me/447476909484?text=" +
     encodeURIComponent(`Hi Trey - it's ${first || "me"} from ${biz}. Just signed up!`);
+  const inbox = inboxUrl(record.locationId || record.id || "");
 
   const text =
 `${hello},
@@ -93,6 +109,12 @@ What happens next:
 1. We set up your Google review link and send out your tap stand or key fob.
 2. When it arrives, you tap it once and press Activate.
 3. That's when your ${days}-day free trial starts — not a day is lost while it's in the post.
+
+Your Trey inbox is here — no password, nothing to remember, just a link worth
+bookmarking:
+${inbox}
+It'll be quiet until your stand is live, and that's where every review and reply
+will appear.
 
 One thing worth doing now: send us a quick hello on WhatsApp and save the number.
 ${wa}
@@ -113,6 +135,9 @@ Trey — more Google reviews, without the chasing`;
   <li>When it arrives, you tap it once and press Activate.</li>
   <li>That's when your ${days}-day free trial starts — not a day is lost while it's in the post.</li>
 </ol>
+<p><b>Your Trey inbox</b> — no password, nothing to remember, just a link worth bookmarking:<br>
+<a href="${inbox}" style="color:#4338ca">Open your Trey inbox</a><br>
+<span style="color:#64748b;font-size:13.5px">It'll be quiet until your stand is live — that's where every review and reply will appear.</span></p>
 <p>One thing worth doing now: send us a quick hello on WhatsApp and save the number. Your review alerts come from there, and it's much easier to trust a name than an unknown number when the first one lands.</p>
 <p><a href="${wa}" style="display:inline-block;background:#25D366;color:#fff;text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:700">Say hello on WhatsApp</a></p>
 <p>Any questions, just reply to this email.</p>
