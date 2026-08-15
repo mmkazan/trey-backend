@@ -75,8 +75,22 @@ function notice(title, msg, code = 200) {
 
 exports.handler = async (event) => {
   const params = event.httpMethod === "POST" ? parseBody(event) : (event.queryStringParameters || {});
-  const postId = params.p;
-  const sig = params.sig;
+
+  // The link arrives in one of two shapes:
+  //   ?p=<postId>&sig=<sig>   — explicit, used by the approve form's own POST
+  //   ?r=<sig><postId>        — combined, used by the WhatsApp button
+  //
+  // The combined form exists because a WhatsApp template's URL button takes ONE
+  // variable and Meta expects it to be a plain suffix. A variable holding a whole
+  // query string ("p=…&sig=…") is a common cause of template rejection, and a URL
+  // ending in a bare "?" looks malformed to their reviewer. One opaque token
+  // avoids both. approve.js already does exactly this — same pattern, same reason.
+  let postId = params.p;
+  let sig = params.sig;
+  if (!postId && params.r) {
+    sig = String(params.r).slice(0, KEY_LEN);
+    postId = String(params.r).slice(KEY_LEN);
+  }
 
   if (!postId || !sigValid(postId, sig)) {
     return notice("Link not valid", "This link isn't valid or has expired. Please use the most recent link from your WhatsApp.", 403);

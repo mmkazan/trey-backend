@@ -154,7 +154,12 @@ export default async () => {
       createdAt: new Date().toISOString(),
     });
 
-    const query = `p=${encodeURIComponent(postId)}&sig=${sig}`;
+    // ONE opaque token for the template button, not a query string. A WhatsApp
+    // URL-button variable must be a plain suffix, and Meta's reviewers reject
+    // templates whose variable carries "p=…&sig=…" or whose URL trails a bare "?".
+    // Button URL is therefore:  https://trey.today/.netlify/functions/google-post?r={{3}}
+    // google-post.js splits it back into sig + postId. Same shape approve.js uses.
+    const token = `${sig}${postId}`;
     const params = messagingServiceSid
       ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
       : { To: `whatsapp:${client.phone}`, From: from };
@@ -162,7 +167,7 @@ export default async () => {
     params.ContentVariables = JSON.stringify({
       1: clean(client.businessName, 60),
       2: clean(summaryText, 500),
-      3: clean(query, 300),
+      3: clean(token, 300),
     });
 
     try {
