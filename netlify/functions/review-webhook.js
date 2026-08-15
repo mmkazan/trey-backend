@@ -141,6 +141,32 @@ exports.handler = async (event) => {
     }
   }
 
+  // 3b. What have we already said publicly for this business?
+  //
+  // Every reply used to be drafted in isolation, so the model repeated its own
+  // opening and its favourite phrase from the brand voice on every review. Two
+  // replies sitting one above the other on Raven Holistics' profile both opened
+  // "Thank you so much for your lovely review!" and both named her "tranquil
+  // garden treatment room" \u2014 lovely individually, obviously templated together.
+  //
+  // Prefer finalReply (what was actually published, possibly edited by the
+  // owner) over replyDraft. Best-effort: a failure here costs variety, not the
+  // reply, so it must never block the alert.
+  let recentReplies = [];
+  try {
+    const { blobs } = await reviewsStore.list({ prefix: `review:${locationId}:` });
+    const recs = (await Promise.all(
+      blobs.slice(-12).map((b) => reviewsStore.get(b.key, { type: "json" }).catch(() => null))
+    )).filter(Boolean);
+    recentReplies = recs
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .map((r) => r.finalReply || r.replyDraft)
+      .filter(Boolean)
+      .slice(0, 4);
+  } catch (e) {
+    console.error("[review-webhook] couldn't load recent replies (reply variety may suffer):", e.message);
+  }
+
   // 4. Generate the AI reply draft (internal call \u2014 send the shared secret).
   const siteUrl = process.env.URL || "https://treyv1.netlify.app";
   let replyDraft;
@@ -162,6 +188,7 @@ exports.handler = async (event) => {
         rating,
         comment,
         source,
+        recentReplies,
       }),
     });
 

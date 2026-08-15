@@ -37,6 +37,14 @@ exports.handler = async (event, context) => {
       businessPhone = "",
       source = "Google Direct",
       brandVoice = "",
+      // The client's last few approved replies, newest first. Every reply used
+      // to be written in total isolation, so the model had no way of knowing it
+      // had opened the previous three with "Thank you so much for your lovely
+      // review!" and named the same room in each. Individually they read
+      // beautifully; stacked on a public profile — which is how people actually
+      // read them — they read as a mail merge, undermining the one thing Trey
+      // sells. Passing these in is what makes variation possible at all.
+      recentReplies = [],
     } = body;
 
     const pronounRule =
@@ -64,10 +72,29 @@ exports.handler = async (event, context) => {
 
     // The client's own 1–2 sentence description of how they sound. This is the
     // single biggest lever on reply quality — it makes every reply sound like
-    // THIS business rather than a generic bot. It sets personality/phrasing, but
-    // must never soften the sincerity/urgency owed to a low rating.
+    // THIS business rather than a generic bot. It sets character, but must never
+    // soften the sincerity/urgency owed to a low rating.
+    // NOTE — this used to say "match this personality, warmth and PHRASING
+    // closely", which turned the brand voice into a phrase bank: the model lifted
+    // its wording verbatim into every single reply, so Raven Holistics' "tranquil
+    // garden treatment room" appeared in back-to-back replies on her public
+    // profile. The voice is meant to set CHARACTER, not supply a script.
     const brandVoiceBlock = (brandVoice && String(brandVoice).trim())
-      ? `\nBrand Voice — how ${businessName} sounds. Match this personality, warmth and phrasing closely; it sets the character of the reply (for low ratings, sincerity and urgency still come first):\n"${String(brandVoice).trim()}"\n`
+      ? `\nBrand Voice — how ${businessName} sounds. Match this personality and warmth; it sets the character of the reply (for low ratings, sincerity and urgency still come first). Write in this voice — do NOT copy its wording verbatim, and do not treat any phrase in it as one that must appear:\n"${String(brandVoice).trim()}"\n`
+      : "";
+
+    // Show the model what it already said for THIS business, and forbid reusing
+    // it. Capped at 4 and trimmed — enough to establish the pattern to avoid
+    // without bloating the prompt or the latency budget.
+    const priorReplies = (Array.isArray(recentReplies) ? recentReplies : [])
+      .map((r) => String(r || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 4);
+
+    const varietyBlock = priorReplies.length
+      ? `\nAlready posted for ${businessName} — these are PUBLIC and sit directly above the reply you are writing:\n` +
+        priorReplies.map((r, i) => `${i + 1}. "${r.slice(0, 320)}"`).join("\n") +
+        `\nVARIETY IS MANDATORY. Do NOT reuse the opening sentence, the closing sentence, or any distinctive phrase from the replies above — find a different way in and a different way out. A reader scrolling this profile must not be able to tell these were written by the same system. Re-using a specific detail (a room, a treatment, a signature touch) is allowed ONLY if it is genuinely relevant here AND you word it differently.\n`
       : "";
 
     // System prompt with safely formatted UK English rules
@@ -77,13 +104,14 @@ Review Details:
 - Reviewer: ${reviewerName}
 - Star Rating: ${rating}/5
 ${commentLine}
-${brandVoiceBlock}
+${brandVoiceBlock}${varietyBlock}
 Rules for the reply:
 1. Language: Use UK English spelling strictly (for example: centre, apologise, organise).
 2. Location Terms: Refer to the venue as ${businessType} or ${businessName}. Avoid generic words like 'center'.
 3. Greeting: Always start with a polite greeting (e.g., "Hi ${reviewerName},").
+3b. Opening line: Vary it. Do NOT default to "Thank you so much for your lovely review!" — that phrase and its close variants are overused. Open in a way that responds to what THIS person actually said.
 4. Tone:
-   - When a Brand Voice is given above, write in it — it sets the personality and phrasing of the reply.
+   - When a Brand Voice is given above, write in it — it sets the personality of the reply, not its wording. Never quote it back.
    - For 4-5 star reviews: Warm, enthusiastic, personal, and appreciative.
    - For 1-3 star reviews: Serious, empathetic, professional, and urgent. Never use bracketed placeholders like [phone/email]. Express concern and offer to connect offline.
 5. Contradiction Handling: If the comment is positive but the star rating is low (1-3 stars), politely acknowledge the positive feedback while asking to clarify the low star score.
