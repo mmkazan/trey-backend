@@ -11,9 +11,25 @@
 
 const QRCode = require("qrcode");
 
+// Recover the locationId from the short-link path: /q/<locationId>.
+// Same reason as tap.js's locationFromPath() — the _redirects rewrite DOES run
+// this function, but Netlify doesn't substitute :splat into the destination's
+// query string, so /q/<id> arrived with no locationId and returned
+// "locationId is required". Verified against production 15 Aug.
+function locationFromPath(event) {
+  const raw = (event && (event.path || event.rawUrl)) || "";
+  let pathname = String(raw);
+  if (/^https?:\/\//i.test(pathname)) {
+    try { pathname = new URL(pathname).pathname; } catch (e) { /* keep raw */ }
+  }
+  const m = pathname.match(/^\/q\/([^/?#]+)/);
+  if (!m) return "";
+  try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+}
+
 exports.handler = async (event) => {
   const params = event.queryStringParameters || {};
-  const loc = (params.locationId || "").trim();
+  const loc = (params.locationId || locationFromPath(event) || "").trim();
   if (!loc) {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
   }

@@ -11,5 +11,16 @@
 # function still runs, counts the tap and forwards to Google. The original long
 # URLs keep working, so anything already printed or programmed is unaffected.
 
-/t/*   /.netlify/functions/tap?locationId=:splat      200
-/q/*   /.netlify/functions/tap-qr?locationId=:splat   200
+# FIXED 15 Aug. These previously read:
+#     /t/*   /.netlify/functions/tap?locationId=:splat      200
+#     /q/*   /.netlify/functions/tap-qr?locationId=:splat   200
+# The rewrite DID fire — the function ran — but Netlify did not substitute
+# :splat into the destination's QUERY STRING, so locationId arrived empty and
+# every short link answered "this tap link isn't set up correctly". Since this
+# is the form admin.html writes to NFC tags and encodes into the printed QR,
+# every tag and every QR minted from the admin panel was dead on arrival.
+# Named placeholders are the documented way to do this. Belt and braces: both
+# functions now ALSO read the id straight from the request path, so already
+# programmed tags keep working even if this rule misbehaves again.
+/t/:id   /.netlify/functions/tap?locationId=:id      200
+/q/:id   /.netlify/functions/tap-qr?locationId=:id   200

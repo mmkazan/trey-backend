@@ -80,13 +80,36 @@ function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// Resolve where to send the customer. A `googleUrl` from the tag is only
-// accepted if it is an https URL on a Google host — this stops an attacker
-// turning a stand link into an open redirect to a phishing site or a
-// javascript: link. Otherwise we build the review URL from the client's saved
-// placeId (preferred) or the locationId. Netlify already URL-decodes query
-// params once, so we must NOT decodeURIComponent again (double-decode corrupts
-// valid targets and throws on a literal %).
+// Recover the locationId from a short-link path: /t/<locationId>.
+//
+// WHY THIS EXISTS — found 15 Aug, against production. The rewrite in _redirects
+//     /t/*   /.netlify/functions/tap?locationId=:splat   200
+// fires correctly (this function does run), but Netlify does NOT substitute
+// :splat into the destination's QUERY STRING. Verified live: /t/<anything>
+// returned the "no locationId" 400, while the long URL carrying the same id
+// returned normally. /q/<id> failed the same way.
+//
+// admin.html's makeTapUrl() emits the short form, and tap-qr.js encodes the
+// short form into the QR — so EVERY NFC tag written and EVERY QR downloaded
+// from the admin panel pointed at a dead link, and the error page said only
+// "this tap link isn't set up correctly", which reads like the client record is
+// wrong rather than the URL.
+//
+// Netlify hands the function the ORIGINAL request path, so we read the id from
+// there and stop depending on the rewrite's query handling at all. The
+// _redirects rule is fixed too, but this is the belt: it keeps every tag that
+// has already been programmed working, whatever Netlify does with :splat.
+function locationFromPath(event) {
+  const raw = (event && (event.path || event.rawUrl)) || "";
+  let pathname = String(raw);
+  if (/^https?:\/\//i.test(pathname)) {
+    try { pathname = new URL(pathname).pathname; } catch (e) { /* keep raw */ }
+  }
+  const m = pathname.match(/^\/t\/([^/?#]+)/);
+  if (!m) return "";
+  try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+}
+
 // Returns the normalised href if this is a safe Google review destination,
 // otherwise null. Split out so the tag's own parameter and the link stored on
 // the client record cannot drift apart in what they accept.
@@ -315,15 +338,18 @@ function pausedPage(client, locationId, reasonOverride) {
 
 exports.handler = async (event) => {
   const params = event.queryStringParameters || {};
-  const { locationId, googleUrl, preview } = params;
+  const { googleUrl, preview } = params;
+  // Query param first, then the short-link path. See locationFromPath().
+  const locationId = params.locationId || locationFromPath(event);
 
   // No location on the tag = misconfigured stand. Show a gentle notice rather
   // than bouncing the customer to a broken Google URL.
   if (!locationId) {
+    console.warn(`[tap] no locationId — path="${(event && event.path) || ""}" rawUrl="${(event && event.rawUrl) || ""}"`);
     return {
       statusCode: 400,
       headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Invalid link</title></head><body style="font-family:-apple-system,sans-serif;text-align:center;padding:80px 24px;color:#64748b;">This tap link isn't set up correctly. Please let the business know.</body></html>`,
+      body: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Invalid link</title></head><body style="font-family:-apple-system,sans-serif;text-align:center;padding:80px 24px;color:#64748b;">This tap link isn't set up correctly. Please let the business know.<!-- trey: no locationId in query or path --></body></html>`,
     };
   }
 
@@ -333,10 +359,11 @@ exports.handler = async (event) => {
   // Unknown location = no such client. Show the gentle notice instead of counting
   // bogus taps or redirecting to a broken Google URL.
   if (!client) {
+    console.warn(`[tap] unknown locationId "${locationId}" — no such client record.`);
     return {
       statusCode: 404,
       headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Not found</title></head><body style="font-family:-apple-system,sans-serif;text-align:center;padding:80px 24px;color:#64748b;">This tap link isn't set up correctly. Please let the business know.</body></html>`,
+      body: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Not found</title></head><body style="font-family:-apple-system,sans-serif;text-align:center;padding:80px 24px;color:#64748b;">This tap link isn't set up correctly. Please let the business know.<!-- trey: unknown locationId "${escapeHtml(locationId)}" --></body></html>`,
     };
   }
 
