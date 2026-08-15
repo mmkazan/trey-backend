@@ -301,6 +301,7 @@
           <select id="f_plan">
             <option value="standard">Standard — £35/mo</option>
             <option value="founding">Founding — £25/mo for life (first 20)</option>
+            <option value="annual">Annual — £350/yr (2 months free)</option>
             <option value="free">Free — comped (family, friends, testing)</option>
           </select>
         </div>
@@ -650,8 +651,9 @@
     }
     // What they picked at signup. Older records predate the question, so say so
     // rather than silently defaulting them to a stand and posting the wrong thing.
-    const _plan = ["standard","founding","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
+    const _plan = ["standard","founding","annual","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
     cc._price = _plan === "founding" ? "\u2b50 Founding \u00a325/mo"
+              : _plan === "annual"   ? "\u{1F4C5} Annual \u00a3350/yr"
               : _plan === "free"     ? "\u{1F381} Free \u2014 comped"
               : "\u00a335/mo";
     cc._hardware = c.hardware === "keyfob" ? "\u{1F511} Key fob"
@@ -822,7 +824,7 @@
     document.getElementById("f_googleAccountId").value = c.googleAccountId || "";
     document.getElementById("f_placeId").value = c.placeId || "";
     document.getElementById("f_googleReviewUrl").value = c.googleReviewUrl || "";
-    document.getElementById("f_plan").value = ["standard","founding","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
+    document.getElementById("f_plan").value = ["standard","founding","annual","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
     document.getElementById("f_logoUrl").value = c.logoUrl || "";
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";

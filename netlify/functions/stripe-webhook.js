@@ -234,7 +234,20 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
           console.log(`[stripe-webhook] ${type}: stripe status "${obj.status}" not mapped — leaving record alone`);
           break;
         }
-        await setStatus(locationId, status, { stripeSubscriptionId: obj.id || undefined });
+        // Capture the wind-down state so the inbox can show its "only N days
+        // left" countdown — and so that works even when the cancellation happened
+        // OUTSIDE Trey (directly in Stripe, or by us on a customer's behalf).
+        // billing.js writes these too, but the webhook is the source of truth.
+        //
+        // On "deleted" the wind-down is over, not in progress: force the flag off
+        // so a stale true can never leave a countdown running on an account that
+        // has already ended.
+        const ended = type === "customer.subscription.deleted";
+        await setStatus(locationId, status, {
+          stripeSubscriptionId: obj.id || undefined,
+          cancelAtPeriodEnd: ended ? false : obj.cancel_at_period_end === true,
+          currentPeriodEnd: obj.current_period_end || undefined,
+        });
         break;
       }
 

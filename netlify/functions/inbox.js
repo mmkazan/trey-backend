@@ -2,8 +2,9 @@ const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
 
 // --- Which plan is this client on? -------------------------------------------
-//   "founding" -> £25/mo for life (the first 20; index.html advertises it)
 //   "standard" -> £35/mo (the default for everyone else)
+//   "founding" -> £25/mo for life (the first 20; index.html advertises it)
+//   "annual"   -> £350/yr (two months free)
 //   "free"     -> complimentary. Family, friends and test accounts. Never
 //                 billed, never nagged to subscribe, never paused.
 //
@@ -12,9 +13,10 @@ const crypto = require("crypto");
 // stand. A founding member quoted £25 in one place and £35 in another doesn't
 // read that as a bug, they read it as a bait-and-switch; and a comped friend
 // being asked to pay is worse.
+const PLANS = ["standard", "founding", "annual", "free"];
 function planOf(client) {
   const p = String((client && client.plan) || "").toLowerCase();
-  if (p === "founding" || p === "free" || p === "standard") return p;
+  if (PLANS.includes(p)) return p;
   // Back-compat with the short-lived boolean this replaced.
   if (client && client.foundingMember === true) return "founding";
   return "standard";
@@ -26,22 +28,23 @@ function isComped(client) {
   return planOf(client) === "free";
 }
 
-// If the founding link isn't configured we fall back to standard rather than
-// showing nothing — a missing env var must not leave an unpayable page.
+// An unrecognised plan falls back to STANDARD, never to free — a typo must not
+// silently give the product away. A missing env var falls back to the standard
+// link rather than rendering an unpayable page, but says so loudly: quietly
+// charging someone £35 for a plan you promised at £25 is the kind of failure
+// nobody spots until they complain.
 function payLinkFor(client) {
   const plan = planOf(client);
   if (plan === "free") return "";   // nothing to sell them
-  if (plan === "founding") {
-    const founding = process.env.STRIPE_FOUNDING_PAYMENT_LINK;
-    if (founding) return founding;
-    // Fall back so the page stays payable — but say so LOUDLY. Silently
-    // charging a founding member the standard price is the kind of failure
-    // nobody notices until they complain, and by then you have billed them
-    // £35 for a plan you promised at £25.
-    console.warn("[pricing] STRIPE_FOUNDING_PAYMENT_LINK is not set — a founding member is being shown the STANDARD price. Set it in Netlify and redeploy.");
-    return process.env.STRIPE_PAYMENT_LINK || "";
+  const standard = process.env.STRIPE_PAYMENT_LINK || "";
+  if (plan === "founding" || plan === "annual") {
+    const envName = plan === "founding" ? "STRIPE_FOUNDING_PAYMENT_LINK" : "STRIPE_ANNUAL_PAYMENT_LINK";
+    const link = process.env[envName];
+    if (link) return link;
+    console.warn(`[pricing] ${envName} is not set — a "${plan}" client is being shown the STANDARD price. Set it in Netlify and redeploy.`);
+    return standard;
   }
-  return process.env.STRIPE_PAYMENT_LINK || "";
+  return standard;
 }
 
 
@@ -169,10 +172,40 @@ function onboardingBanner(client) {
 // once they're subscribed. Needs STRIPE_PAYMENT_LINK set.
 // `onboarding` is the already-rendered onboardingBanner() output, passed in so
 // the two bars can't disagree about which phase the client is in.
+// --- Winding down: cancelled, but still paid up until period end -------------
+// A client who cancels stays subscriptionStatus "active" until the period they
+// paid for actually runs out — which is exactly what terms.html promises, but it
+// meant they saw NOTHING at all: no countdown, no way back. The single best
+// moment to win someone back is while they can still change their mind with one
+// tap, and while they're still getting value.
+//
+// Points at the BILLING page, not a payment link. They still have a live Stripe
+// subscription that is merely set to end, so the correct action is Resume — one
+// click, no card re-entry, no new subscription. Sending them to a fresh payment
+// link here would create a SECOND subscription and bill them twice.
+function windingDownBanner(client, locationId) {
+  if (!client || !client.cancelAtPeriodEnd || !client.currentPeriodEnd) return "";
+  const endMs = Number(client.currentPeriodEnd) * 1000;
+  if (!isFinite(endMs)) return "";
+  const daysLeft = Math.ceil((endMs - Date.now()) / 86400000);
+  if (daysLeft <= 0) return "";   // already ended — the paused banner takes over
+  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
+    .update(String(locationId)).digest("hex").slice(0, 32);
+  const base = process.env.URL || "https://trey.today";
+  const url = `${base}/.netlify/functions/billing?loc=${encodeURIComponent(locationId)}&k=${k}`;
+  const days = daysLeft === 1 ? "1 day" : `${daysLeft} days`;
+  return `<div style="background:#fff7ed;border-bottom:1px solid #fed7aa;color:#9a3412;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:10px 14px">` +
+    `Only <b>${days}</b> left with Trey. <a href="${url}" style="color:#c2410c;font-weight:800;text-decoration:underline;white-space:nowrap">Change your mind?</a>` +
+    `</div>`;
+}
+
 function trialBanner(client, locationId, onboarding) {
   if (!client) return "";
   // A comped account has nothing to buy — never show them a Subscribe nag.
   if (isComped(client)) return "";
+  // Cancelled but still running — countdown beats silence.
+  const winding = windingDownBanner(client, locationId);
+  if (winding) return winding;
   const status = client.subscriptionStatus;
   if (status === "active") return "";
   // 14 days normally; 30 for a business that arrived via a referral link.
@@ -370,6 +403,7 @@ exports.handler = async (event) => {
       ${repliedBlock}
       <a class="xlink" href="${base}/.netlify/functions/report?loc=${encodeURIComponent(loc)}&k=${params.k}">View your monthly report &rarr;</a>
       <a class="xlink" href="${base}/.netlify/functions/account?loc=${encodeURIComponent(loc)}&k=${params.k}">Update your account details &rarr;</a>
+      ${planOf(client) === "free" ? "" : `<a class="xlink" href="${base}/.netlify/functions/billing?loc=${encodeURIComponent(loc)}&k=${params.k}">Manage or cancel your subscription &rarr;</a>`}
       <a class="xlink" href="${base}/.netlify/functions/profile-check?loc=${encodeURIComponent(loc)}&k=${params.k}">Tune your Google profile &rarr;</a>
       <a class="xlink" href="${base}/.netlify/functions/refer?loc=${encodeURIComponent(loc)}&k=${params.k}">Refer a business, get a month free &rarr;</a>
       <div class="foot">Powered by Trey</div>

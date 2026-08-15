@@ -17,8 +17,9 @@ const googleApi = require("./google-api.js");
 const audit = require("./profile-audit.js");
 
 // --- Which plan is this client on? -------------------------------------------
-//   "founding" -> £25/mo for life (the first 20; index.html advertises it)
 //   "standard" -> £35/mo (the default for everyone else)
+//   "founding" -> £25/mo for life (the first 20; index.html advertises it)
+//   "annual"   -> £350/yr (two months free)
 //   "free"     -> complimentary. Family, friends and test accounts. Never
 //                 billed, never nagged to subscribe, never paused.
 //
@@ -27,9 +28,10 @@ const audit = require("./profile-audit.js");
 // stand. A founding member quoted £25 in one place and £35 in another doesn't
 // read that as a bug, they read it as a bait-and-switch; and a comped friend
 // being asked to pay is worse.
+const PLANS = ["standard", "founding", "annual", "free"];
 function planOf(client) {
   const p = String((client && client.plan) || "").toLowerCase();
-  if (p === "founding" || p === "free" || p === "standard") return p;
+  if (PLANS.includes(p)) return p;
   // Back-compat with the short-lived boolean this replaced.
   if (client && client.foundingMember === true) return "founding";
   return "standard";
@@ -41,22 +43,23 @@ function isComped(client) {
   return planOf(client) === "free";
 }
 
-// If the founding link isn't configured we fall back to standard rather than
-// showing nothing — a missing env var must not leave an unpayable page.
+// An unrecognised plan falls back to STANDARD, never to free — a typo must not
+// silently give the product away. A missing env var falls back to the standard
+// link rather than rendering an unpayable page, but says so loudly: quietly
+// charging someone £35 for a plan you promised at £25 is the kind of failure
+// nobody spots until they complain.
 function payLinkFor(client) {
   const plan = planOf(client);
   if (plan === "free") return "";   // nothing to sell them
-  if (plan === "founding") {
-    const founding = process.env.STRIPE_FOUNDING_PAYMENT_LINK;
-    if (founding) return founding;
-    // Fall back so the page stays payable — but say so LOUDLY. Silently
-    // charging a founding member the standard price is the kind of failure
-    // nobody notices until they complain, and by then you have billed them
-    // £35 for a plan you promised at £25.
-    console.warn("[pricing] STRIPE_FOUNDING_PAYMENT_LINK is not set — a founding member is being shown the STANDARD price. Set it in Netlify and redeploy.");
-    return process.env.STRIPE_PAYMENT_LINK || "";
+  const standard = process.env.STRIPE_PAYMENT_LINK || "";
+  if (plan === "founding" || plan === "annual") {
+    const envName = plan === "founding" ? "STRIPE_FOUNDING_PAYMENT_LINK" : "STRIPE_ANNUAL_PAYMENT_LINK";
+    const link = process.env[envName];
+    if (link) return link;
+    console.warn(`[pricing] ${envName} is not set — a "${plan}" client is being shown the STANDARD price. Set it in Netlify and redeploy.`);
+    return standard;
   }
-  return process.env.STRIPE_PAYMENT_LINK || "";
+  return standard;
 }
 
 
