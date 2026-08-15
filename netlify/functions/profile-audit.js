@@ -105,27 +105,54 @@ function scoreProfile(p) {
 }
 
 // ---- The composite "Trey Score" (0-100) -------------------------------------
-// One number from three honest drivers: Reputation (50), Activity (20),
-// Completeness (30). Weights are a first cut — easy to tune.
+// One number from three honest drivers: Reputation (55), Activity (15),
+// Completeness (30).
+//
+// WEIGHTING RATIONALE (revised 2026-08-15, after modelling the old weights).
+// The first cut paid 10 points each for "posted recently" and "photos fresh" —
+// 20 points for two box-ticks — while replying to every review was worth 6 and
+// tripling the review flow worth 5. The score therefore said a quarterly photo
+// upload mattered more than the stand and the replies combined, which is both
+// wrong about Google and wrong about what Trey sells. Weight has moved onto the
+// two things Trey actually drives:
+//
+//   reviewsLast90 (the stand working)   8  -> 15, and now graduated
+//   replyRate     (the replies working) 6  -> 10, and now linear
+//   rating        (slow, mostly not ours) 22 -> 18
+//   reviewCount   (slow, historic)      14 -> 12
+//   posted/photos (binary box-ticks)    20 -> 15, with a partial-credit step
+//
+// Activity was also a pair of 10-point cliffs; postedWithin3m / photosSome give
+// partial credit so the number moves gradually rather than lurching.
+//
+// NOT tuned to flatter the trial. A 14-day trial moves this by roughly +18, which
+// still usually leaves a weak profile inside "Needs work" — because that is the
+// truth. The fix for the trial story is showing the PROJECTED score alongside the
+// current one, not bending the instrument until it says something nicer.
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 function scoreBusiness(inp) {
   inp = inp || {};
   const rep = inp.reputation || {}, act = inp.activity || {}, comp = inp.completeness || {};
 
-  // Reputation /50 — rating, volume, recency, reply rate.
+  // Reputation /55 — rating, volume, recency, reply rate.
   const rating = Number(rep.rating);
-  const ratingPts = isFinite(rating) && rating > 0 ? Math.round(clamp((rating - 3.0) / 1.7, 0, 1) * 22) : 0;
+  const ratingPts = isFinite(rating) && rating > 0 ? Math.round(clamp((rating - 3.0) / 1.7, 0, 1) * 18) : 0;
   const rc = Number(rep.reviewCount) || 0;
-  const rcPts = rc >= 100 ? 14 : rc >= 50 ? 11 : rc >= 25 ? 8 : rc >= 10 ? 5 : rc >= 1 ? 2 : 0;
+  const rcPts = rc >= 100 ? 12 : rc >= 50 ? 10 : rc >= 25 ? 7 : rc >= 10 ? 4 : rc >= 1 ? 2 : 0;
+  // Recency is the stand's signature: it is the one number that moves when the
+  // team actually asks. Graduated so every extra review a quarter shows up.
   const r90 = Number(rep.reviewsLast90);
-  const recPts = !isFinite(r90) ? 4 : r90 >= 6 ? 8 : r90 >= 3 ? 5 : r90 >= 1 ? 3 : 0; // unknown -> middling
+  const recPts = !isFinite(r90) ? 7                                   // unknown -> middling
+    : r90 >= 12 ? 15 : r90 >= 8 ? 13 : r90 >= 6 ? 11 : r90 >= 4 ? 8 : r90 >= 2 ? 5 : r90 >= 1 ? 3 : 0;
   const rr = rep.replyRate;
-  const rrPts = (rr == null || isNaN(rr)) ? 2 : Math.round(clamp(rr, 0, 1) * 6); // unknown -> half
+  const rrPts = (rr == null || isNaN(rr)) ? 3 : Math.round(clamp(rr, 0, 1) * 10); // unknown -> ~half
   const repPts = ratingPts + rcPts + recPts + rrPts;
 
-  // Activity /20 — is the profile alive? (a cold lead scores ~0 here.)
-  const actPts = (act.postedRecently ? 10 : 0) + (act.photosFresh ? 10 : 0);
+  // Activity /15 — is the profile alive? (a cold lead scores ~0 here.)
+  const actPts =
+    (act.postedRecently ? 8 : act.postedWithin3m ? 4 : 0) +
+    (act.photosFresh ? 7 : act.photosSome ? 3 : 0);
 
   // Completeness /30 — the relevance + contactability fill-in.
   const compPts =
@@ -145,7 +172,11 @@ function scoreBusiness(inp) {
     : { label: "Needs work", color: "#ef4444" };
   return {
     total, band: band.label, color: band.color,
-    pillars: { reputation: { pts: repPts, max: 50 }, activity: { pts: actPts, max: 20 }, completeness: { pts: compPts, max: 30 } },
+    // A business can be excellent AND score mid-band, because this measures the
+    // Google presence, not the business. Callers use this to say "your reputation
+    // is excellent — it's the profile holding you back" instead of just "56".
+    reputationStrong: repPts >= 44,
+    pillars: { reputation: { pts: repPts, max: 55 }, activity: { pts: actPts, max: 15 }, completeness: { pts: compPts, max: 30 } },
   };
 }
 
