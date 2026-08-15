@@ -44,6 +44,15 @@
   .badge{font-size:10px;font-weight:700;padding:3px 7px;border-radius:5px;}
   .b-client{background:#dcfce7;color:#166534;}.b-flag{background:#fee2e2;color:#991b1b;}.b-thin{background:#f1f5f9;color:#64748b;}
   .lead-detail{padding:0 16px 16px;border-top:1px solid var(--border);display:none;}
+  /* PECR channel verdict. Deliberately loud — a wrong send here is a regulatory
+     matter, not a typo. */
+  .pecr{border-radius:10px;padding:10px 12px;margin:10px 0;font-size:12.5px;line-height:1.5;border:1px solid;}
+  .pecr.open{background:#ecfdf5;border-color:#a7f3d0;color:#065f46;}
+  .pecr.limited{background:#fffbeb;border-color:#fde68a;color:#92400e;}
+  .pecr.blocked{background:#fef2f2;border-color:#fecaca;color:#991b1b;}
+  .chan{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px;margin-right:6px;border:1px solid;}
+  .chan.yes{background:#fff;border-color:#a7f3d0;color:#047857;}
+  .chan.no{background:#fff;border-color:#fecaca;color:#b91c1c;text-decoration:line-through;}
   .hook{background:#f8fafc;border-left:3px solid var(--accent2);padding:8px 12px;border-radius:0 6px 6px 0;font-size:13px;margin:12px 0;color:#334155;}
   .tsbadge{display:inline-block;color:#fff;font-weight:800;font-size:11px;padding:2px 8px;border-radius:999px;margin-left:6px;vertical-align:middle;white-space:nowrap;}
   .tshint{background:#eef2ff;border:1px solid #e0e7ff;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#3730a3;margin:10px 0;line-height:1.45;}
@@ -338,6 +347,32 @@
   async function saveLead(i){ const l=LEADS[i]; const g=id=>document.getElementById(id+"_"+i).value.trim();
     await post({lead:{id:l.id,businessType:g("bt"),contactName:g("cn"),phone:g("ph"),email:g("em"),notes:g("nt")}}); loadLeads(); }
   async function delLead(i){ await post({delete:LEADS[i].id}); loadLeads(); }
+  // PECR channel verdict, computed server-side in leads.js and attached as
+  // l.outreach. Rendered here so it is impossible to start a message without
+  // seeing it. If the server sent no verdict (a stale cached response), say so
+  // rather than implying everything is fine.
+  function pecrBanner(l){
+    const o=l.outreach;
+    if(!o) return '<div class="pecr limited"><b>Outreach rules not loaded</b> — refresh before contacting this lead.</div>';
+    const cls=o.electronicMail?"open":(o.phone?"limited":"blocked");
+    const chip=(on,label)=>'<span class="chan '+(on?"yes":"no")+'">'+(on?"\u2713 ":"\u2717 ")+label+'</span>';
+    const label=o.legalStatus==="ltd"?"Limited company":o.legalStatus==="sole_trader"?"Sole trader":"Status unknown";
+    return '<div class="pecr '+cls+'">'+
+      chip(o.electronicMail,"Email / WhatsApp")+chip(o.phone,"Phone")+chip(o.post,"Post")+
+      '<div style="margin-top:7px;"><b>'+esc(label)+'.</b> '+esc(o.reason)+'</div></div>';
+  }
+
+  async function saveCompliance(i){
+    const l=LEADS[i];
+    const consent=document.getElementById("mc_"+i).checked;
+    await post({lead:{id:l.id,
+      legalStatus:document.getElementById("ls_"+i).value,
+      tpsStatus:document.getElementById("tps_"+i).value,
+      marketingConsent:consent,
+      consentSource:consent?(l.consentSource||("recorded by hand "+new Date().toISOString().slice(0,10))):""}});
+    loadLeads();
+  }
+
   function toggle(i){ const d=document.getElementById("detail_"+i); d.style.display=d.style.display==="block"?"none":"block"; }
 
   // ---------- render ----------
@@ -393,6 +428,7 @@
         '<button class="pill '+clsStatus(l.outreachStatus)+'" onclick="event.stopPropagation();cycleStatus('+i+')">'+esc(l.outreachStatus||"New")+'</button>'+
       '</div>'+
       '<div class="lead-detail" id="detail_'+i+'">'+
+          pecrBanner(l)+
         '<div class="opphint"><b>Opportunity '+op.total+'/100 · '+op.band+'</b> — how much Trey can move the needle here × how winnable they are. This is the sort order.'+
           (l.tier||l.score!=null?' <span style="color:#166534;">Lead quality: '+(l.tier?"T"+l.tier:"—")+(l.score!=null?" · score "+l.score:"")+'.</span>':'')+
           (isDeadEnd(l)?' <span style="color:#b91c1c;">Flagged a possible dead end (low rating or very few reviews) — kept in the list, hide with the toggle.</span>':'')+'</div>'+
@@ -400,6 +436,20 @@
         (l.scoreReasons?'<div class="reasons">'+esc(l.scoreReasons)+'</div>':'')+
         (hasData?'<div class="tshint"><b>Trey Score '+ts.total+'/100</b> · '+esc(ts.band)+' — ≈'+(100-ts.total)+' points Trey can add (mostly activity + profile). This is your outreach hook.</div>':'')+
         '<div class="statusbtns">'+STATUSES.map(s=>'<button class="pill '+clsStatus(s)+(l.outreachStatus===s?' active':'')+'" onclick="setStatusTo('+i+',\''+s+'\')">'+s+'</button>').join("")+'</div>'+
+        '<div class="grid2" style="margin-top:8px;">'+
+          '<div><label>Legal status <span style="font-weight:400;color:#64748b;">&mdash; decides if you may message them</span></label>'+
+            '<select id="ls_'+i+'"><option value="">Unknown (restricted)</option>'+
+            '<option value="ltd"'+(l.legalStatus==="ltd"?" selected":"")+'>Limited company</option>'+
+            '<option value="sole_trader"'+(l.legalStatus==="sole_trader"?" selected":"")+'>Sole trader</option></select></div>'+
+          '<div><label>TPS/CTPS <span style="font-weight:400;color:#64748b;">&mdash; screen before calling</span></label>'+
+            '<select id="tps_'+i+'"><option value="unchecked">Not checked</option>'+
+            '<option value="clear"'+(l.tpsStatus==="clear"?" selected":"")+'>Clear &mdash; safe to call</option>'+
+            '<option value="registered"'+(l.tpsStatus==="registered"?" selected":"")+'>Registered &mdash; do NOT call</option></select></div>'+
+        '</div>'+
+        '<div style="margin-top:8px;"><label style="display:flex;gap:8px;align-items:flex-start;font-weight:600;">'+
+          '<input type="checkbox" id="mc_'+i+'" style="width:auto;margin-top:3px;"'+(l.marketingConsent?" checked":"")+' />'+
+          '<span>They agreed I can email/message them <span style="font-weight:400;color:#64748b;">&mdash; tick only if they actually said yes, on a call or in person. This unlocks messaging for a sole trader, so it needs to be true.</span></span></label>'+
+          '<div style="margin-top:6px;"><button class="btn-secondary" onclick="saveCompliance('+i+')">Save outreach rules</button></div></div>'+
         '<div class="grid2">'+
           '<div><label>Business type</label><input id="bt_'+i+'" value="'+esc(l.businessType||"")+'" /></div>'+
           '<div><label>Contact name</label><input id="cn_'+i+'" value="'+esc(l.contactName||"")+'" /></div>'+

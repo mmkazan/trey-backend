@@ -53,16 +53,25 @@ function escapeHtml(str) {
     .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function fmtDate(unixSeconds) {
-  const d = new Date(Number(unixSeconds) * 1000);
+  // 0 is "unknown", not the epoch. Without this guard periodEndOf() returning 0
+  // renders as "1 January 1970" on the cancellation page and in the goodbye
+  // email — a lie about the one fact those exist to convey.
+  const n = Number(unixSeconds);
+  if (!isFinite(n) || n <= 0) return "";
+  const d = new Date(n * 1000);
   if (isNaN(d)) return "";
   return `${d.getUTCDate()} ${["January","February","March","April","May","June","July","August","September","October","November","December"][d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 // Mirrors payLinkFor()'s plan logic. A comped account has no subscription to
 // cancel and must never be shown billing controls.
+// Keep in step with the copies in inbox/report/approve/profile-check/tap.js.
+// This one had already drifted — it predated the "annual" plan and silently
+// reported annual customers as standard.
+const PLANS = ["standard", "founding", "annual", "free"];
 function planOf(client) {
   const p = String((client && client.plan) || "").toLowerCase();
-  if (p === "founding" || p === "free" || p === "standard") return p;
+  if (PLANS.includes(p)) return p;
   if (client && client.foundingMember === true) return "founding";
   return "standard";
 }
@@ -358,13 +367,18 @@ exports.handler = async (event) => {
   // page refresh isn't a pointless blob write.
   const liveCancelling = sub.cancel_at_period_end === true;
   const livePeriodEnd = periodEndOf(sub);
-  if (client.cancelAtPeriodEnd !== liveCancelling ||
-      Number(client.currentPeriodEnd || 0) !== livePeriodEnd) {
+  // Only trust a period end we actually resolved. If Stripe returns a shape we
+  // can't read, livePeriodEnd is 0 — writing that would erase a good stored date
+  // and silently kill the inbox countdown, which is the exact regression
+  // periodEndOf() was written to fix.
+  const storedEnd = Number(client.currentPeriodEnd || 0);
+  const nextEnd = livePeriodEnd || storedEnd;
+  if (client.cancelAtPeriodEnd !== liveCancelling || storedEnd !== nextEnd) {
     try {
       await clientsStore.setJSON(loc, {
         ...client,
         cancelAtPeriodEnd: liveCancelling,
-        currentPeriodEnd: livePeriodEnd || "",
+        currentPeriodEnd: nextEnd || "",
       });
       console.log(`[billing] reconciled ${loc} from Stripe: cancelling=${liveCancelling} periodEnd=${livePeriodEnd}`);
     } catch (e) {

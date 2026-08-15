@@ -62,11 +62,25 @@ function payLinkFor(client) {
 function toE164(phone) {
   const raw = String(phone || "").trim();
   if (!raw) return "";
-  const d = raw.replace(/[^\d]/g, "");
+  // "(0)" is the international convention for an OPTIONAL trunk digit — it is
+  // never part of an E.164 number. "+44 (0)7933 189216" is how a large share of
+  // UK businesses write their number; stripping non-digits naively yields
+  // "+4407933189216", which Twilio rejects with 21211 and the owner never finds
+  // out, because their review alerts simply stop arriving. Same trap for
+  // "+353 (0)86…". Remove it before anything else.
+  const cleaned = raw.replace(/\(\s*0\s*\)/g, "");
+  const d = cleaned.replace(/[^\d]/g, "");
   if (!d) return "";
-  if (raw.startsWith("+")) return "+" + d;   // already international — trust it
-  if (d.startsWith("00")) return "+" + d.slice(2);
-  if (d.startsWith("0")) return "+44" + d.slice(1);  // UK national
+  // A trunk 0 written straight after the country code ("+44 07933…") is the
+  // same mistake without the brackets. No UK subscriber number begins with 0,
+  // so "440…" is always a trunk zero, never a real number.
+  if (cleaned.startsWith("+")) return d.startsWith("440") ? "+44" + d.slice(3) : "+" + d;
+  if (d.startsWith("00")) {
+    const rest = d.slice(2);
+    return rest.startsWith("440") ? "+44" + rest.slice(3) : "+" + rest;
+  }
+  if (d.startsWith("0")) return "+44" + d.slice(1);   // UK national
+  if (d.startsWith("440")) return "+44" + d.slice(3);
   if (d.startsWith("44")) return "+" + d;
   return "+" + d;
 }
@@ -377,7 +391,12 @@ function allowedGoogleUrl(candidate) {
     const okHost =
       host === "google.com" || host.endsWith(".google.com") ||
       host === "g.page" || host.endsWith(".g.page");
-    const isRedirector = u.pathname === "/url"; // e.g. https://www.google.com/url?q=https://evil.com
+    // Google hosts several ways to bounce onward. An exact "/url" match is not
+    // enough: "//url", "/url/" and the AMP viewer "/amp/s/<anything>" all reach
+    // the same place. Normalise duplicate slashes before testing, and reject the
+    // AMP path outright.
+    const path = u.pathname.replace(/\/{2,}/g, "/");
+    const isRedirector = /^\/url\/?$/.test(path) || /^\/amp(\/|$)/.test(path);
     if (u.protocol === "https:" && okHost && !isRedirector) return u.href;
   } catch (e) { /* not a valid absolute URL — fall through */ }
   return null;

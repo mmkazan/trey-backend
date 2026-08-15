@@ -27,6 +27,88 @@ function adminAuthorized(event, body) {
   return a.length === b.length && require("crypto").timingSafeEqual(a, b);
 }
 
+// --- OUTREACH COMPLIANCE (PECR) ----------------------------------------------
+//
+// This decides which channels may lawfully be used for each lead, so the answer
+// is computed once here rather than remembered correctly every time by a human
+// at 9pm.
+//
+// THE RULE THAT CATCHES TREY. PECR reg. 22 (email/SMS/WhatsApp — "electronic
+// mail") does NOT apply to CORPORATE subscribers (Ltd, LLP, PLC, Scottish
+// partnerships, public bodies): you may cold-message them without consent.
+// It DOES apply to INDIVIDUAL subscribers — sole traders and unincorporated
+// partnerships — who need prior consent. Trey sells to salons, cafés, trades and
+// therapists, so a large share of the list is in the restricted category.
+//
+// Soft opt-in is NOT available for scraped leads: it requires details obtained
+// during a sale or negotiation, and these people have negotiated nothing.
+//
+// BUT reg. 22 is about electronic mail only. LIVE PHONE CALLS (reg. 21) are
+// allowed to anyone — sole trader or not — provided the number isn't registered
+// with TPS/CTPS. POST isn't covered by PECR at all. So every lead is reachable;
+// the channel just depends on who they are.
+//
+// The intended play: call or visit a sole trader, get their consent, then flip
+// them to the messaging list. Consent turns a restricted lead into an open one.
+//
+// PECR's maximum penalty rose to £17.5m / 4% of turnover in February 2026, and
+// failing to honour an opt-out is the classic enforcement trigger — hence the
+// suppression check, which overrides everything else.
+// https://ico.org.uk/for-organisations/direct-marketing-and-privacy-and-electronic-communications/business-to-business-marketing/
+
+// Name suffixes that make a business a CORPORATE subscriber. Deliberately
+// conservative: a false "ltd" would authorise an unlawful message, so anything
+// ambiguous stays "unknown" and is treated as restricted.
+// ANCHORED TO THE END of the name, not merely present in it. "The Limited
+// Edition Barber" is a sole trader with an unlucky name, and classifying it as a
+// company would authorise a message that PECR forbids. Errors must fall towards
+// "restricted": a false negative costs a phone call, a false positive is a
+// potential breach. Trailing punctuation is tolerated ("… Ltd.", "… (UK) Ltd").
+const CORPORATE_RE = /(\bltd|\blimited|\bplc|\bllp|\bl\.t\.d|\bincorporated|\binc|\bcic|\bcio)[\s.,)\]]*$/i;
+
+function inferLegalStatus(lead) {
+  // An explicit value always wins — set by hand or by a Companies House check.
+  const explicit = String((lead && lead.legalStatus) || "").toLowerCase();
+  if (explicit === "ltd" || explicit === "sole_trader") return explicit;
+  const name = String((lead && lead.businessName) || "");
+  if (CORPORATE_RE.test(name)) return "ltd";
+  return "unknown";
+}
+
+/**
+ * What may we lawfully do with this lead, and why?
+ *
+ * `suppressedTails` is a Set of last-9-digit phone tails that have replied STOP
+ * (written by whatsapp-inbound.js). Suppression beats everything, including
+ * consent — someone who opted out has withdrawn it.
+ */
+function outreachPermissions(lead, suppressedTails) {
+  const tail = String((lead && lead.phone) || "").replace(/\D/g, "").slice(-9);
+  const suppressed = tail.length === 9 && suppressedTails && suppressedTails.has(tail);
+  const status = inferLegalStatus(lead);
+  const consented = lead && lead.marketingConsent === true;
+  // TPS/CTPS must be screened through a licensed service; until a lead has been
+  // checked we don't claim it's callable.
+  const tps = String((lead && lead.tpsStatus) || "unchecked").toLowerCase();
+
+  if (suppressed) {
+    return { electronicMail: false, phone: false, post: true, legalStatus: status,
+      reason: "Opted out — replied STOP. Do not contact by phone or message. Post only." };
+  }
+  if (consented) {
+    return { electronicMail: true, phone: tps !== "registered", post: true, legalStatus: status,
+      reason: "Consented to marketing — all channels open." };
+  }
+  if (status === "ltd") {
+    return { electronicMail: true, phone: tps !== "registered", post: true, legalStatus: status,
+      reason: "Limited company (corporate subscriber) — cold email/WhatsApp allowed. Identify yourself and give an opt-out in every message." };
+  }
+  return { electronicMail: false, phone: tps !== "registered", post: true, legalStatus: status,
+    reason: status === "sole_trader"
+      ? "Sole trader — NO cold email/SMS/WhatsApp without consent. Call, post or visit; get consent, then message."
+      : "Legal status unknown — treated as a sole trader. Call, post or visit, or confirm at Companies House to unlock messaging." };
+}
+
 const norm = (s) => (s || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
 
 function leadKey(lead) {
@@ -76,7 +158,22 @@ exports.handler = async (event) => {
       const l = await leadsStore.get(b.key, { type: "json" });
       return l ? { ...l, id: b.key, isClient: isClient(l, m) } : null;
     }));
-    return { statusCode: 200, body: JSON.stringify(leads.filter(Boolean)) };
+    // Attach the compliance verdict server-side so the UI can't disagree with it.
+    let suppressedTails = new Set();
+    try {
+      const { blobs } = await blobsStore("suppressed").list();
+      suppressedTails = new Set(blobs.map((b) => b.key));
+    } catch (e) {
+      // Fail SAFE: if we can't read the suppression list we must not imply that
+      // messaging is fine. Every lead drops to phone/post only.
+      console.error("[leads] suppression list unreadable — restricting all outreach:", e.message);
+      const restricted = leads.filter(Boolean).map((l) => ({ ...l,
+        outreach: { electronicMail: false, phone: true, post: true, legalStatus: inferLegalStatus(l),
+          reason: "Suppression list unavailable — messaging blocked until it can be checked." } }));
+      return { statusCode: 200, body: JSON.stringify(restricted) };
+    }
+    const withPerms = leads.filter(Boolean).map((l) => ({ ...l, outreach: outreachPermissions(l, suppressedTails) }));
+    return { statusCode: 200, body: JSON.stringify(withPerms) };
   }
 
   if (event.httpMethod === "POST") {
@@ -108,6 +205,13 @@ exports.handler = async (event) => {
       const record = {
         ...existing, ...incomingClean, id: key,
         outreachStatus: existing.outreachStatus || incomingClean.outreachStatus || "New",
+        // Compliance facts are decided by a human (or Companies House), never by
+        // a scrape. A re-import must not be able to flip a sole trader to "ltd"
+        // or manufacture consent and thereby authorise an unlawful message.
+        legalStatus: existing.legalStatus || "",
+        marketingConsent: existing.marketingConsent === true,
+        consentSource: existing.consentSource || "",
+        tpsStatus: existing.tpsStatus || "unchecked",
         createdAt: existing.createdAt || now,
         updatedAt: now,
       };

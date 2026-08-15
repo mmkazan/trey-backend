@@ -127,10 +127,15 @@ function normaliseCmd(body) {
 // Worse than the wrong link: a STOP reply would have written the opt-out flags
 // onto the dead record and left the live one still messaging them.
 function matchRank(c) {
-  if (String((c && c.plan) || "").toLowerCase() === "free") return 4;   // comped, always live
+  if (String((c && c.plan) || "").toLowerCase() === "free") return 5;   // comped, always live
   const s = String((c && c.subscriptionStatus) || "").toLowerCase();
-  if (s === "active" || s === "") return 4;                             // "" = grandfathered
-  if (s === "trial") return 3;
+  if (s === "active") return 4;
+  // "" is "grandfathered", treated as active everywhere else — but a STALE
+  // duplicate very often has no status at all, and ranking it level with a real
+  // subscriber let a dead record beat a live trial and win the lookup again.
+  // Sitting it level with trial means the createdAt tiebreak decides, and the
+  // newer record — the one the customer actually signed up for — wins.
+  if (s === "" || s === "trial") return 3;
   if (s === "paused" || s === "past_due") return 2;
   return 1;                                                             // cancelled / expired
 }
@@ -223,12 +228,41 @@ exports.handler = async (event) => {
     if (STOP_WORDS.includes(cmd)) {
       const match = await findClientByPhone(fromDigits);
       await setOptOut(match, true);
-      if (!match) console.warn("[whatsapp-inbound] STOP from an unknown number — nothing to flag.");
+      // ALWAYS record the suppression, client or not.
+      //
+      // This used to log "STOP from an unknown number — nothing to flag" and
+      // record nothing at all. But the numbers most likely to reply STOP are
+      // exactly the ones that AREN'T clients yet: cold outreach prospects from
+      // the leads database. Under PECR an opt-out must be honoured, and failing
+      // to honour one is the classic enforcement trigger — the ceiling rose to
+      // £17.5m / 4% of turnover in February 2026. "We had no record of it" is
+      // not a defence; it is the admission.
+      //
+      // Keyed by the last 9 digits so it matches however the number is written,
+      // and it is checked before any outreach.
+      try {
+        const tail = String(fromDigits || "").slice(-9);
+        if (tail.length === 9) {
+          await blobsStore("suppressed").setJSON(tail, {
+            at: new Date().toISOString(),
+            source: "whatsapp-stop",
+            matchedClient: match ? match.key : "",
+          });
+        }
+      } catch (e) {
+        console.error("[whatsapp-inbound] SUPPRESSION WRITE FAILED — this number may keep being contacted:", e.message);
+      }
+      if (!match) console.warn(`[whatsapp-inbound] STOP from a non-client (likely an outreach lead) — added to the suppression list.`);
       return twiml(STOP_REPLY);
     }
     if (START_WORDS.includes(cmd)) {
       const match = await findClientByPhone(fromDigits);
       await setOptOut(match, false);
+      // Lift the suppression too — otherwise opting back in is impossible.
+      try {
+        const tail = String(fromDigits || "").slice(-9);
+        if (tail.length === 9) await blobsStore("suppressed").delete(tail);
+      } catch (e) { /* absent is fine */ }
       return twiml(START_REPLY);
     }
   }

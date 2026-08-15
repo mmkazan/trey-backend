@@ -185,6 +185,12 @@ function onboardingBanner(client) {
 // link here would create a SECOND subscription and bill them twice.
 function windingDownBanner(client, locationId) {
   if (!client || !client.cancelAtPeriodEnd || !client.currentPeriodEnd) return "";
+  // Only while they're actually still being served. A paused or cancelled
+  // account with a stale future period-end would otherwise show "only N days
+  // left — change your mind?" while the stand is already switched off: two
+  // surfaces telling the customer opposite things.
+  const st = String(client.subscriptionStatus || "").toLowerCase();
+  if (st && st !== "active" && st !== "trial") return "";
   const endMs = Number(client.currentPeriodEnd) * 1000;
   if (!isFinite(endMs)) return "";
   const daysLeft = Math.ceil((endMs - Date.now()) / 86400000);

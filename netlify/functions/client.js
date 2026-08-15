@@ -60,9 +60,18 @@ const DELETE_PREFIXES = [
   ["postsent",     (l) => [`post:${l}:`]],
   ["photosent",    (l) => [`photo:${l}:`]],
   ["posts",        (l) => [`pending:${l}:`]],
-  ["reviewsseen",  (l) => [`${l}:`, `baseline:${l}`]],
+  // NOTE: only `${l}:` goes here. The baseline key is `baseline:<loc>` with NO
+  // trailing delimiter, so a prefix sweep on "baseline:aqua-rhythm" would also
+  // match "baseline:aqua-rhythm-467fe7" and wipe a DIFFERENT, surviving client's
+  // marker. fetch-reviews.mjs then treats that client as a first run and
+  // re-baselines its whole review set as "seen" — every unanswered review
+  // silently swallowed, never drafted, never alerted. It is deleted as an EXACT
+  // key in DELETE_EXACT_PREFIXED instead.
+  ["reviewsseen",  (l) => [`${l}:`]],
 ];
 const DELETE_EXACT = ["clients", "taps", "stats"];
+// Exact keys that are prefixed by something, so they cannot be swept safely.
+const DELETE_EXACT_PREFIXED = [["reviewsseen", (l) => `baseline:${l}`]];
 // Indexes keyed by something else entirely, whose VALUE points back at us.
 const DELETE_BY_VALUE = ["refcodes", "stripecustomers", "photoreq", "approvalpending"];
 
@@ -104,6 +113,11 @@ async function deleteClient(locationId, confirmName) {
 
   for (const name of DELETE_EXACT) {
     try { await blobsStore(name).delete(locationId); bump(name, 1); }
+    catch (e) { /* absent is fine */ }
+  }
+
+  for (const [name, keyFor] of DELETE_EXACT_PREFIXED) {
+    try { await blobsStore(name).delete(keyFor(locationId)); bump(name, 1); }
     catch (e) { /* absent is fine */ }
   }
 
