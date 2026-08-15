@@ -16,6 +16,41 @@ const crypto = require("crypto");
 const googleApi = require("./google-api.js");
 const audit = require("./profile-audit.js");
 
+// --- Which plan is this client on? -------------------------------------------
+//   "founding" -> £25/mo for life (the first 20; index.html advertises it)
+//   "standard" -> £35/mo (the default for everyone else)
+//   "free"     -> complimentary. Family, friends and test accounts. Never
+//                 billed, never nagged to subscribe, never paused.
+//
+// Centralised because these decisions appear on FIVE separate pages — the inbox,
+// the monthly report, the approve page, the profile-check paywall and the paused
+// stand. A founding member quoted £25 in one place and £35 in another doesn't
+// read that as a bug, they read it as a bait-and-switch; and a comped friend
+// being asked to pay is worse.
+function planOf(client) {
+  const p = String((client && client.plan) || "").toLowerCase();
+  if (p === "founding" || p === "free" || p === "standard") return p;
+  // Back-compat with the short-lived boolean this replaced.
+  if (client && client.foundingMember === true) return "founding";
+  return "standard";
+}
+
+// A comped account. Treated as permanently subscribed: no payment link, no
+// upgrade banner, no paywall, and the stand never pauses.
+function isComped(client) {
+  return planOf(client) === "free";
+}
+
+// If the founding link isn't configured we fall back to standard rather than
+// showing nothing — a missing env var must not leave an unpayable page.
+function payLinkFor(client) {
+  const plan = planOf(client);
+  if (plan === "free") return "";   // nothing to sell them
+  if (plan === "founding") return process.env.STRIPE_FOUNDING_PAYMENT_LINK || process.env.STRIPE_PAYMENT_LINK || "";
+  return process.env.STRIPE_PAYMENT_LINK || "";
+}
+
+
 const KEY_LEN = 32;
 const INDIGO = "#4338ca", ACCENT = "#4f46e5", SLATE = "#0f172a";
 
@@ -127,7 +162,8 @@ exports.handler = async (event) => {
   // "Grandfathered" clients with no recorded status are treated as subscribers so
   // this can never lock out an existing paying customer.
   const status = String(client.subscriptionStatus || "").toLowerCase();
-  const isSubscriber = status === "active" || status === "";
+  // Comped accounts (family, friends, test) get everything a subscriber gets.
+  const isSubscriber = status === "active" || status === "" || isComped(client);
 
   // POST — apply the description (the one clean auto-apply). Phase 2 only.
   if (event.httpMethod === "POST") {
@@ -238,7 +274,7 @@ exports.handler = async (event) => {
   // What a trial user sees in place of the drafted work. Deliberately not a
   // teaser wall: they've already seen their score and every specific gap above,
   // so this states plainly what's included rather than dangling it.
-  const payBase = process.env.STRIPE_PAYMENT_LINK || "";
+  const payBase = payLinkFor(client);
   const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(loc) : "";
   const lockedBlock = `<div class="sec">Fixing it</div><div class="card">
       <p style="margin:0 0 8px"><b>Your subscription includes the profile work.</b></p>

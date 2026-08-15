@@ -297,6 +297,14 @@
           <input id="f_placeId" placeholder="ChIJ… (for monthly rating sync)" />
         </div>
         <div>
+          <label>Plan <span class="muted" style="font-weight:400;text-transform:none;">— what they're billed. Free never pauses and is never asked to subscribe.</span></label>
+          <select id="f_plan">
+            <option value="standard">Standard — £35/mo</option>
+            <option value="founding">Founding — £25/mo for life (first 20)</option>
+            <option value="free">Free — comped (family, friends, testing)</option>
+          </select>
+        </div>
+        <div>
           <label>Google review link <span class="muted" style="font-weight:400;text-transform:none;">— where a tap lands. Beats Place ID. Must be a google.com or g.page URL.</span></label>
           <input id="f_googleReviewUrl" placeholder="https://g.page/r/…/review" />
         </div>
@@ -465,6 +473,7 @@
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
     document.getElementById("f_hardware").value = "stand";
+    document.getElementById("f_plan").value = "standard";
     document.getElementById("f_standState").value = "test";
     document.getElementById("f_locationId").disabled = false;
     document.getElementById("formTitle").textContent = "Add a client";
@@ -516,6 +525,7 @@
     ["Public sign-off name", "publicSignOffName"],
     ["Brand voice", "brandVoice"],
     ["Subscription", "subscriptionStatus"],
+    ["Plan", "_price"],
     ["Trial length", "_trialLength"],
     ["Referred by", "_referredBy"],
     ["Referrals sent", "_referralsSent"],
@@ -640,6 +650,10 @@
     }
     // What they picked at signup. Older records predate the question, so say so
     // rather than silently defaulting them to a stand and posting the wrong thing.
+    const _plan = ["standard","founding","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
+    cc._price = _plan === "founding" ? "\u2b50 Founding \u00a325/mo"
+              : _plan === "free"     ? "\u{1F381} Free \u2014 comped"
+              : "\u00a335/mo";
     cc._hardware = c.hardware === "keyfob" ? "\u{1F511} Key fob"
                  : c.hardware === "stand"  ? "\u{1F4CD} Tap stand"
                  : "Not asked — check with them";
@@ -808,6 +822,7 @@
     document.getElementById("f_googleAccountId").value = c.googleAccountId || "";
     document.getElementById("f_placeId").value = c.placeId || "";
     document.getElementById("f_googleReviewUrl").value = c.googleReviewUrl || "";
+    document.getElementById("f_plan").value = ["standard","founding","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
     document.getElementById("f_logoUrl").value = c.logoUrl || "";
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
@@ -845,6 +860,7 @@
       googleAccountId: document.getElementById("f_googleAccountId").value.trim(),
       placeId: document.getElementById("f_placeId").value.trim(),
       googleReviewUrl: document.getElementById("f_googleReviewUrl").value.trim(),
+      plan: document.getElementById("f_plan").value,
       logoUrl: document.getElementById("f_logoUrl").value.trim(),
       voicePerspective: document.getElementById("f_voicePerspective").value,
       publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),

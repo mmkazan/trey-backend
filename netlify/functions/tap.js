@@ -1,6 +1,41 @@
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 
+// --- Which plan is this client on? -------------------------------------------
+//   "founding" -> £25/mo for life (the first 20; index.html advertises it)
+//   "standard" -> £35/mo (the default for everyone else)
+//   "free"     -> complimentary. Family, friends and test accounts. Never
+//                 billed, never nagged to subscribe, never paused.
+//
+// Centralised because these decisions appear on FIVE separate pages — the inbox,
+// the monthly report, the approve page, the profile-check paywall and the paused
+// stand. A founding member quoted £25 in one place and £35 in another doesn't
+// read that as a bug, they read it as a bait-and-switch; and a comped friend
+// being asked to pay is worse.
+function planOf(client) {
+  const p = String((client && client.plan) || "").toLowerCase();
+  if (p === "founding" || p === "free" || p === "standard") return p;
+  // Back-compat with the short-lived boolean this replaced.
+  if (client && client.foundingMember === true) return "founding";
+  return "standard";
+}
+
+// A comped account. Treated as permanently subscribed: no payment link, no
+// upgrade banner, no paywall, and the stand never pauses.
+function isComped(client) {
+  return planOf(client) === "free";
+}
+
+// If the founding link isn't configured we fall back to standard rather than
+// showing nothing — a missing env var must not leave an unpayable page.
+function payLinkFor(client) {
+  const plan = planOf(client);
+  if (plan === "free") return "";   // nothing to sell them
+  if (plan === "founding") return process.env.STRIPE_FOUNDING_PAYMENT_LINK || process.env.STRIPE_PAYMENT_LINK || "";
+  return process.env.STRIPE_PAYMENT_LINK || "";
+}
+
+
 // Normalise a stored phone number to E.164 for Twilio.
 //
 // WHY — 15 Aug, Raven Holistics' first real review alert died on Twilio 21211,
@@ -488,6 +523,7 @@ function activatedPage(client, target) {
 // Should the stand be paused for this client (trial over, not subscribed)?
 function isPaused(client) {
   if (!client) return false;
+  if (isComped(client)) return false;   // comped: never pauses, whatever the status says
   const status = client.subscriptionStatus;
   if (status === "active") return false;
   if (status === "paused" || status === "past_due" || status === "cancelled" || status === "canceled" || status === "expired") return true;
@@ -513,6 +549,7 @@ function displayName(client) {
 //   "trial_ended" — the free trial (14 days, or 30 if referred) elapsed without subscribing
 function pauseReason(client) {
   if (!client) return null;
+  if (isComped(client)) return null;
   const s = client.subscriptionStatus;
   if (s === "paused" || s === "past_due") return "payment";
   if (s === "cancelled" || s === "canceled" || s === "expired") return "cancelled";
@@ -528,7 +565,7 @@ function pausedPage(client, locationId, reasonOverride) {
   const reason = reasonOverride || pauseReason(client) || "trial_ended";
   const isPayment = reason === "payment";
   const isCancelled = reason === "cancelled";
-  const payBase = process.env.STRIPE_PAYMENT_LINK || "";
+  const payBase = payLinkFor(client);
   const payUrl = payBase
     ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "")
     : "";
