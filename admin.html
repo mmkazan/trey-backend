@@ -397,7 +397,9 @@
       <div class="detailGrid" id="detailGrid"></div>
       <div class="actions">
         <button class="btn-primary" onclick="editFromDetail()">Edit client</button>
+        <button class="btn-danger" onclick="deleteFromDetail()">Delete client</button>
       </div>
+      <div id="detailStatus" style="font-size:13px;margin-top:10px;min-height:18px;"></div>
     </div>
 
     <div class="card">
@@ -505,6 +507,7 @@
     ["Business name", "businessName"],
     ["Business type", "businessType"],
     ["WhatsApp number", "phone"],
+    ["Duplicate number", "_dupePhone"],
     ["Email", "email"],
     ["Contact name", "_contactName"],
     ["Company address", "companyAddress"],
@@ -668,6 +671,20 @@
       const _end = c.currentPeriodEnd ? new Date(Number(c.currentPeriodEnd) * 1000).toLocaleDateString() : "date unknown";
       cc._cancelling = "\u23F3 Pending \u2014 access ends " + _end;
     }
+    // Duplicate phone detection. Two records sharing a number is how the WhatsApp
+    // reply ended up handing out a DEAD account's inbox link on 15 Aug — the
+    // lookup can only guess, and the guess was wrong. Surface it here so it gets
+    // cleaned up rather than silently worked around.
+    const _tail = String(c.phone || "").replace(/\D/g, "").slice(-9);
+    if (_tail.length === 9) {
+      const _dupes = (clientsCache || []).filter((x) =>
+        x.locationId !== c.locationId &&
+        String(x.phone || "").replace(/\D/g, "").slice(-9) === _tail);
+      if (_dupes.length) {
+        cc._dupePhone = "\u26A0\uFE0F Shared with " +
+          _dupes.map((x) => (x.businessName || x.locationId) + " (" + (x.subscriptionStatus || "no status") + ")").join(", ");
+      }
+    }
     cc._price = _plan === "founding" ? "\u2b50 Founding \u00a325/mo"
               : _plan === "annual"   ? "\u{1F4C5} Annual \u00a3350/yr"
               : _plan === "free"     ? "\u{1F381} Free \u2014 comped"
@@ -828,6 +845,46 @@
     filterClients();
   }
   function showDetailByLoc(loc) { const c = clientsCache.find((x) => x.locationId === loc); if (c) showDetail(c); }
+// Delete a client and everything keyed to it. Irreversible, so it asks you to
+  // type the business name — the same guard the API enforces. This exists mainly
+  // to clear up near-duplicates (two records for one business), which is exactly
+  // the case where deleting the wrong one is easiest.
+  async function deleteFromDetail() {
+    const loc = document.getElementById("detailCard").dataset.locationId;
+    const c = clientsCache.find((x) => x.locationId === loc);
+    if (!c) return;
+    const name = (c.businessName || "").trim();
+    const el = document.getElementById("detailStatus");
+    const typed = window.prompt(
+      "This permanently deletes " + name + " and ALL of its taps, reviews, replies and history.\n\n" +
+      "This cannot be undone.\n\nType the business name to confirm:");
+    if (typed === null) return;
+    if (typed.trim() !== name) {
+      el.textContent = "Name didn't match — nothing was deleted.";
+      el.className = "error";
+      return;
+    }
+    el.textContent = "Deleting…"; el.className = "";
+    try {
+      const res = await fetch(API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "delete", locationId: loc, confirmName: typed.trim() }),
+      });
+      if (res.status === 403) { logout(); return; }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      const bits = Object.entries(data.removed || {}).map(([k, v]) => v + " " + k).join(", ");
+      el.textContent = "Deleted " + (data.businessName || loc) + (bits ? " — removed " + bits : "");
+      el.className = "success";
+      hideDetail();
+      loadClients();
+    } catch (err) {
+      el.textContent = "Couldn't delete: " + err.message;
+      el.className = "error";
+    }
+  }
+
   function editClientByLoc(loc) { const c = clientsCache.find((x) => x.locationId === loc); if (c) editClient(c); }
 
   function editClient(c) {

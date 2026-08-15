@@ -113,6 +113,28 @@ function normaliseCmd(body) {
   return String(body || "").toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
 }
 
+// How good a match is this client, when a number matches MORE THAN ONE?
+// Higher wins; ties break on newest.
+//
+// WHY THIS EXISTS — 15 Aug. One phone number, two client records: an old
+// deactivated Aqua Rhythm and a new one from the self-serve signup. The lookup
+// below returned whichever the blob store happened to list first, and that was
+// the dead one. So the WhatsApp reply handed over the OLD account's inbox link,
+// every page it opened said "your stand is paused" and locked the profile work,
+// while the new stand was quietly working perfectly. Hours lost to a
+// first-match-wins loop.
+//
+// Worse than the wrong link: a STOP reply would have written the opt-out flags
+// onto the dead record and left the live one still messaging them.
+function matchRank(c) {
+  if (String((c && c.plan) || "").toLowerCase() === "free") return 4;   // comped, always live
+  const s = String((c && c.subscriptionStatus) || "").toLowerCase();
+  if (s === "active" || s === "") return 4;                             // "" = grandfathered
+  if (s === "trial") return 3;
+  if (s === "paused" || s === "past_due") return 2;
+  return 1;                                                             // cancelled / expired
+}
+
 // Find the client whose stored phone matches this WhatsApp number. Compares the
 // last 9 digits so +447700900123 / 07700900123 / 447700900123 all match.
 async function findClientByPhone(digits) {
@@ -122,12 +144,30 @@ async function findClientByPhone(digits) {
   try {
     const store = blobsStore("clients");
     const { blobs } = await store.list();
+    const matches = [];
     for (const b of blobs) {
       const c = await store.get(b.key, { type: "json" }).catch(() => null);
       if (!c || !c.phone) continue;
       const cd = String(c.phone).replace(/\D/g, "");
-      if (cd.length >= 9 && cd.slice(-9) === tail) return { key: b.key, client: c, store };
+      if (cd.length >= 9 && cd.slice(-9) === tail) matches.push({ key: b.key, client: c, store });
     }
+    if (!matches.length) return null;
+    if (matches.length === 1) return matches[0];
+
+    matches.sort((a, b) => {
+      const r = matchRank(b.client) - matchRank(a.client);
+      if (r !== 0) return r;
+      return new Date(b.client.createdAt || 0) - new Date(a.client.createdAt || 0);
+    });
+    // Loud on purpose: duplicates are a data problem to clean up, not something
+    // to keep silently working around.
+    console.warn(
+      `[whatsapp-inbound] ${matches.length} clients share the number ending ${tail} — using "${matches[0].key}" ` +
+      `(${matches[0].client.subscriptionStatus || "no status"}). Others: ` +
+      matches.slice(1).map((m) => `${m.key} (${m.client.subscriptionStatus || "no status"})`).join(", ") +
+      ". Clean these up in admin."
+    );
+    return matches[0];
   } catch (e) {
     console.error("[whatsapp-inbound] client lookup failed:", e.message);
   }

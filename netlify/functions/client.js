@@ -32,6 +32,96 @@ function adminAuthorized(event, body) {
   return a.length === b.length && require("crypto").timingSafeEqual(a, b);
 }
 
+// --- DELETE a client and everything keyed to it -------------------------------
+//
+//   POST { token, action: "delete", locationId, confirmName }
+//
+// A client isn't one record. Its history is spread across sixteen blob stores,
+// and a naive delete of just the `clients` entry leaves orphaned taps, reviews
+// and tallies that quietly inflate later reports and can never be traced back to
+// anything. So this removes the lot, and reports exactly what it removed.
+//
+// TYPE-TO-CONFIRM. `confirmName` must equal the stored businessName. This is
+// irreversible — there is no undo and no soft-delete tier — and the whole reason
+// it exists is to clean up NEAR-DUPLICATES, which is precisely the situation
+// where deleting the wrong one is easiest and most costly. Making you type the
+// name is cheap insurance against removing a live customer's review history.
+//
+// Also worth knowing: this is what makes a GDPR erasure request answerable. Trey
+// is a UK data controller holding owner names and phone numbers, so "delete
+// everything you hold on me" has to be a thing the system can actually do.
+const DELETE_PREFIXES = [
+  // [store, (loc) => [prefixes...]]
+  ["taptally",     (l) => [`${l}:`]],
+  ["reviewtally",  (l) => [`${l}:`]],
+  ["ratinghistory",(l) => [`${l}:`]],
+  ["reviews",      (l) => [`review:${l}:`]],
+  ["reportssent",  (l) => [`monthly:${l}:`, `weekly:${l}:`]],
+  ["postsent",     (l) => [`post:${l}:`]],
+  ["photosent",    (l) => [`photo:${l}:`]],
+  ["posts",        (l) => [`pending:${l}:`]],
+  ["reviewsseen",  (l) => [`${l}:`, `baseline:${l}`]],
+];
+const DELETE_EXACT = ["clients", "taps", "stats"];
+// Indexes keyed by something else entirely, whose VALUE points back at us.
+const DELETE_BY_VALUE = ["refcodes", "stripecustomers", "photoreq", "approvalpending"];
+
+async function deleteClient(locationId, confirmName) {
+  const clients = blobsStore("clients");
+  const client = await clients.get(locationId, { type: "json" });
+  if (!client) return { statusCode: 404, body: JSON.stringify({ error: "Unknown client" }) };
+
+  const expected = String(client.businessName || "").trim();
+  if (String(confirmName || "").trim() !== expected) {
+    return { statusCode: 400, body: JSON.stringify({
+      error: `To delete this client, type its business name exactly: "${expected}"`,
+    }) };
+  }
+
+  const removed = {};
+  const bump = (store, n) => { if (n) removed[store] = (removed[store] || 0) + n; };
+
+  // Reviews are special: the per-review "pending:<reviewId>" record is NOT keyed
+  // by locationId, so it can only be found by reading the review first.
+  try {
+    const reviews = blobsStore("reviews");
+    const { blobs } = await reviews.list({ prefix: `review:${locationId}:` });
+    for (const b of blobs) {
+      const rec = await reviews.get(b.key, { type: "json" }).catch(() => null);
+      if (rec && rec.reviewId) await reviews.delete(`pending:${rec.reviewId}`).catch(() => {});
+    }
+  } catch (e) { console.error("[client] pending review sweep failed:", e.message); }
+
+  for (const [name, prefixesFor] of DELETE_PREFIXES) {
+    const store = blobsStore(name);
+    for (const prefix of prefixesFor(locationId)) {
+      try {
+        const { blobs } = await store.list({ prefix });
+        for (const b of blobs) { await store.delete(b.key).catch(() => {}); bump(name, 1); }
+      } catch (e) { console.error(`[client] delete ${name}/${prefix} failed:`, e.message); }
+    }
+  }
+
+  for (const name of DELETE_EXACT) {
+    try { await blobsStore(name).delete(locationId); bump(name, 1); }
+    catch (e) { /* absent is fine */ }
+  }
+
+  for (const name of DELETE_BY_VALUE) {
+    try {
+      const store = blobsStore(name);
+      const { blobs } = await store.list();
+      for (const b of blobs) {
+        const v = await store.get(b.key, { type: "json" }).catch(() => null);
+        if (v && v.locationId === locationId) { await store.delete(b.key).catch(() => {}); bump(name, 1); }
+      }
+    } catch (e) { console.error(`[client] delete ${name} by value failed:`, e.message); }
+  }
+
+  console.warn(`[client] DELETED "${expected}" (${locationId}) — removed: ${JSON.stringify(removed)}`);
+  return { statusCode: 200, body: JSON.stringify({ success: true, deleted: locationId, businessName: expected, removed }) };
+}
+
 // Coerce a rating/count field to a finite number (or undefined) so every write
 // path stores numbers — the report page and senders expect numbers, but some
 // onboarding forms post strings.
@@ -91,6 +181,13 @@ exports.handler = async (event) => {
       tapReviewsThisMonth: monthReviews.tapReviews || 0,
       organicReviewsThisMonth: monthReviews.organicReviews || 0,
     };
+  }
+
+  if (event.httpMethod === "POST" && requestBody && requestBody.action === "delete") {
+    if (!requestBody.locationId) {
+      return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
+    }
+    return await deleteClient(requestBody.locationId, requestBody.confirmName);
   }
 
   if (event.httpMethod === "POST") {
