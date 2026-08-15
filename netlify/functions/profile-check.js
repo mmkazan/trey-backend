@@ -46,7 +46,16 @@ function isComped(client) {
 function payLinkFor(client) {
   const plan = planOf(client);
   if (plan === "free") return "";   // nothing to sell them
-  if (plan === "founding") return process.env.STRIPE_FOUNDING_PAYMENT_LINK || process.env.STRIPE_PAYMENT_LINK || "";
+  if (plan === "founding") {
+    const founding = process.env.STRIPE_FOUNDING_PAYMENT_LINK;
+    if (founding) return founding;
+    // Fall back so the page stays payable — but say so LOUDLY. Silently
+    // charging a founding member the standard price is the kind of failure
+    // nobody notices until they complain, and by then you have billed them
+    // £35 for a plan you promised at £25.
+    console.warn("[pricing] STRIPE_FOUNDING_PAYMENT_LINK is not set — a founding member is being shown the STANDARD price. Set it in Netlify and redeploy.");
+    return process.env.STRIPE_PAYMENT_LINK || "";
+  }
   return process.env.STRIPE_PAYMENT_LINK || "";
 }
 
