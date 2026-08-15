@@ -349,14 +349,27 @@ exports.handler = async (event) => {
     return { statusCode: 303, headers: { Location: safeReviewTarget(googleUrl, client, locationId), "Cache-Control": "no-store" }, body: "" };
   }
 
-  // "Ready to send" stand, not yet activated -> show the activation page (driver
-  // notice + the owner's Activate button) instead of redirecting to Google.
-  if (notStarted && client && client.standMode === "ship") {
+  // Not yet activated -> show the activation page (delivery-driver notice + the
+  // owner's Activate button) instead of redirecting to Google.
+  //
+  // This is the DEFAULT, deliberately. It used to fire only when standMode was
+  // explicitly "ship", which meant a stand provisioned without that flag skipped
+  // the gate entirely: it passed straight through to Google, never stamped
+  // trialStartedAt, and so never started the trial clock — free service forever.
+  // Now only an explicit "test" stand (an admin checking the chip before dispatch)
+  // bypasses activation, so a forgotten flag fails CLOSED ("please activate")
+  // rather than free.
+  //
+  // The trial therefore starts on the business's own first genuine tap, when they
+  // press Activate and switch the Google pass-through on — not while the stand is
+  // still in the post.
+  if (notStarted && client && client.standMode !== "test") {
     return activationPage(client, locationId);
   }
 
-  // Otherwise: an admin "Test" stand (redirect to Google so it can be checked,
-  // but don't count), or a live/active/grandfathered stand (redirect AND count).
+  // Otherwise: an explicit admin "Test" stand (redirect to Google so the chip can
+  // be checked, but don't count and don't start the clock), or a live / active /
+  // grandfathered stand (redirect AND count).
   if (!notStarted) {
     try {
       const tapsStore = blobsStore("taps");

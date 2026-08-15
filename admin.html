@@ -503,6 +503,9 @@
     ["Referred by", "_referredBy"],
     ["Referrals sent", "_referralsSent"],
     ["Free months owed", "_creditsOwed"],
+    ["Asking", "_askHealth"],
+    ["Messages", "_optOut"],
+    ["Stand-only until", "_hardwareUntil"],
     ["Stand", "_standState"],
     ["Trial started", "_trialStarted"],
     ["Taps since sign-up", "tapsSinceSignup"],
@@ -529,9 +532,27 @@
     return `<span class="subpill ${cls}">${esc(label)}</span>`;
   }
 
+  // --- Ask health (mirrors netlify/functions/ask-health.js — keep in sync) ------
+  // Is this client's team actually asking customers to tap? Falling taps is the
+  // earliest churn signal Trey has, and at this scale spotting it here and
+  // picking up the phone beats any automated nudge.
+  function askHealthRow(c) {
+    const started = c.trialStartedAt ? new Date(c.trialStartedAt).getTime() : NaN;
+    if (!isFinite(started)) return { label: "—", cls: "ah-none" };
+    const days = Math.max(0, Math.floor((Date.now() - started) / 86400000));
+    if (days < 3) return { label: "Just started", cls: "ah-none" };
+    const taps = Number(c.tapsSinceSignup) || 0;
+    const perWeek = Math.round((taps / Math.max(1, days / 7)) * 10) / 10;
+    if (taps === 0) return { label: "🔴 No taps yet", cls: "ah-bad" };
+    if (perWeek < 2) return { label: "🟠 Quiet · " + perWeek + "/wk", cls: "ah-warn" };
+    if (perWeek < 6) return { label: "🟢 " + perWeek + "/wk", cls: "ah-ok" };
+    return { label: "🟢 " + perWeek + "/wk", cls: "ah-ok" };
+  }
+
   // Which single Stand-state option is a client currently in (for the edit form).
   function currentStandState(c) {
     const s = String(c.subscriptionStatus || "").toLowerCase();
+    if (c.hardwareOnly) return "hardware";           // checked first — subscriptionStatus stays "cancelled"
     if (s === "active" || s === "") return "active"; // no status = grandfathered active
     if (s === "paused" || s === "past_due") return "deact_payment";
     if (s === "cancelled" || s === "canceled" || s === "expired") return "deact_cancelled";
@@ -586,6 +607,20 @@
     // have actually SUBSCRIBED but haven't been credited — credit is never earned
     // at signup, only on conversion.
     cc._trialLength = (Number(c.trialDays) || 14) + " days";
+    cc._askHealth = askHealthRow(c).label;
+
+    // Opt-out state. nudgesOptOut / reportsOptOut are set by a STOP reply
+    // (whatsapp-inbound.js) and are already honoured by both schedulers.
+    if (c.nudgesOptOut === true || c.reportsOptOut === true) {
+      const when = c.optedOutAt ? new Date(c.optedOutAt).toLocaleDateString() : "";
+      cc._optOut = "\u{1F515} Opted OUT" + (when ? " on " + when : "") +
+        (c.optOutSource === "whatsapp-stop" ? " (replied STOP)" : "");
+    } else {
+      cc._optOut = "Opted in";
+    }
+    if (c.hardwareOnly && c.hardwareOnlyUntil) {
+      cc._hardwareUntil = new Date(c.hardwareOnlyUntil).toLocaleDateString();
+    }
     if (c.referredBy) {
       const ref = (clientsCache || []).find((x) => x.locationId === c.referredBy);
       cc._referredBy = ref ? (ref.businessName || c.referredBy) : c.referredBy;

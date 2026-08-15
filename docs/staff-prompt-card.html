@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>Trey — staff prompt cards (print)</title>
+<style>
+  /* Four cards to an A4 sheet, cut along the guides. Print at 100% scale,
+     no "fit to page". Landscape or portrait both work; portrait is tidier. */
+  @page { size: A4; margin: 10mm; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;background:#eef3fc}
+  .sheet{width:190mm;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:6mm;padding:6mm 0}
+  .card{background:#fff;border:1px dashed #c7d2fe;border-radius:5mm;padding:9mm 8mm;min-height:62mm;display:flex;flex-direction:column}
+  .brand{display:flex;align-items:center;gap:2.5mm;margin-bottom:5mm}
+  .brand svg{width:7mm;height:7mm}
+  .brand span{font-weight:800;font-size:11pt;letter-spacing:-.3px}
+  h2{font-size:13.5pt;margin:0 0 3mm;letter-spacing:-.3px;line-height:1.25}
+  .say{background:#eef2ff;border-left:1mm solid #4338ca;border-radius:0 3mm 3mm 0;padding:4mm 5mm;font-size:11.5pt;line-height:1.45;font-style:italic;color:#1e1b4b;margin:0 0 4mm}
+  ul{margin:0;padding-left:5mm;font-size:9.5pt;color:#475569;line-height:1.6}
+  li{margin-bottom:1.5mm}
+  .foot{margin-top:auto;padding-top:4mm;font-size:8pt;color:#94a3b8;border-top:.3mm solid #e2e8f0}
+  .note{max-width:190mm;margin:8mm auto 0;font-size:9.5pt;color:#475569;line-height:1.6;background:#fff;border-radius:4mm;padding:6mm 7mm}
+  .note b{color:#0f172a}
+  @media print { body{background:#fff} .note{display:none} .card{border-color:#cbd5e1} }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <!-- Card 1 — counter / till -->
+  <div class="card">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.3"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+      <span>trey</span>
+    </div>
+    <h2>One line. Ten seconds. More reviews.</h2>
+    <p class="say">“If you were happy today — would you mind giving that a tap? Takes ten seconds.”</p>
+    <ul>
+      <li>Ask <b>as they pay</b>, while they're still in front of you</li>
+      <li>Only ask people who seem pleased</li>
+      <li>Point at the stand — don't explain it, they'll work it out</li>
+      <li>If they say no, that's fine. Move on.</li>
+    </ul>
+    <div class="foot">Every tap is a review that wouldn't have happened.</div>
+  </div>
+
+  <!-- Card 2 — on the road -->
+  <div class="card">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.3"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+      <span>trey</span>
+    </div>
+    <h2>Out on a job? Same line, keyring instead.</h2>
+    <p class="say">“All done — if you were happy with it, would you mind tapping this? Two seconds.”</p>
+    <ul>
+      <li>Ask <b>when you're settling up</b>, or over the brew</li>
+      <li>Hold the fob out — let them bring their phone to it</li>
+      <li>Phone not playing? Turn it over, point the camera at the QR</li>
+      <li>Older customers: “hold your phone near this”</li>
+    </ul>
+    <div class="foot">Most of your work comes from Google. This is how you feed it.</div>
+  </div>
+
+  <!-- Card 3 — why it matters -->
+  <div class="card">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.3"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+      <span>trey</span>
+    </div>
+    <h2>Why we bother asking</h2>
+    <p class="say">One extra star on Google is worth 5–9% more revenue. That's the whole reason.</p>
+    <ul>
+      <li>Nearly everyone checks reviews before choosing</li>
+      <li>Most happy customers <b>would</b> leave one — they just forget</li>
+      <li>The stand removes the faff. The asking is still down to us.</li>
+      <li>Ten asks a week beats one big push a month</li>
+    </ul>
+    <div class="foot">Harvard Business School (Yelp study)</div>
+  </div>
+
+  <!-- Card 4 — the rules -->
+  <div class="card">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.3"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round" opacity="0.6"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="6" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+      <span>trey</span>
+    </div>
+    <h2>Two things we never do</h2>
+    <p class="say">Never offer anything for a review. No discounts, no free coffee, no prize draw.</p>
+    <ul>
+      <li>It's against Google's rules and can get reviews removed</li>
+      <li><b>Never ask only the happy ones on purpose</b> — offer the tap to everyone you served well</li>
+      <li>Never leave a review for your own business</li>
+      <li>A bad review isn't a disaster — the owner replies to it, and that counts for more</li>
+    </ul>
+    <div class="foot">Asking is fine. Paying for it isn't.</div>
+  </div>
+
+</div>
+
+<div class="note">
+  <b>Printing:</b> A4, 100% scale (turn off “fit to page”), then cut along the dashed guides.
+  Four cards per sheet. Card&nbsp;1 is for a counter or till, card&nbsp;2 for anyone working on the
+  road, cards&nbsp;3 and&nbsp;4 are for the staff room. Laminate card&nbsp;1 if it's living next to a
+  coffee machine. This note doesn't print.
+</div>
+</body>
+</html>

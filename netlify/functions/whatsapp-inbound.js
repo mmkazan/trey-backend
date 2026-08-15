@@ -3,6 +3,13 @@
 // Default behaviour: the Trey number sends automated alerts and isn't monitored,
 // so any inbound message gets a short "how to reach us" auto-reply.
 //
+// STOP / START are handled FIRST, before anything else, and always — every
+// automated message we send is a marketing message to a business, and under UK
+// PECR soft opt-in only holds if opting out is trivial and honoured. STOP sets
+// nudgesOptOut + reportsOptOut on the matching client (both already checked by
+// the schedulers), and is recorded with a timestamp so we can show when and how
+// they opted out.
+//
 // PHASE 2 photo branch (DORMANT unless TREY_PHOTO_UPLOAD="true" AND the Google
 // API is live): if a client replies to the quarterly photo nudge with photos
 // AND they have an open photo-request window (opened by photo-refresh-send.mjs),
@@ -15,7 +22,62 @@ const googleApi = require("./google-api.js");
 
 const SUPPORT_REPLY =
   "Thanks for messaging Trey. This number sends your review-approval alerts and isn't monitored for replies. " +
-  "For any help, please call or message us on +44 7941 052034, or email mmkazan@gmail.com and we'll get straight back to you.";
+  "For any help, please call or message us on +44 7941 052034, or email info@trey.today and we'll get straight back to you.";
+
+// Anything a person might plausibly send to make us stop. Kept deliberately
+// broad — a missed opt-out is a complaint; a false positive is one auto-reply.
+const STOP_WORDS  = ["stop", "stopall", "stop all", "unsubscribe", "cancel", "quit", "end", "optout", "opt out", "no more", "remove me"];
+const START_WORDS = ["start", "unstop", "resubscribe", "resume", "opt in", "optin", "yes please"];
+
+const STOP_REPLY =
+  "Done — you won't get any more messages from Trey. If you change your mind, just reply START. " +
+  "For anything else, email info@trey.today.";
+const START_REPLY =
+  "Welcome back — messages are switched back on. Reply STOP at any time to turn them off again.";
+
+// Normalise an inbound message for matching: lowercase, strip punctuation and
+// surrounding whitespace, collapse inner spaces.
+function normaliseCmd(body) {
+  return String(body || "").toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// Find the client whose stored phone matches this WhatsApp number. Compares the
+// last 9 digits so +447700900123 / 07700900123 / 447700900123 all match.
+async function findClientByPhone(digits) {
+  if (!digits) return null;
+  const tail = digits.slice(-9);
+  if (tail.length < 9) return null;
+  try {
+    const store = blobsStore("clients");
+    const { blobs } = await store.list();
+    for (const b of blobs) {
+      const c = await store.get(b.key, { type: "json" }).catch(() => null);
+      if (!c || !c.phone) continue;
+      const cd = String(c.phone).replace(/\D/g, "");
+      if (cd.length >= 9 && cd.slice(-9) === tail) return { key: b.key, client: c, store };
+    }
+  } catch (e) {
+    console.error("[whatsapp-inbound] client lookup failed:", e.message);
+  }
+  return null;
+}
+
+async function setOptOut(match, optedOut) {
+  if (!match) return false;
+  try {
+    await match.store.setJSON(match.key, {
+      ...match.client,
+      nudgesOptOut: optedOut,
+      reportsOptOut: optedOut,
+      optedOutAt: optedOut ? new Date().toISOString() : "",
+      optOutSource: optedOut ? "whatsapp-stop" : "",
+    });
+    return true;
+  } catch (e) {
+    console.error("[whatsapp-inbound] opt-out write failed:", e.message);
+    return false;
+  }
+}
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
@@ -38,15 +100,35 @@ function parseBody(event) {
 }
 
 exports.handler = async (event) => {
+  const p = parseBody(event);
+  const fromDigits = String(p.From || "").replace(/\D/g, "");
+
+  // --- STOP / START — always, and BEFORE anything else -----------------------
+  // This must not sit behind the uploadsOn check below, or an opt-out would be
+  // silently ignored whenever photo uploads are switched off (i.e. right now).
+  const cmd = normaliseCmd(p.Body);
+  if (cmd) {
+    if (STOP_WORDS.includes(cmd)) {
+      const match = await findClientByPhone(fromDigits);
+      await setOptOut(match, true);
+      if (!match) console.warn("[whatsapp-inbound] STOP from an unknown number — nothing to flag.");
+      return twiml(STOP_REPLY);
+    }
+    if (START_WORDS.includes(cmd)) {
+      const match = await findClientByPhone(fromDigits);
+      await setOptOut(match, false);
+      return twiml(START_REPLY);
+    }
+  }
+
   // Photo uploads only run when explicitly switched on AND Google creds exist.
   const uploadsOn = process.env.TREY_PHOTO_UPLOAD === "true" && googleApi.isEnabled();
   if (!uploadsOn) return twiml(SUPPORT_REPLY);
 
-  const p = parseBody(event);
   const numMedia = parseInt(p.NumMedia || "0", 10) || 0;
   if (numMedia < 1) return twiml(SUPPORT_REPLY);
 
-  const digits = String(p.From || "").replace(/\D/g, "");
+  const digits = fromDigits;
   if (!digits) return twiml(SUPPORT_REPLY);
 
   // Is there an open "send us your photos" window for this number?

@@ -1,5 +1,7 @@
 const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
+const askHealthLib = require("./ask-health.js");
+const audit = require("./profile-audit.js");
 
 // Enhanced Monthly Report — the "read more" page the monthly WhatsApp links to.
 //
@@ -427,6 +429,30 @@ function renderReport(locationId, month, data, theme) {
     </div>`;
   }
 
+  // --- "Your asking" coaching -------------------------------------------------
+  // The stand doesn't ask — a person does. Taps are counted separately from
+  // reviews precisely so we can see whether that's happening and coach it, which
+  // is the single biggest lever on whether a trial converts. Only rendered when
+  // there's something worth saying (severity > 0) OR the asking is going well
+  // enough to be worth the encouragement.
+  const ah = askHealthLib.askHealth({
+    client,
+    taps,
+    reviews: Number(revMonth.tapReviews || 0),
+    weeks: 4.3,                                  // one month
+    trade: audit.tradeOf(client.businessType),
+  });
+  const askTone = ah.severity === 2 ? "ask-act" : ah.severity === 1 ? "ask-soft" : "ask-good";
+  const askBlock = (ah.state === "waiting" || ah.state === "not_activated")
+    ? ""
+    : `<div class="card asking ${askTone}">
+        <div class="section-label">Your asking</div>
+        <p class="askhead">${escapeHtml(ah.headline)}</p>
+        <p class="askdetail">${escapeHtml(ah.detail)}</p>
+        ${ah.tipRelevant ? `<p class="asktip"><b>The line that works:</b> ${escapeHtml(ah.tip)}</p>` : ""}
+        <p class="askstat">${taps} ${taps === 1 ? "tap" : "taps"} this month${ah.conversion !== null ? ` &middot; ${ah.conversion}% became reviews` : ""}</p>
+      </div>`;
+
   // --- Footer: optional link to their Google profile ---
   const profileUrl = client.placeId
     ? `https://search.google.com/local/reviews?placeid=${encodeURIComponent(client.placeId)}`
@@ -490,6 +516,14 @@ function renderReport(locationId, month, data, theme) {
   .tlabel{font-size:13px;color:#64748b;margin-top:8px;line-height:1.35}
   .section-label{font-size:12px;font-weight:700;letter-spacing:0.6px;color:var(--green)}
   .refer{margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:13px;opacity:.85}
+  .asking{border-left:4px solid #94a3b8}
+  .asking.ask-act{border-left-color:#f59e0b;background:#fffbeb}
+  .asking.ask-soft{border-left-color:#6366f1;background:#eef2ff}
+  .asking.ask-good{border-left-color:#16a34a;background:#f0fdf4}
+  .askhead{font-size:17px;font-weight:800;margin:6px 0 4px;letter-spacing:-.3px}
+  .askdetail{font-size:14px;color:#475569;margin:0 0 8px;line-height:1.55}
+  .asktip{font-size:14px;color:#0f172a;margin:0 0 8px;line-height:1.55;background:rgba(255,255,255,.75);border-radius:8px;padding:9px 11px}
+  .askstat{font-size:12.5px;color:#64748b;margin:0}
   .big{font-size:19px;line-height:1.45;margin:10px 0 0;color:var(--slate)}
   .big strong{color:var(--green)}
   .sub{font-size:14px;color:#64748b;margin:10px 0 0}
@@ -549,6 +583,8 @@ ${trialBanner(client, locationId)}
     </div>
 
     <div class="tiles">${tiles}</div>
+
+    ${askBlock}
 
     ${contribution}
     ${sinceJoined}
