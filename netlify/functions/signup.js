@@ -17,6 +17,24 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// Store phone numbers in E.164, never the pretty display format.
+//
+// signup.html formats as you type ("+44 7933189216") because that reads better
+// in the box — but that space is a hard failure at Twilio (21211, "not a valid
+// phone number"). It killed Raven Holistics' first review alert on 15 Aug.
+// Format for humans on screen; store the machine form.
+function toE164(phone) {
+  const raw = String(phone || "").trim();
+  if (!raw) return "";
+  const d = raw.replace(/[^\d]/g, "");
+  if (!d) return "";
+  if (raw.startsWith("+")) return "+" + d;
+  if (d.startsWith("00")) return "+" + d.slice(2);
+  if (d.startsWith("0")) return "+44" + d.slice(1);
+  if (d.startsWith("44")) return "+" + d;
+  return "+" + d;
+}
+
 // Replace ASCII control characters with spaces, collapse whitespace, trim, cap.
 // (Loop over char codes so no control characters appear in this source file.)
 function clean(v, max) {
@@ -234,7 +252,7 @@ exports.handler = async (event) => {
   if (body.website || body.hp) return { statusCode: 200, body: JSON.stringify({ success: true }) };
 
   const businessName = clean(body.businessName, 120);
-  const phone = clean(body.phone, 40);
+  const phone = toE164(clean(body.phone, 40));
   const email = clean(body.email, 120);
 
   if (!businessName || (!phone && !email)) {

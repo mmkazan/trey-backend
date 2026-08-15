@@ -1,6 +1,21 @@
 const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
 
+// Normalise a phone number to E.164 for Twilio. See signup.js for the full
+// story: a display-formatted number ("+44 7933189216") is a hard Twilio failure.
+function toE164(phone) {
+  const raw = String(phone || "").trim();
+  if (!raw) return "";
+  const d = raw.replace(/[^\d]/g, "");
+  if (!d) return "";
+  if (raw.startsWith("+")) return "+" + d;
+  if (d.startsWith("00")) return "+" + d.slice(2);
+  if (d.startsWith("0")) return "+44" + d.slice(1);
+  if (d.startsWith("44")) return "+" + d;
+  return "+" + d;
+}
+
+
 // The client-facing ACCOUNT DETAILS page — a login-free settings form letting a
 // business owner update the handful of profile fields that are safe for them to
 // change themselves. Same signed-key model as inbox.js / report.js: access needs
@@ -242,6 +257,12 @@ exports.handler = async (event) => {
       for (const name of Object.keys(EDITABLE)) if (name in body) preview[name] = body[name];
       return formPage(loc, k, preview, { error: errors[0] });
     }
+
+    // Phone is stored in E.164 — no spaces, no brackets. "+44 7933 189216" is
+    // perfectly readable but Twilio rejects it outright (21211), and the owner
+    // would never find out: their review alerts would just silently stop.
+    // Same normalisation signup.js applies on write.
+    if (typeof patch.phone === "string" && patch.phone) patch.phone = toE164(patch.phone);
 
     const record = { ...existing, ...patch, updatedAt: new Date().toISOString() };
     // Belt-and-braces: never let this path touch protected fields.

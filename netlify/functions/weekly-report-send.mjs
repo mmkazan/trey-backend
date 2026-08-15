@@ -16,6 +16,30 @@
 
 import { getStore } from "@netlify/blobs";
 
+// Normalise a stored phone number to E.164 for Twilio.
+//
+// WHY — 15 Aug, Raven Holistics' first real review alert died on Twilio 21211,
+// "The 'To' number whatsapp:+44 7933189216 is not a valid phone number." The
+// self-serve signup form formats numbers for READING ("+44 7933189216"), and
+// that single space is enough for Twilio to reject the send. Every outbound
+// WhatsApp to a self-serve signup was affected; it only surfaced now because
+// Naomi is the first. Admin-created clients had numbers typed without a space.
+//
+// Normalising at SEND time as well as on write means records already saved with
+// a space are fixed too, with no data migration.
+function toE164(phone) {
+  const raw = String(phone || "").trim();
+  if (!raw) return "";
+  const d = raw.replace(/[^\d]/g, "");
+  if (!d) return "";
+  if (raw.startsWith("+")) return "+" + d;   // already international — trust it
+  if (d.startsWith("00")) return "+" + d.slice(2);
+  if (d.startsWith("0")) return "+44" + d.slice(1);  // UK national
+  if (d.startsWith("44")) return "+" + d;
+  return "+" + d;
+}
+
+
 export const config = { schedule: "0 8 * * 1" };
 
 // Fallback to the live Utility SID (trey_weekly_report_v2) so this works even
@@ -122,8 +146,8 @@ export default async () => {
     if (taps === 0 && tapReviews === 0 && organicReviews === 0) { summary.skipped++; continue; }
 
     const params = messagingServiceSid
-      ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
-      : { To: `whatsapp:${client.phone}`, From: twilioFrom };
+      ? { To: `whatsapp:${toE164(client.phone)}`, MessagingServiceSid: messagingServiceSid }
+      : { To: `whatsapp:${toE164(client.phone)}`, From: twilioFrom };
     params.ContentSid = WEEKLY_CONTENT_SID;
     params.ContentVariables = JSON.stringify({
       1: clean(client.businessName, 60),

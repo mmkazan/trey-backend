@@ -1,5 +1,29 @@
 const { getStore } = require("@netlify/blobs");
 
+// Normalise a stored phone number to E.164 for Twilio.
+//
+// WHY — 15 Aug, Raven Holistics' first real review alert died on Twilio 21211,
+// "The 'To' number whatsapp:+44 7933189216 is not a valid phone number." The
+// self-serve signup form formats numbers for READING ("+44 7933189216"), and
+// that single space is enough for Twilio to reject the send. Every outbound
+// WhatsApp to a self-serve signup was affected; it only surfaced now because
+// Naomi is the first. Admin-created clients had numbers typed without a space.
+//
+// Normalising at SEND time as well as on write means records already saved with
+// a space are fixed too, with no data migration.
+function toE164(phone) {
+  const raw = String(phone || "").trim();
+  if (!raw) return "";
+  const d = raw.replace(/[^\d]/g, "");
+  if (!d) return "";
+  if (raw.startsWith("+")) return "+" + d;   // already international — trust it
+  if (d.startsWith("00")) return "+" + d.slice(2);
+  if (d.startsWith("0")) return "+44" + d.slice(1);  // UK national
+  if (d.startsWith("44")) return "+" + d;
+  return "+" + d;
+}
+
+
 // Receives an incoming Google review (POSTed by whatever review source feeds
 // this endpoint), matches it to a recent NFC tap, looks up the client record,
 // generates an AI reply draft, stores it for approval, and sends a short
@@ -238,8 +262,8 @@ exports.handler = async (event) => {
   // Choose sender: a Messaging Service (if configured) or the WhatsApp number.
   // From and MessagingServiceSid are mutually exclusive.
   const twilioParams = messagingServiceSid
-    ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
-    : { To: `whatsapp:${client.phone}`, From: twilioFrom };
+    ? { To: `whatsapp:${toE164(client.phone)}`, MessagingServiceSid: messagingServiceSid }
+    : { To: `whatsapp:${toE164(client.phone)}`, From: twilioFrom };
 
   if (contentSid) {
     // Approved template path — delivers reliably outside the 24h session
