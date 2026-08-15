@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 
 // NFC/QR "Tappy Stand" landing endpoint.
@@ -78,6 +79,187 @@ function thankYouPage(client, target) {
 
 function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// --- "You're live" alerts, sent once, on activation ---------------------------
+// Added 15 Aug. Activation was silent: the owner pressed the button, saw a page,
+// and that was the end of it. That is the single best moment to tell them the
+// one thing that actually determines whether Trey works for them — that they
+// have to ASK. A stand nobody is pointed at gets tapped by almost nobody.
+//
+// Sent on BOTH channels deliberately. WhatsApp is immediate but only guaranteed
+// to deliver inside Meta's 24-hour session window (see below); email always
+// arrives but may sit unread. Neither is reliable alone.
+//
+// NOTHING here can break activation: the trial is already stamped before any of
+// this runs, every call is time-boxed, and every failure is logged and swallowed.
+const ALERT_TIMEOUT_MS = 3000;
+const KEY_LEN = 32;
+
+// Same derivation as inbox.js / signup.js / approve.js. Trey has no login, so
+// this signed URL *is* the account.
+function reportKey(locationId) {
+  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
+    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+}
+function inboxUrl(locationId) {
+  const base = process.env.URL || "https://trey.today";
+  return `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}`;
+}
+
+// A small fetch with a hard timeout, so a hanging Twilio or Resend can't leave
+// the owner staring at a spinner at the exact moment they're meant to be delighted.
+async function fetchWithTimeout(url, opts) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ALERT_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function activationCopy(client, locationId) {
+  const first = ((client && client.contactFirstName) || "").trim();
+  const biz = (client && client.businessName) || "your business";
+  const hw = client && client.hardware === "keyfob" ? "key fob" : "stand";
+  const days = trialDaysFor(client);
+  return { first, biz, hw, days, inbox: inboxUrl(locationId) };
+}
+
+/**
+ * WhatsApp "you're live".
+ *
+ * THE 24-HOUR WINDOW. Meta only allows free-form messages within 24 hours of the
+ * business last messaging us. Activation usually happens days after signup, so a
+ * free-form send will often come back as Twilio 63016 and never arrive. An
+ * approved template has no such limit.
+ *
+ * So: use the template when TWILIO_ACTIVATED_CONTENT_SID is set, otherwise fall
+ * back to free-form, which still works for anyone who happens to be inside the
+ * window. Until that template exists the email is the channel that always lands,
+ * which is exactly why both are sent.
+ */
+async function whatsAppActivated(client, locationId) {
+  const sid = process.env.TWILIO_ACCOUNT_SID, auth = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !auth) return "whatsapp: twilio not configured";
+  if (!client || !client.phone) return "whatsapp: no phone";
+  if (client.nudgesOptOut === true) return "whatsapp: opted out";
+
+  const { first, biz, hw, days, inbox } = activationCopy(client, locationId);
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const params = messagingServiceSid
+    ? { To: `whatsapp:${client.phone}`, MessagingServiceSid: messagingServiceSid }
+    : { To: `whatsapp:${client.phone}`, From: process.env.TWILIO_WHATSAPP_FROM };
+
+  const contentSid = process.env.TWILIO_ACTIVATED_CONTENT_SID;
+  if (contentSid) {
+    params.ContentSid = contentSid;
+    params.ContentVariables = JSON.stringify({
+      1: String(first || biz).slice(0, 60),
+      2: String(days),
+      3: inbox.slice(0, 300),
+    });
+  } else {
+    params.Body =
+      `You're live${first ? ", " + first : ""} \u{1F389}\n\n` +
+      `${biz}'s Trey ${hw} is switched on. Every tap now takes a customer straight to your Google review page.\n\n` +
+      `One thing matters more than anything else: ASK. "If you've got a second, tap this and leave us a review" — ` +
+      `said out loud, at the counter, is the difference between a stand that works and one that gathers dust.\n\n` +
+      `Your Trey inbox, no password needed:\n${inbox}\n\n` +
+      `Your ${days}-day free trial starts today. Reply STOP any time.`;
+  }
+
+  const resp = await fetchWithTimeout(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: "POST",
+    headers: {
+      Authorization: "Basic " + Buffer.from(`${sid}:${auth}`).toString("base64"),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(params),
+  });
+  if (!resp.ok) throw new Error(`Twilio ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  return contentSid ? "whatsapp: sent (template)" : "whatsapp: sent (free-form)";
+}
+
+/** Email "you're live" — the channel that lands whatever Meta's window says. */
+async function emailActivated(client, locationId) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return "email: RESEND_API_KEY not set";
+  if (!client || !client.email) return "email: no address";
+
+  const { first, biz, hw, days, inbox } = activationCopy(client, locationId);
+  const hello = first ? `Hi ${first}` : "Hello";
+
+  const text =
+`${hello},
+
+Your Trey ${hw} is live. ${biz} is switched on, and from now on every tap sends
+that customer straight to your Google review page.
+
+The one thing that decides whether this works: ASK.
+
+"If you've got a second, tap this and leave us a review" — said out loud, at the
+counter, as they're leaving happy. A stand nobody is pointed at gets tapped by
+almost nobody. The businesses that do best are simply the ones that mention it.
+
+A few things worth knowing:
+- Your ${days}-day free trial starts today.
+- When a review comes in, we'll draft a reply and WhatsApp it to you. Read it,
+  tap approve, done.
+- Your Trey inbox lives here, no password:
+  ${inbox}
+
+Any questions, just reply to this email.
+
+Matthew
+Trey — more Google reviews, without the chasing`;
+
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;max-width:520px">
+<p>${escapeHtml(hello)},</p>
+<p><b>Your Trey ${escapeHtml(hw)} is live.</b> ${escapeHtml(biz)} is switched on, and from now on every tap sends that customer straight to your Google review page.</p>
+<p style="background:#eef2ff;border-left:3px solid #4338ca;padding:12px 14px;border-radius:0 8px 8px 0;margin:18px 0">
+<b>The one thing that decides whether this works: ask.</b><br>
+<span style="color:#334155">&ldquo;If you&rsquo;ve got a second, tap this and leave us a review&rdquo; &mdash; said out loud, at the counter, as they&rsquo;re leaving happy. A stand nobody is pointed at gets tapped by almost nobody. The businesses that do best are simply the ones that mention it.</span></p>
+<ul style="padding-left:20px;color:#334155">
+  <li>Your <b>${days}-day free trial starts today</b>.</li>
+  <li>When a review comes in, we&rsquo;ll draft a reply and WhatsApp it to you. Read it, tap approve, done.</li>
+</ul>
+<p><a href="${inbox}" style="display:inline-block;background:#4338ca;color:#fff;text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:700">Open your Trey inbox</a><br>
+<span style="color:#64748b;font-size:13.5px">No password &mdash; worth bookmarking.</span></p>
+<p>Any questions, just reply to this email.</p>
+<p style="color:#475569">Matthew<br><span style="color:#94a3b8;font-size:13px">Trey &mdash; more Google reviews, without the chasing</span></p>
+</div>`;
+
+  const resp = await fetchWithTimeout("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: process.env.RESEND_FROM || "Trey <hello@trey.today>",
+      to: [client.email],
+      reply_to: process.env.RESEND_REPLY_TO || "info@trey.today",
+      subject: `You're live — ${biz} is switched on`,
+      text, html,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Resend ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  return "email: sent";
+}
+
+/**
+ * Fire both alerts. Runs them in PARALLEL so the owner waits for the slower of
+ * the two rather than the sum, and never rejects — activation has already
+ * happened by the time this is called and must not be undone by a message.
+ */
+async function sendActivationAlerts(client, locationId) {
+  const results = await Promise.allSettled([
+    whatsAppActivated(client, locationId),
+    emailActivated(client, locationId),
+  ]);
+  for (const r of results) {
+    if (r.status === "fulfilled") console.log(`[tap] activation alert — ${r.value}`);
+    else console.error(`[tap] activation alert failed: ${r.reason && r.reason.message}`);
+  }
 }
 
 // Recover the locationId from a short-link path: /t/<locationId>.
@@ -194,7 +376,9 @@ function activationPage(client, locationId) {
 <style>
  *{box-sizing:border-box}
  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#eef3fc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:22px}
- .wrap{max-width:400px;width:100%}
+ /* Keep the last control clear of the phone's gesture/nav bar. Without this the
+    bottom button sits directly above the system back button. */
+ .wrap{max-width:400px;width:100%;padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
  .driver{background:#fff;border:1px solid #dbe4f3;border-radius:12px;padding:13px 15px;font-size:13px;color:#475569;line-height:1.5;margin-bottom:16px}
  .driver b{color:#0f172a}
  .recipient{text-align:center;margin:6px 0 22px}
@@ -206,10 +390,16 @@ function activationPage(client, locationId) {
  .card p{font-size:14.5px;color:#475569;line-height:1.55;margin:0 0 18px}
  .btn{display:block;width:100%;background:linear-gradient(180deg,#4f46e5,#4338ca);color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 8px 18px rgba(67,56,202,.28)}
  .fine{font-size:12px;color:#94a3b8;margin-top:12px}
+ /* The SAFE action deliberately sits lowest — see the note in the markup. */
+ .btn-safe{display:block;width:100%;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:12px;padding:14px;font-size:15px;font-weight:600;cursor:pointer;margin-top:14px}
+ .btn-safe:active{background:#f1f5f9}
  .foot{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:22px;color:#64748b;font-size:12px;font-weight:600}
+ .done{background:#fff;border:1px solid #cfe0f6;border-radius:18px;padding:30px 22px;text-align:center;box-shadow:0 14px 40px rgba(79,70,229,.12)}
+ .done h1{font-size:19px;margin:12px 0 8px;letter-spacing:-.3px}
+ .done p{font-size:14.5px;color:#475569;line-height:1.55;margin:0}
 </style></head><body>
- <div class="wrap">
-   <div class="driver">&#128230; <b>Just delivering?</b> You've tapped a small NFC tag inside this package &mdash; nothing's wrong and there's nothing you need to do, you can close this. This package is on its way to the business below.</div>
+ <div class="wrap" id="wrap">
+   <div class="driver">&#128230; <b>Just delivering?</b> You've tapped a small NFC tag on this package &mdash; nothing's wrong and nothing is needed from you. Tap <b>&ldquo;I'm just delivering this&rdquo;</b> at the bottom and carry on. It's on its way to the business below.</div>
    <div class="recipient">${logoChip}<div class="bizname">${name}</div></div>
    <div class="card">
      <h1>Is this you, ${name}? &#128075;</h1>
@@ -217,8 +407,29 @@ function activationPage(client, locationId) {
      <form method="POST" action="${action}"><button class="btn" type="submit">Activate my stand &rarr;</button></form>
      <div class="fine">Only press this once your stand is set up and ready for customers.</div>
    </div>
+   <!-- DELIBERATE ORDER: the dismiss button is the LOWEST control on the page.
+        On a phone the bottom of the screen is where the system back/gesture bar
+        sits, so that is the easiest spot to hit by accident — a courier holding
+        a parcel one-handed is the likely case. Whatever lands there must be
+        harmless, so the harmless action gets that position and Activate is moved
+        up out of the thumb's path. An accidental activation would start the
+        owner's free trial days early, while they're still in the post.
+        It also answers the courier's actual question ("am I done?") with a
+        button instead of leaving them guessing.
+        Note: a page cannot close a tab it did not open, so window.close() would
+        silently do nothing on most phones. This swaps to a finished state
+        instead, which is honest and needs no permission. -->
+   <button class="btn-safe" type="button" id="dismiss">I'm just delivering this &mdash; nothing to do</button>
    <div class="foot">${treyMarkSvg(24)} Powered by Trey</div>
  </div>
+ <script>
+   document.getElementById('dismiss').addEventListener('click', function () {
+     document.getElementById('wrap').innerHTML =
+       '<div class="done">${treyMarkSvg(40)}<h1>All done &mdash; thank you<\\/h1>' +
+       '<p>Nothing further needed. You can close this page and carry on.<\\/p><\\/div>';
+     window.scrollTo(0, 0);
+   });
+ <\/script>
 </body></html>`;
   return { statusCode: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }, body };
 }
@@ -397,6 +608,16 @@ exports.handler = async (event) => {
           headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
           body: `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Try again</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#eef3fc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;text-align:center;"><div style="max-width:400px;"><div style="font-size:38px;">&#9888;&#65039;</div><h1 style="font-size:20px;margin:10px 0 8px;">That didn't go through</h1><p style="color:#475569;font-size:15px;line-height:1.55;">We couldn't switch your stand on just then &mdash; please tap Activate again in a moment. If it keeps happening, email <a href="mailto:info@trey.today" style="color:#4338ca;">info@trey.today</a>.</p></div></body></html>`,
         };
+      }
+      // Only AFTER the trial stamp is safely written. Sending "you're live" to
+      // someone whose activation didn't save would be worse than sending nothing.
+      // Guarded even though sendActivationAlerts() already swallows everything —
+      // an unexpected throw here must not turn a successful activation into the
+      // "that didn't go through" page.
+      try {
+        await sendActivationAlerts(client, locationId);
+      } catch (e) {
+        console.error("[tap] activation alerts threw unexpectedly:", e && e.message);
       }
       return activatedPage(client, safeReviewTarget(googleUrl, client, locationId));
     }
