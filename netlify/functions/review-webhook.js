@@ -50,23 +50,34 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
   }
 
-  // Authenticate the caller. If TREY_WEBHOOK_SECRET is set on Netlify, require
-  // it (as the X-Trey-Signature header or a `secret` body field) so nobody who
-  // knows a public locationId can forge reviews or trigger WhatsApp sends. If
-  // it's unset, allow but warn — so the live flow keeps working until you've
-  // added the secret to the upstream caller (whatever posts reviews here), then
-  // set the env var.
+  // Authenticate the caller with TREY_WEBHOOK_SECRET, sent either as the
+  // X-Trey-Signature header or a `secret` body field. Without it, anyone who
+  // knows a locationId — which is printed on the stand — could forge reviews,
+  // move a client's stats and trigger WhatsApp sends in their name.
+  //
+  // FAILS CLOSED, changed 15 Aug. This guard used to read:
+  //     if (secret) { enforce } else { warn and carry on }
+  // and because the env var had never been set, the "else" was the branch that
+  // actually ran — this endpoint was publicly writable for weeks and the only
+  // trace was one console.warn nobody reads. A missing secret is now a 500, so
+  // the failure is loud and safe instead of quiet and open. Same rule
+  // stripe-webhook.js already follows.
   const webhookSecret = process.env.TREY_WEBHOOK_SECRET;
-  if (webhookSecret) {
+  if (!webhookSecret) {
+    console.error("[review-webhook] TREY_WEBHOOK_SECRET is not set — refusing all requests.");
+    return { statusCode: 500, body: JSON.stringify({ error: "Webhook not configured" }) };
+  }
+  {
     const h = event.headers || {};
     const provided = h["x-trey-signature"] || h["X-Trey-Signature"] || body.secret || "";
+    // Length check first: timingSafeEqual throws on a length mismatch, and
+    // lengths aren't secret.
     const a = Buffer.from(String(provided)), b = Buffer.from(String(webhookSecret));
     const ok = a.length === b.length && require("crypto").timingSafeEqual(a, b);
     if (!ok) {
+      console.warn("[review-webhook] rejected a request with a bad or missing signature.");
       return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
     }
-  } else {
-    console.warn("[review-webhook] TREY_WEBHOOK_SECRET not set — webhook is unauthenticated. Set it and send it from the upstream caller to lock this down.");
   }
 
   const tapsStore = blobsStore("taps");
