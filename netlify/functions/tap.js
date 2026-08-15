@@ -87,12 +87,13 @@ function escapeHtml(str) {
 // placeId (preferred) or the locationId. Netlify already URL-decodes query
 // params once, so we must NOT decodeURIComponent again (double-decode corrupts
 // valid targets and throws on a literal %).
-function safeReviewTarget(googleUrl, client, locationId) {
-  const fallbackId = (client && client.placeId) || locationId;
-  const fallback = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(fallbackId)}`;
-  if (!googleUrl) return fallback;
+// Returns the normalised href if this is a safe Google review destination,
+// otherwise null. Split out so the tag's own parameter and the link stored on
+// the client record cannot drift apart in what they accept.
+function allowedGoogleUrl(candidate) {
+  if (!candidate) return null;
   try {
-    const u = new URL(googleUrl);
+    const u = new URL(String(candidate).trim());
     const host = u.hostname.toLowerCase();
     // Google review/maps hosts only. Note: goo.gl (a link shortener) is
     // deliberately excluded, and Google's own /url?q= open-redirector is
@@ -103,7 +104,34 @@ function safeReviewTarget(googleUrl, client, locationId) {
     const isRedirector = u.pathname === "/url"; // e.g. https://www.google.com/url?q=https://evil.com
     if (u.protocol === "https:" && okHost && !isRedirector) return u.href;
   } catch (e) { /* not a valid absolute URL — fall through */ }
-  return fallback;
+  return null;
+}
+
+// Resolve where to send the customer.
+//
+// Preference order: the tag's own `googleUrl`, then the review link the business
+// gave us at signup, then a URL built from their saved placeId, then the
+// locationId. Every candidate URL goes through allowedGoogleUrl() — this stops
+// an attacker turning a stand link into an open redirect to a phishing site or
+// a javascript: link.
+//
+// The googleReviewUrl step was missing until 15 Aug: the signup form asked for a
+// review link, stored it, and then NOTHING read it. A business could hand us the
+// exact right URL and their stand would still redirect to a writereview page
+// built from a locationId that isn't a Place ID — a dead review page, with the
+// working link sitting unused on the same record. It is validated by the same
+// allow-list as the tag parameter, so it is no more dangerous here than there.
+//
+// Netlify already URL-decodes query params once, so we must NOT
+// decodeURIComponent again (double-decode corrupts valid targets and throws on
+// a literal %).
+function safeReviewTarget(googleUrl, client, locationId) {
+  for (const candidate of [googleUrl, client && client.googleReviewUrl]) {
+    const href = allowedGoogleUrl(candidate);
+    if (href) return href;
+  }
+  const fallbackId = (client && client.placeId) || locationId;
+  return `https://search.google.com/local/writereview?placeid=${encodeURIComponent(fallbackId)}`;
 }
 
 // When did the trial actually start (ms since epoch), or null if it hasn't yet.

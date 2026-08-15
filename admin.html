@@ -297,6 +297,10 @@
           <input id="f_placeId" placeholder="ChIJ… (for monthly rating sync)" />
         </div>
         <div>
+          <label>Google review link <span class="muted" style="font-weight:400;text-transform:none;">— where a tap lands. Beats Place ID. Must be a google.com or g.page URL.</span></label>
+          <input id="f_googleReviewUrl" placeholder="https://g.page/r/…/review" />
+        </div>
+        <div>
           <label>Business logo URL</label>
           <input id="f_logoUrl" placeholder="https://… (thank-you screen &amp; reports)" />
         </div>
@@ -456,7 +460,7 @@
 
   function resetForm() {
     ["locationId", "businessName", "businessType", "phone", "email", "googleAccountId", "publicSignOffName",
-     "placeId", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount", "brandVoice",
+     "placeId", "googleReviewUrl", "logoUrl", "initialGoogleRating", "initialReviewCount", "googleRating", "reviewCount", "brandVoice",
      "contactFirstName", "contactSurname", "companyAddress"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
@@ -505,6 +509,8 @@
     ["Google Location ID", "locationId"],
     ["Google Account ID", "googleAccountId"],
     ["Google Place ID", "placeId"],
+    // Where a tap actually lands, if set — takes priority over Place ID.
+    ["Google review link", "googleReviewUrl"],
     ["Business logo URL", "logoUrl"],
     ["Voice perspective", "voicePerspective"],
     ["Public sign-off name", "publicSignOffName"],
@@ -801,6 +807,7 @@
     document.getElementById("f_email").value = c.email || "";
     document.getElementById("f_googleAccountId").value = c.googleAccountId || "";
     document.getElementById("f_placeId").value = c.placeId || "";
+    document.getElementById("f_googleReviewUrl").value = c.googleReviewUrl || "";
     document.getElementById("f_logoUrl").value = c.logoUrl || "";
     document.getElementById("f_voicePerspective").value = c.voicePerspective || "Individual";
     document.getElementById("f_publicSignOffName").value = c.publicSignOffName || "";
@@ -837,6 +844,7 @@
       email: document.getElementById("f_email").value.trim(),
       googleAccountId: document.getElementById("f_googleAccountId").value.trim(),
       placeId: document.getElementById("f_placeId").value.trim(),
+      googleReviewUrl: document.getElementById("f_googleReviewUrl").value.trim(),
       logoUrl: document.getElementById("f_logoUrl").value.trim(),
       voicePerspective: document.getElementById("f_voicePerspective").value,
       publicSignOffName: document.getElementById("f_publicSignOffName").value.trim(),
