@@ -7,7 +7,8 @@
 //
 //   POST /.netlify/functions/signup   { firstName, surname, phone, email,
 //        businessName, businessType, companyAddress, brandVoice,
-//        voicePerspective, publicSignOffName, googleReviewUrl, termsAccepted }
+//        voicePerspective, publicSignOffName, googleReviewUrl, hardware,
+//        termsAccepted }
 
 const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
@@ -47,14 +48,27 @@ const CODE_LEN = 8;
 // service asking to look after your reputation, and it makes people wonder
 // whether the form even worked.
 //
-// SENDING DOMAIN: Resend is verified on the send.trey.today SUBDOMAIN, not the
-// root. That was the right call — it keeps Resend's SPF away from the root
-// record, so the Microsoft 365 SPF that carries info@trey.today can't be broken
-// by anything done here. The consequence is that FROM must be @send.trey.today;
-// sending as info@trey.today would fail authentication. Reply-To puts replies
-// back in the real Outlook mailbox, so the customer never has to care.
-const RESEND_FROM = "Trey <hello@send.trey.today>";
-const RESEND_REPLY_TO = "info@trey.today";
+// SENDING DOMAIN — corrected 15 Aug after the first send came back 403
+// "Domain not verified: Verify send.trey.today or update your from domain."
+//
+// The comment that used to sit here was wrong: the domain registered in Resend
+// is the ROOT trey.today, not the send.trey.today subdomain, so a FROM of
+// @send.trey.today was never going to authenticate.
+//
+// Sending as @trey.today is safe and does NOT threaten the Microsoft 365 SPF
+// that carries info@trey.today. Resend puts its own bounce/return-path on
+// send.trey.today (MX + TXT "v=spf1 include:amazonses.com ~all" on the `send`
+// label), and SPF is evaluated against the return-path, not the From header.
+// The root TXT record is never touched. DKIM signs as d=trey.today via
+// resend._domainkey, so DMARC aligns strictly. Nothing about Outlook changes.
+//
+// DO NOT add Resend's "Enable Receiving" MX record on the root — that one WOULD
+// break inbound mail to info@trey.today. It stays switched off.
+//
+// Env-overridable because getting this wrong cost a real customer their welcome
+// email, and the fix should not need a code deploy next time.
+const RESEND_FROM = process.env.RESEND_FROM || "Trey <hello@trey.today>";
+const RESEND_REPLY_TO = process.env.RESEND_REPLY_TO || "info@trey.today";
 const EMAIL_TIMEOUT_MS = 5000;
 const KEY_LEN = 32;
 
@@ -99,6 +113,7 @@ async function sendWelcomeEmail(record) {
   const wa = "https://wa.me/447476909484?text=" +
     encodeURIComponent(`Hi Trey - it's ${first || "me"} from ${biz}. Just signed up!`);
   const inbox = inboxUrl(record.locationId || record.id || "");
+  const hw = record.hardware === "keyfob" ? "key fob" : "tap stand";
 
   const text =
 `${hello},
@@ -106,14 +121,14 @@ async function sendWelcomeEmail(record) {
 Thanks for signing up ${biz} to Trey — we've got your details.
 
 What happens next:
-1. We set up your Google review link and send out your tap stand or key fob.
-2. When it arrives, you tap it once and press Activate.
+1. We give you a quick call to finish setting up your Google review link.
+2. Your ${hw} goes in the post. When it arrives, tap it once and press Activate.
 3. That's when your ${days}-day free trial starts — not a day is lost while it's in the post.
 
 Your Trey inbox is here — no password, nothing to remember, just a link worth
 bookmarking:
 ${inbox}
-It'll be quiet until your stand is live, and that's where every review and reply
+It'll be quiet until your ${hw} is live, and that's where every review and reply
 will appear.
 
 One thing worth doing now: send us a quick hello on WhatsApp and save the number.
@@ -131,13 +146,13 @@ Trey — more Google reviews, without the chasing`;
 <p>Thanks for signing up <b>${escapeHtml(biz)}</b> to Trey — we've got your details.</p>
 <p><b>What happens next:</b></p>
 <ol style="padding-left:20px">
-  <li>We set up your Google review link and send out your tap stand or key fob.</li>
-  <li>When it arrives, you tap it once and press Activate.</li>
+  <li>We give you a quick call to finish setting up your Google review link.</li>
+  <li>Your <b>${escapeHtml(hw)}</b> goes in the post. When it arrives, tap it once and press Activate.</li>
   <li>That's when your ${days}-day free trial starts — not a day is lost while it's in the post.</li>
 </ol>
 <p><b>Your Trey inbox</b> — no password, nothing to remember, just a link worth bookmarking:<br>
 <a href="${inbox}" style="color:#4338ca">Open your Trey inbox</a><br>
-<span style="color:#64748b;font-size:13.5px">It'll be quiet until your stand is live — that's where every review and reply will appear.</span></p>
+<span style="color:#64748b;font-size:13.5px">It'll be quiet until your ${escapeHtml(hw)} is live — that's where every review and reply will appear.</span></p>
 <p>One thing worth doing now: send us a quick hello on WhatsApp and save the number. Your review alerts come from there, and it's much easier to trust a name than an unknown number when the first one lands.</p>
 <p><a href="${wa}" style="display:inline-block;background:#25D366;color:#fff;text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:700">Say hello on WhatsApp</a></p>
 <p>Any questions, just reply to this email.</p>
@@ -266,6 +281,14 @@ exports.handler = async (event) => {
     // Optional — the business's own Google review link, if they have it. The
     // admin resolves the real Place ID / account before going live.
     googleReviewUrl: clean(body.googleReviewUrl, 300),
+    // What physically goes in the envelope. An allow-list, not clean(): this
+    // string is read by inbox.js to choose a noun and by the admin to decide
+    // what to pack, and an unexpected value should quietly become the default
+    // rather than print "your Trey <script> is in the post".
+    hardware: clean(body.hardware, 20) === "keyfob" ? "keyfob" : "stand",
+    // Dispatch tracking, set by the admin — drives the inbox banners. Empty
+    // means "we haven't posted it yet", which is what a new signup sees.
+    hardwareDispatchedAt: "",
     subscriptionStatus: "trial",
     // The trial clock does NOT start now — it starts on the stand's first tap
     // once the admin sets a go-live (delivery) date. See tap.js.

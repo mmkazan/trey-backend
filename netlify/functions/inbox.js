@@ -82,10 +82,50 @@ const googleBadge = `<span class="badge gbadge" title="Direct Google review"><sv
 // the review came from (their Trey stand vs. straight from Google).
 const sourceBadge = (r) => `<span class="src"><span class="srclbl">Review via</span>${viaGoogle(r) ? googleBadge : treyBadge}</span>`;
 
+// --- Onboarding banners ------------------------------------------------------
+// The gap between "I signed up" and "my stand arrived" is several days long, and
+// until now the inbox said nothing about it — a new client opened their link,
+// saw an empty review list, and had no idea whether anything was happening.
+// (Found on the first real signup, 15 Aug.)
+//
+// Two states, driven entirely by the record so nobody has to remember to switch
+// a message off:
+//   not dispatched     -> "we'll call you shortly"    (we're still setting up)
+//   dispatched         -> "it's in the post, tap it"  (admin has sent it)
+//   trialStartedAt set -> nothing; they've tapped, they're live
+//
+// "Dispatched" reads TWO signals on purpose. standMode === "ship" is the switch
+// the admin already flips when a stand is packed ("Ready to send"), so this
+// works today with no extra step and nothing new to remember. hardwareDispatchedAt
+// is the explicit date field for when that needs to be recorded precisely.
+// Either one is enough.
+//
+// Deliberately gated on trialStartsOnTap: legacy clients predate this flow, have
+// no hardwareDispatchedAt, and would otherwise be told forever that we're about
+// to ring them.
+function onboardingBanner(client) {
+  if (!client) return "";
+  if (!client.trialStartsOnTap) return "";
+  if (String(client.subscriptionStatus || "").toLowerCase() !== "trial") return "";
+  if (client.trialStartedAt) return "";
+
+  const hw = client.hardware === "keyfob" ? "key fob" : "stand";
+  const bar = (inner) =>
+    `<div style="background:#eef2ff;border-bottom:1px solid #c7d2fe;color:#3730a3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:10px 14px">${inner}</div>`;
+
+  const dispatched = !!client.hardwareDispatchedAt || client.standMode === "ship";
+  if (dispatched) {
+    return bar(`&#128238; Your Trey ${hw} is in the post. When it arrives, hold it against your phone &mdash; one tap activates it and starts your free trial.`);
+  }
+  return bar(`&#128222; Trey will call you shortly to finish setting up your account. Your ${hw} goes in the post straight after.`);
+}
+
 // A gentle "days of free trial left + Subscribe" banner (coral, so it stands out
 // without shouting). Shows only while the client is on trial (or lapsed); nothing
 // once they're subscribed. Needs STRIPE_PAYMENT_LINK set.
-function trialBanner(client, locationId) {
+// `onboarding` is the already-rendered onboardingBanner() output, passed in so
+// the two bars can't disagree about which phase the client is in.
+function trialBanner(client, locationId, onboarding) {
   if (!client) return "";
   const status = client.subscriptionStatus;
   if (status === "active") return "";
@@ -102,9 +142,13 @@ function trialBanner(client, locationId) {
   const payUrl = payBase ? payBase + (payBase.includes("?") ? "&" : "?") + "client_reference_id=" + encodeURIComponent(locationId || "") : "";
   const bar = (inner) => `<div style="background:#fff1f2;border-bottom:1px solid #fecdd3;color:#9f1239;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.45;text-align:center;padding:10px 14px">${inner}</div>`;
   const link = (t) => (payUrl ? `<a href="${escapeHtml(payUrl)}" style="color:${INDIGO2};font-weight:800;text-decoration:underline;white-space:nowrap">${t}</a>` : `<strong>${t}</strong>`);
-  // On-tap trial that hasn't started yet — waiting on the stand's first tap.
+  // On-tap trial that hasn't started yet — waiting on the first tap. For a
+  // client still in onboarding, onboardingBanner() says this better and with
+  // the right noun, so don't stack two bars saying the same thing.
   if (onTrial && startedMs === null) {
-    return bar(`Your ${TRIAL_DAYS}-day free trial starts once you activate your Trey stand.`);
+    if (onboarding) return "";
+    const hw = client.hardware === "keyfob" ? "key fob" : "stand";
+    return bar(`Your ${TRIAL_DAYS}-day free trial starts once you activate your Trey ${hw}.`);
   }
   let daysLeft = null;
   if (startedMs !== null) daysLeft = Math.ceil((startedMs + TRIAL_DAYS * 86400000 - Date.now()) / 86400000);
@@ -112,7 +156,7 @@ function trialBanner(client, locationId) {
   if (!onTrial && !ended) return ""; // grandfathered / unknown → no banner
   let msg;
   if (ended) {
-    msg = `Your Trey stand is paused — ${link("resubscribe")} to switch it back on.`;
+    msg = `Your Trey ${client.hardware === "keyfob" ? "key fob" : "stand"} is paused — ${link("resubscribe")} to switch it back on.`;
   } else if (daysLeft !== null && daysLeft <= 3) {
     msg = `Just ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left of your free trial — ${link("keep Trey going")} whenever you're ready.`;
   } else if (daysLeft !== null) {
@@ -199,6 +243,9 @@ exports.handler = async (event) => {
 
   const client = await blobsStore("clients").get(loc, { type: "json" });
   const businessName = (client && client.businessName) || "your business";
+  // Rendered once and reused: the banner itself, the trial bar's decision not to
+  // repeat it, and the empty-state wording all have to agree.
+  const onboarding = onboardingBanner(client);
 
   const reviewsStore = blobsStore("reviews");
   let records = [];
@@ -250,16 +297,23 @@ exports.handler = async (event) => {
       ${r.finalReply ? `<div class="reply"><b>Your reply</b>${escapeHtml(r.finalReply)}</div>` : ""}
     </div>`;
 
+  // "You're all caught up 🎉" is a lie to somebody who has never had a review
+  // and is still waiting for their stand — it reads as though the system has
+  // been running and found nothing.
+  const emptyState = onboarding && !records.length
+    ? `This is where your reviews will land. It stays quiet until your Trey ${client && client.hardware === "keyfob" ? "key fob" : "stand"} is activated &mdash; nothing to do here yet.`
+    : `You're all caught up &mdash; no reviews waiting. 🎉`;
   const pendingBlock = pending.length
     ? `<div class="sec">Needs your reply (${pending.length})</div>${pending.map(pendingCard).join("")}`
-    : `<div class="sec">Needs your reply</div><div class="allgood">You're all caught up &mdash; no reviews waiting. 🎉</div>`;
+    : `<div class="sec">Needs your reply</div><div class="allgood">${emptyState}</div>`;
 
   const repliedBlock = replied.length
     ? `<div class="sec">Replied</div>${replied.map(repliedCard).join("")}`
     : "";
 
   const inner = `
-    ${trialBanner(client, loc)}
+    ${onboarding}
+    ${trialBanner(client, loc, onboarding)}
     <div class="top"><div class="wrap">
       <div class="brand"><svg viewBox="0 0 100 100" style="color:#eef2ff"><use href="#treyMark"/></svg>trey</div>
       <h1>${escapeHtml(businessName)} &mdash; your reviews</h1>

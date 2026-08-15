@@ -344,6 +344,13 @@
         <textarea id="f_companyAddress" rows="2" placeholder="e.g. 12 High Street, Cobham, Surrey, KT11 1AA" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
       </div>
       <div style="margin-top:6px;">
+        <label>Send them <span class="muted" style="font-weight:400;text-transform:none;">— what goes in the envelope. Set at signup; change it here if they ring up and swap.</span></label>
+        <select id="f_hardware">
+          <option value="stand">Tap stand</option>
+          <option value="keyfob">Key fob</option>
+        </select>
+      </div>
+      <div style="margin-top:6px;">
         <label>Brand voice <span class="muted" style="font-weight:400;text-transform:none;">— 1–2 sentences on how this business sounds; the AI matches it on every reply.</span></label>
         <textarea id="f_brandVoice" rows="2" placeholder="e.g. We're a family-run MOT garage in Derby — friendly, straight-talking, and genuinely grateful for every customer." style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
       </div>
@@ -453,6 +460,7 @@
      "contactFirstName", "contactSurname", "companyAddress"]
       .forEach((k) => document.getElementById("f_" + k).value = "");
     document.getElementById("f_voicePerspective").value = "Individual";
+    document.getElementById("f_hardware").value = "stand";
     document.getElementById("f_standState").value = "test";
     document.getElementById("f_locationId").disabled = false;
     document.getElementById("formTitle").textContent = "Add a client";
@@ -485,6 +493,9 @@
     ["Email", "email"],
     ["Contact name", "_contactName"],
     ["Company address", "companyAddress"],
+    // What to actually put in the envelope. Sits right under the address
+    // because that's the moment you need it.
+    ["Send them", "_hardware"],
     ["Google rating at sign-up", "initialGoogleRating"],
     ["Google rating now", "googleRating"],
     ["Rating change", "_ratingChange"],
@@ -621,6 +632,11 @@
     if (c.hardwareOnly && c.hardwareOnlyUntil) {
       cc._hardwareUntil = new Date(c.hardwareOnlyUntil).toLocaleDateString();
     }
+    // What they picked at signup. Older records predate the question, so say so
+    // rather than silently defaulting them to a stand and posting the wrong thing.
+    cc._hardware = c.hardware === "keyfob" ? "\u{1F511} Key fob"
+                 : c.hardware === "stand"  ? "\u{1F4CD} Tap stand"
+                 : "Not asked — check with them";
     if (c.referredBy) {
       const ref = (clientsCache || []).find((x) => x.locationId === c.referredBy);
       cc._referredBy = ref ? (ref.businessName || c.referredBy) : c.referredBy;
@@ -792,6 +808,7 @@
     document.getElementById("f_contactFirstName").value = c.contactFirstName || "";
     document.getElementById("f_contactSurname").value = c.contactSurname || "";
     document.getElementById("f_companyAddress").value = c.companyAddress || "";
+    document.getElementById("f_hardware").value = c.hardware === "keyfob" ? "keyfob" : "stand";
     document.getElementById("f_standState").value = currentStandState(c);
     document.getElementById("f_initialGoogleRating").value = c.initialGoogleRating ?? "";
     document.getElementById("f_initialReviewCount").value = c.initialReviewCount ?? "";
@@ -827,6 +844,7 @@
       contactFirstName: document.getElementById("f_contactFirstName").value.trim(),
       contactSurname: document.getElementById("f_contactSurname").value.trim(),
       companyAddress: document.getElementById("f_companyAddress").value.trim(),
+      hardware: document.getElementById("f_hardware").value,
       initialGoogleRating: numOrEmpty("f_initialGoogleRating"),
       initialReviewCount: numOrEmpty("f_initialReviewCount"),
       googleRating: numOrEmpty("f_googleRating"),
