@@ -183,6 +183,7 @@
   .subpill.p-trial  { background: #fffbeb; color: #b45309; border-color: #fde68a; }
   .subpill.p-paused { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
   .subpill.p-none   { background: #f1f5f9; color: #64748b; border-color: #e2e8f0; }
+  .subpill.p-pending{ background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
 
   /* New self-serve signup that still needs the admin to verify + add Google details */
   .newpill {
@@ -527,6 +528,7 @@
     ["Brand voice", "brandVoice"],
     ["Subscription", "subscriptionStatus"],
     ["Plan", "_price"],
+    ["Cancellation", "_cancelling"],
     ["Trial length", "_trialLength"],
     ["Referred by", "_referredBy"],
     ["Referrals sent", "_referralsSent"],
@@ -550,8 +552,18 @@
   }
 
   // Subscription status as a coloured pill (like the review/lead pills).
-  function subPill(status) {
+  // `client` is optional — pass it and a wind-down shows as "Cancellation pending"
+  // instead of a plain green Active. Someone who has cancelled but is still
+  // inside their paid period IS still active, and that read as business-as-usual
+  // on this page: you'd have had no idea they were leaving until they vanished.
+  function subPill(status, client) {
     const s = String(status || "").toLowerCase();
+    if (client && client.cancelAtPeriodEnd === true && (s === "active" || s === "trial")) {
+      const until = client.currentPeriodEnd
+        ? new Date(Number(client.currentPeriodEnd) * 1000).toLocaleDateString()
+        : "";
+      return `<span class="subpill p-pending">&#9203; Cancellation pending${until ? " &middot; ends " + esc(until) : ""}</span>`;
+    }
     let cls = "p-none", label = status ? String(status) : "—";
     if (s === "active") { cls = "p-active"; label = "Active"; }
     else if (s === "trial") { cls = "p-trial"; label = "Trial"; }
@@ -652,6 +664,10 @@
     // What they picked at signup. Older records predate the question, so say so
     // rather than silently defaulting them to a stand and posting the wrong thing.
     const _plan = ["standard","founding","annual","free"].includes(c.plan) ? c.plan : (c.foundingMember === true ? "founding" : "standard");
+    if (c.cancelAtPeriodEnd === true) {
+      const _end = c.currentPeriodEnd ? new Date(Number(c.currentPeriodEnd) * 1000).toLocaleDateString() : "date unknown";
+      cc._cancelling = "\u23F3 Pending \u2014 access ends " + _end;
+    }
     cc._price = _plan === "founding" ? "\u2b50 Founding \u00a325/mo"
               : _plan === "annual"   ? "\u{1F4C5} Annual \u00a3350/yr"
               : _plan === "free"     ? "\u{1F381} Free \u2014 comped"
@@ -677,7 +693,7 @@
       const v = cc[key];
       const has = v !== undefined && v !== null && v !== "";
       let display, valCls = has ? "" : "empty";
-      if (key === "subscriptionStatus") { display = subPill(v); valCls = ""; }
+      if (key === "subscriptionStatus") { display = subPill(v, c); valCls = ""; }
       else display = has ? (STAR_KEYS.has(key) ? `${esc(v)} ★` : esc(v)) : "Not set";
       return `
       <div class="field">
@@ -764,7 +780,7 @@
       <tr class="${c.needsReview ? "needs-row" : ""}" onclick="showDetailByLoc('${esc(c.locationId)}')">
         <td>${esc(c.locationId || "")}</td>
         <td>${esc(c.businessName || "")}${newBadge}<br><span class="muted" style="font-size:11px;">${esc(c.businessType || "")}</span></td>
-        <td>${subPill(c.subscriptionStatus)}</td>
+        <td>${subPill(c.subscriptionStatus, c)}</td>
         <td>${c.phone ? esc(c.phone) : '<span class="muted">—</span>'}</td>
         <td>${esc(c.tapsSinceSignup || 0)} <span class="muted" style="font-size:11px;">(${esc(c.tapsThisMonth || 0)} this mo)</span></td>
         <td><span class="muted-link" onclick='event.stopPropagation(); editClientByLoc("${esc(c.locationId)}")'>Edit</span></td>

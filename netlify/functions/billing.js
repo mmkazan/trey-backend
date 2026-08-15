@@ -95,6 +95,106 @@ async function stripe(path, method, params) {
   }
 }
 
+// When does the current paid period end? (unix seconds, 0 if unknown)
+//
+// WHY THIS IS NOT JUST sub.current_period_end — 15 Aug. Stripe's newer API
+// (this account runs "flexible" billing mode) REMOVED current_period_end from
+// the top-level Subscription object and moved it onto each subscription ITEM.
+// Reading the old field returned undefined, so Naomi's cancellation went through
+// correctly but stored no end date — which silently killed the "only N days
+// left" banner and left a blank date on the confirmation page.
+//
+// Checks the item first (current API), then the legacy top-level field, then
+// cancel_at, which Stripe sets to the effective end when cancel_at_period_end
+// is turned on.
+function periodEndOf(sub) {
+  if (!sub) return 0;
+  const item = sub.items && sub.items.data && sub.items.data[0];
+  const v = (item && item.current_period_end) || sub.current_period_end || sub.cancel_at || 0;
+  const n = Number(v);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
+// --- "Sorry to see you go" ----------------------------------------------------
+// Sent once, when they cancel. Three jobs, in order of value to the business:
+//   1. Confirm in writing exactly when access ends. Silence after cancelling is
+//      how a customer ends up unsure whether it worked and rings the bank.
+//   2. Give them one tap back. They still have a live subscription set to end,
+//      so Resume costs them nothing and re-enters no card details.
+//   3. Ask why. At twenty customers, one honest sentence about why someone left
+//      is worth more than any dashboard.
+//
+// Never throws and never blocks the cancellation — the cancellation has already
+// happened in Stripe by the time this runs.
+const EMAIL_TIMEOUT_MS = 5000;
+
+async function sendGoodbyeEmail(client, locationId, untilLabel) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) { console.warn("[billing] RESEND_API_KEY not set — no cancellation email."); return; }
+  if (!client || !client.email) return;
+
+  const first = ((client.contactFirstName) || "").trim();
+  const hello = first ? `Hi ${first}` : "Hello";
+  const biz = client.businessName || "your business";
+  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
+    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+  const base = process.env.URL || "https://trey.today";
+  const backUrl = `${base}/.netlify/functions/billing?loc=${encodeURIComponent(locationId)}&k=${k}`;
+
+  const text =
+`${hello},
+
+Your Trey subscription for ${biz} has been cancelled — you won't be charged again.
+
+Trey keeps working until ${untilLabel}. Your stand carries on collecting reviews
+until then, and your replies keep coming through as normal.
+
+Changed your mind? One tap and you're back, with nothing to re-enter:
+${backUrl}
+
+And if you have a moment — what made you cancel? Just hit reply. We're small
+enough that one honest sentence genuinely changes what we build next.
+
+Thanks for giving us a go.
+
+Matthew
+Trey`;
+
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;max-width:520px">
+<p>${escapeHtml(hello)},</p>
+<p>Your Trey subscription for <b>${escapeHtml(biz)}</b> has been cancelled &mdash; you won't be charged again.</p>
+<p style="background:#f3f8ff;border-left:3px solid #4338ca;padding:12px 14px;border-radius:0 8px 8px 0">
+Trey keeps working until <b>${escapeHtml(untilLabel)}</b>. Your stand carries on collecting reviews until then, and your replies keep coming through as normal.</p>
+<p><a href="${backUrl}" style="display:inline-block;background:#4338ca;color:#fff;text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:700">Changed your mind? Turn it back on</a><br>
+<span style="color:#64748b;font-size:13.5px">One tap &mdash; nothing to re-enter.</span></p>
+<p>And if you have a moment &mdash; <b>what made you cancel?</b> Just hit reply. We're small enough that one honest sentence genuinely changes what we build next.</p>
+<p>Thanks for giving us a go.</p>
+<p style="color:#475569">Matthew<br><span style="color:#94a3b8;font-size:13px">Trey</span></p>
+</div>`;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), EMAIL_TIMEOUT_MS);
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM || "Trey <hello@trey.today>",
+        to: [client.email],
+        reply_to: process.env.RESEND_REPLY_TO || "info@trey.today",
+        subject: `Sorry to see you go, ${first || biz}`,
+        text, html,
+      }),
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) console.error(`[billing] goodbye email ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  } catch (e) {
+    console.error("[billing] goodbye email failed:", e && e.message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function shell(title, inner, statusCode = 200) {
   return {
     statusCode,
@@ -210,15 +310,19 @@ exports.handler = async (event) => {
       await clientsStore.setJSON(loc, {
         ...client,
         cancelAtPeriodEnd: action === "cancel",
-        currentPeriodEnd: sub.current_period_end || client.currentPeriodEnd || "",
+        currentPeriodEnd: periodEndOf(sub) || client.currentPeriodEnd || "",
         cancelRequestedAt: action === "cancel" ? new Date().toISOString() : "",
       });
     } catch (e) {
       console.error("[billing] record update failed:", e.message);
     }
 
-    const until = fmtDate(sub.current_period_end);
+    const until = fmtDate(periodEndOf(sub));
     if (action === "cancel") {
+      // After the Stripe change and the record write — never email somebody that
+      // they've cancelled unless it actually went through.
+      try { await sendGoodbyeEmail(client, loc, until); }
+      catch (e) { console.error("[billing] goodbye email threw:", e && e.message); }
       return shell(businessName, `<div class="ok">Your subscription has been cancelled.</div>
         <div class="card">
           <p class="note">You won't be charged again. Trey keeps working until <b>${escapeHtml(until)}</b> &mdash; the end of the period you've already paid for &mdash; and your stand stops after that.</p>
@@ -248,7 +352,7 @@ exports.handler = async (event) => {
   const price = amount && amount.unit_amount != null
     ? `£${(amount.unit_amount / 100).toFixed(2)}${amount.recurring ? " / " + amount.recurring.interval : ""}`
     : "—";
-  const renews = fmtDate(sub.current_period_end);
+  const renews = fmtDate(periodEndOf(sub));
   const ending = sub.cancel_at_period_end === true;
 
   const detail = `<div class="card">

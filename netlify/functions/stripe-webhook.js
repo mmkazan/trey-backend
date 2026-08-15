@@ -29,6 +29,26 @@
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 
+// When does the current paid period end? (unix seconds, 0 if unknown)
+//
+// WHY THIS IS NOT JUST sub.current_period_end — 15 Aug. Stripe's newer API
+// (this account runs "flexible" billing mode) REMOVED current_period_end from
+// the top-level Subscription object and moved it onto each subscription ITEM.
+// Reading the old field returned undefined, so Naomi's cancellation went through
+// correctly but stored no end date — which silently killed the "only N days
+// left" banner and left a blank date on the confirmation page.
+//
+// Checks the item first (current API), then the legacy top-level field, then
+// cancel_at, which Stripe sets to the effective end when cancel_at_period_end
+// is turned on.
+function periodEndOf(sub) {
+  if (!sub) return 0;
+  const item = sub.items && sub.items.data && sub.items.data[0];
+  const v = (item && item.current_period_end) || sub.current_period_end || sub.cancel_at || 0;
+  const n = Number(v);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
@@ -246,7 +266,7 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
         await setStatus(locationId, status, {
           stripeSubscriptionId: obj.id || undefined,
           cancelAtPeriodEnd: ended ? false : obj.cancel_at_period_end === true,
-          currentPeriodEnd: obj.current_period_end || undefined,
+          currentPeriodEnd: periodEndOf(obj) || undefined,
         });
         break;
       }
