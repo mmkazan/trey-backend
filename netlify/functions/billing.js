@@ -347,6 +347,31 @@ exports.handler = async (event) => {
       : "We couldn't load your subscription just then.");
   }
 
+  // SELF-HEAL. Stripe is the truth; the record is a cache that drives the inbox
+  // countdown and the admin "Cancellation pending" pill. They drift whenever a
+  // cancellation happens somewhere this code didn't see — directly in the Stripe
+  // dashboard, or before a bug was fixed. (Naomi's did exactly that: her
+  // cancellation was correct in Stripe but stored no end date here, so the
+  // banner had nothing to count down from.)
+  //
+  // So every view reconciles them. Writes only on an actual difference, so a
+  // page refresh isn't a pointless blob write.
+  const liveCancelling = sub.cancel_at_period_end === true;
+  const livePeriodEnd = periodEndOf(sub);
+  if (client.cancelAtPeriodEnd !== liveCancelling ||
+      Number(client.currentPeriodEnd || 0) !== livePeriodEnd) {
+    try {
+      await clientsStore.setJSON(loc, {
+        ...client,
+        cancelAtPeriodEnd: liveCancelling,
+        currentPeriodEnd: livePeriodEnd || "",
+      });
+      console.log(`[billing] reconciled ${loc} from Stripe: cancelling=${liveCancelling} periodEnd=${livePeriodEnd}`);
+    } catch (e) {
+      console.error("[billing] reconcile write failed:", e.message);
+    }
+  }
+
   const amount = sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].price
     ? sub.items.data[0].price : null;
   const price = amount && amount.unit_amount != null
