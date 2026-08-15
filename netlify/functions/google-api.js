@@ -16,6 +16,7 @@
 // Re-check the upload URL against Google's "Upload media" docs when you enable it.
 
 const V4 = "https://mybusiness.googleapis.com/v4";
+const BINFO = "https://mybusinessbusinessinformation.googleapis.com/v1";
 
 function creds() {
   return {
@@ -121,4 +122,41 @@ async function uploadLocationPhoto({ accountId, locationId }, bytes, contentType
   return createData; // { name, googleUrl, ... }
 }
 
-module.exports = { isEnabled, getAccessToken, createLocalPost, uploadLocationPhoto };
+// --- Profile read / update (Business Information API v1) ---------------------
+// Read a location's profile fields for the completeness audit. locationId is the
+// bare id (v1 resource name is "locations/{id}", no account prefix).
+async function getLocation(locationId, readMask) {
+  const token = await getAccessToken();
+  const mask = readMask || "name,title,categories,phoneNumbers,websiteUri,regularHours,profile,serviceItems,openInfo,storefrontAddress";
+  const resp = await fetch(`${BINFO}/locations/${encodeURIComponent(locationId)}?readMask=${encodeURIComponent(mask)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(`Google getLocation ${resp.status}: ${JSON.stringify(data).slice(0, 200)}`);
+  return data;
+}
+
+// Apply an approved fix (categories / description / serviceItems / hours). patch
+// is a partial Location; updateMask is the comma-list of fields being changed.
+async function updateLocation(locationId, patch, updateMask) {
+  const token = await getAccessToken();
+  const resp = await fetch(`${BINFO}/locations/${encodeURIComponent(locationId)}?updateMask=${encodeURIComponent(updateMask)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(`Google updateLocation ${resp.status}: ${JSON.stringify(data).slice(0, 200)}`);
+  return data;
+}
+
+// Count location photos (v4 media list). Used by the completeness score.
+async function listPhotoCount(accountId, locationId) {
+  const token = await getAccessToken();
+  const resp = await fetch(`${V4}/accounts/${accountId}/locations/${locationId}/media`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(`Google media.list ${resp.status}`);
+  return data.totalMediaItemCount || (Array.isArray(data.mediaItems) ? data.mediaItems.length : 0);
+}
+
+module.exports = { isEnabled, getAccessToken, createLocalPost, uploadLocationPhoto, getLocation, updateLocation, listPhotoCount };
