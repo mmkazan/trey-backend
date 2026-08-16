@@ -571,6 +571,8 @@
   // every subsequent filter or search just redraws dots over it instantly. A
   // "Refit" button appears when the filtered set has drifted off the frame.
   let VIEW = "list", ROWS = [], MAPDATA = null, MAPFOR = 0;
+  // Why the last map attempt produced no picture, in the server's own words.
+  let MAPERR = null;
   // null = fit everything in frame (the default). A number = you've zoomed.
   let MAPZOOM = null;
   // Colour the dots by prospect tier, or by where they are in the pipeline.
@@ -642,8 +644,11 @@
       if (res.status === 403) { logout(); return; }
       const d = await res.json();
       MAPDATA = d.map || null;
+      // Whatever Google actually said, verbatim. A blank map used to be silent
+      // and the printed guess was wrong, which cost an evening.
+      MAPERR = MAPDATA ? null : (d.mapError || d.error || null);
       MAPFOR = pts.length;
-    } catch(e) { MAPDATA = null; }
+    } catch(e) { MAPDATA = null; MAPERR = "Couldn't reach Trey's server to build the map."; }
     drawMap();
   }
 
@@ -663,9 +668,14 @@
         '<span class="muted">(one Google lookup each; kept 30 days)</span></div>';
     }
     if (!MAPDATA) {
-      box.innerHTML = note + '<div class="card muted">' +
-        (placed.length ? 'No map picture — is <b>Maps Static API</b> enabled on the Google key?'
-                       : 'None of these leads have coordinates yet.') + '</div>';
+      // Say WHY, in Google's own words, rather than guessing at a cause. The
+      // list below still works — a missing picture is never fatal.
+      const why = placed.length
+        ? (MAPERR ? esc(MAPERR) : 'No map picture came back, and the server gave no reason.')
+        : 'None of these leads have coordinates yet.';
+      box.innerHTML = note + '<div class="card muted">' + why +
+        (placed.length ? ' <button class="btn-secondary" style="margin-left:6px" ' +
+          'onclick="fetchBaseMap()">Try again</button>' : '') + '</div>';
       return;
     }
 

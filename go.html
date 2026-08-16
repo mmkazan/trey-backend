@@ -232,6 +232,7 @@ var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads", WAL
 var token=localStorage.getItem("treyAdminToken")||"";
 var POOL=[], HERE=null, RADIUS=250, LABEL="";
 var MAP=null;          // {img, centre:{lat,lng}, zoom, width, height} from nearby.js
+var MAPERR=null;       // why the last attempt produced no picture, in the server's words
 var MAPZOOM=null;      // null = fitted to the pins; a number = you've zoomed
 var COLOUR_BY="tier";  // "tier" (who to knock on) or "status" (where they've got to)
 // "Come back" — the owner wasn't in. The commonest result of a cold knock, and
@@ -494,9 +495,15 @@ function myLeadsByPostcode(){
         (list?'<br><br>You have leads in: '+esc(list)+'.':'')+'</div>';
       return;
     }
-    HERE=null; MAP=null; CENTRE_IS_ME=false;
+    HERE=null; MAP=null; MAPZOOM=null; CENTRE_IS_ME=false;
     POOL=hits;
     render(POOL,0,want);
+    // THE MIRROR PATHS NEVER ASKED FOR A PICTURE. Both of them set MAP=null and
+    // rendered, and the only thing that ever fetched a basemap was the zoom
+    // button — so the two screens the field tool is actually used from had no
+    // map at all unless you happened to press +. The list is drawn first so it's
+    // usable straight away; the picture arrives a moment later.
+    refreshPicture();
   })();
 }
 
@@ -525,8 +532,9 @@ function myLeadsNearMe(){
         'Apify import brings them in, or use <b>Look up</b> on the leads map.</span></div>';
       return;
     }
-    POOL=near; MAP=null;
+    POOL=near; MAP=null; MAPZOOM=null;
     render(POOL,radius,"your saved leads");
+    refreshPicture();   // see the note in the postcode path — the mirror never fetched one
     startWatching();
   }, function(err){
     out.innerHTML='<div class="msg"><b>Location unavailable.</b><br>'+esc(err.message||"")+'</div>';
@@ -629,7 +637,14 @@ function statusPinCls(l){
 }
 
 function mapFor(view,list){
-  if(!MAP||!MAP.img) return "";
+  // No picture is never fatal — the cards below still work. But it used to be
+  // completely silent, which is indistinguishable from a broken app.
+  if(!MAP||!MAP.img){
+    if(!MAPERR) return "";
+    return '<div class="msg" style="margin-bottom:10px">'+esc(MAPERR)+
+      '<div style="margin-top:8px"><button class="sec" style="padding:6px 10px" ' +
+      'onclick="refreshPicture()">Try again</button></div></div>';
+  }
   var on={};
   var pins=view.map(function(l,i){
     var idx=POOL.indexOf(l); on[idx]=1;
@@ -774,8 +789,11 @@ async function refreshPicture(){
         // Keep yourself at the centre while zooming, so + doesn't wander off.
         centreLat: HERE?HERE.lat:undefined, centreLng: HERE?HERE.lng:undefined })});
     var d=await r.json();
-    if(d && d.map) MAP=d.map;
-  }catch(e){ /* keep the old picture rather than blanking the screen */ }
+    if(d && d.map){ MAP=d.map; MAPERR=null; }
+    // Keep the old picture rather than blanking the screen — but say why there
+    // isn't a new one, in the server's own words rather than a guess.
+    else if(d) MAPERR=d.mapError||d.error||null;
+  }catch(e){ MAPERR = OFFLINE ? null : "Couldn't reach Trey to draw the map."; }
   render(POOL,RADIUS,LABEL);
 }
 

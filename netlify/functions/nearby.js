@@ -361,9 +361,37 @@ function fitZoom(centre, points) {
   return 1;
 }
 
+/**
+ * WHY THIS VARIABLE EXISTS.
+ *
+ * A missing map used to be completely silent: staticMap returned null for four
+ * quite different reasons — no key configured, Google refused the key, Google
+ * refused the request, the network died — and every one of them showed the same
+ * blank box with a guess printed under it ("is Maps Static API enabled?"). That
+ * guess was wrong at least once and cost an evening. The reason Google gives is
+ * plain text in the response body; there is no excuse for throwing it away.
+ *
+ * Set on every attempt, read immediately afterwards by the handler. Safe because
+ * a Lambda invocation handles one request at a time.
+ */
+let LAST_MAP_ERROR = null;
+
+/** Never let an API key travel back to the browser inside an error message. */
+const scrubKey = (s) => String(s == null ? "" : s)
+  .replace(/key=[^&\s"'<]+/gi, "key=***")
+  .replace(/AIza[0-9A-Za-z_-]+/g, "***")
+  .replace(/\s+/g, " ")
+  .trim()
+  .slice(0, 300);
+
 async function staticMap(centre, leads, forceZoom) {
   const key = process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_PLACES_API_KEY;
-  if (!key) return null;
+  if (!key) {
+    LAST_MAP_ERROR = "No Google API key in this deploy — neither GOOGLE_MAPS_STATIC_KEY " +
+      "nor GOOGLE_PLACES_API_KEY is set. Env vars only take effect on a NEW deploy.";
+    console.warn("[nearby] " + LAST_MAP_ERROR);
+    return null;
+  }
   // forceZoom is the manual zoom control; without it, fit everything in frame.
   const zoom = forceZoom != null ? forceZoom : fitZoom(centre, leads);
   const url = `https://maps.googleapis.com/maps/api/staticmap?center=${centre.lat},${centre.lng}` +
@@ -374,12 +402,17 @@ async function staticMap(centre, leads, forceZoom) {
     const resp = await fetch(url, { signal: ctrl.signal });
     clearTimeout(timer);
     if (!resp.ok) {
-      // Most likely the key doesn't have Maps Static API enabled. Not fatal —
-      // the list works perfectly well without a picture.
-      console.warn(`[nearby] static map unavailable (${resp.status}) — enable "Maps Static API" on the key.`);
+      // Google puts the actual reason in the body as plain text — "The provided
+      // API key is expired", "This API project is not authorized to use this
+      // API", "You must enable Billing". Pass it through verbatim; guessing is
+      // what wasted the time last time.
+      const why = scrubKey(await resp.text().catch(() => ""));
+      LAST_MAP_ERROR = `Google refused the map picture (HTTP ${resp.status})` + (why ? `: ${why}` : ".");
+      console.warn("[nearby] " + LAST_MAP_ERROR);
       return null;
     }
     const buf = Buffer.from(await resp.arrayBuffer());
+    LAST_MAP_ERROR = null;
     // centre/zoom/size go with the picture so the page can place its own dots.
     return {
       img: `data:image/png;base64,${buf.toString("base64")}`,
@@ -387,7 +420,10 @@ async function staticMap(centre, leads, forceZoom) {
       zoom, width: MAP_W, height: MAP_H,
     };
   } catch (e) {
-    console.warn("[nearby] static map failed:", e.message);
+    LAST_MAP_ERROR = e.name === "AbortError"
+      ? `Google took longer than ${TIMEOUT_MS}ms to send the map picture.`
+      : `Couldn't reach Google for the map picture: ${scrubKey(e.message)}`;
+    console.warn("[nearby] " + LAST_MAP_ERROR);
     return null;
   }
 }
@@ -526,7 +562,8 @@ exports.handler = async (event) => {
       ? { lat: Number(body.centreLat), lng: Number(body.centreLng) } : centre;
     const zoom = isFinite(wantZoom) ? Math.max(1, Math.min(20, Math.round(wantZoom))) : null;
     const map = await staticMap(c, pts, zoom);
-    return { statusCode: 200, body: JSON.stringify({ map, centre: c, count: pts.length }) };
+    return { statusCode: 200,
+      body: JSON.stringify({ map, mapError: map ? null : LAST_MAP_ERROR, centre: c, count: pts.length }) };
   }
 
   // --- One business: live reviews + who's beating them -------------------------
@@ -625,10 +662,11 @@ exports.handler = async (event) => {
 
     // Optional, because the base64 image roughly doubles the response size and
     // isn't wanted on every refresh.
-    const map = body.includeMap === false ? null : await staticMap({ lat, lng }, leads);
+    const wantMap = body.includeMap !== false;
+    const map = wantMap ? await staticMap({ lat, lng }, leads) : null;
     return { statusCode: 200, body: JSON.stringify({
       count: flagged.length, radius, leads: flagged, placeLabel,
-      centre: { lat, lng }, map, clientCount }) };
+      centre: { lat, lng }, map, mapError: (wantMap && !map) ? LAST_MAP_ERROR : null, clientCount }) };
   } catch (err) { return fail(err); }
 };
 
