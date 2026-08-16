@@ -701,7 +701,24 @@
   }
 
   // ---- Prospect an area from the desk --------------------------------------
-  let AREA = [];
+  // Its OWN map, drawn on the picture nearby.js already returned with the search
+  // — so it costs nothing extra, and the live results can never be mistaken for
+  // dots on the saved-leads map below.
+  let AREA = [], AREAMAP = null;
+
+  function areaMapHtml(){
+    if (!AREAMAP) return "";
+    const cls = (l) => l.isClient ? "mine"
+      : l.field.band === "Knock now" ? "t1" : l.field.band === "Worth a look" ? "t2" : "t3";
+    return TreyMap.html({
+      map: AREAMAP,
+      pins: AREA.map((l,i) => ({ lat:l.lat, lng:l.lng, cls:cls(l), label:"",
+        title:(l.businessName||"") + " — " + (l.isClient?"already yours":l.field.band) })),
+      legend: [{colour:"#047857",label:"Knock now"},{colour:"#b45309",label:"Worth a look"},
+               {colour:"#94a3b8",label:"Skip"},{colour:"#4338ca",label:"Already yours"}],
+      alt: "Map of the live search results",
+    });
+  }
   async function prospect(){
     const q = document.getElementById("areaQ").value.trim();
     const out = document.getElementById("areaOut");
@@ -719,12 +736,26 @@
         return;
       }
       AREA = d.leads || [];
+      AREAMAP = d.map || null;
       const known = new Set(LEADS.map(l => l.placeId).filter(Boolean));
-      out.innerHTML = '<div class="mapnote" style="margin-top:10px;"><b>'+AREA.length+
+      const already = AREA.filter(l => l.isClient || (l.placeId && known.has(l.placeId))).length;
+      // THESE ARE NOT YOUR LEADS. Saying so loudly, because the page also has a
+      // leads list, a tier filter and a map — and the first time this ran for
+      // real, 19 live Google results next to 286 saved leads read as one thing.
+      // The tier filter and the leads map apply to the leads, never to these.
+      out.innerHTML =
+        '<div style="margin-top:12px;border:1px solid #fed7aa;background:#fff7ed;border-radius:10px;padding:11px 13px;">'+
+        '<div style="font-weight:800;font-size:13px;color:#9a3412;text-transform:uppercase;letter-spacing:.04em;">Live Google results — not your leads</div>'+
+        '<div class="mapnote" style="margin:6px 0 0;"><b>'+AREA.length+
         '</b> businesses within '+d.radius+'m of '+esc(d.placeLabel||q)+
-        '. Best door first — save the ones worth a walk.</div>' +
+        ', best door first. Scored on what Google shows — <b>no reply-rate data</b>, so these numbers aren\'t the Tier you see below. '+
+        'The tier filter and the map underneath apply to your saved leads, not to this list.'+
+        (already?' <b>'+already+'</b> of these you already have.':'')+
+        '</div>'+
+        (AREAMAP ? '<div style="margin-top:10px;">'+areaMapHtml()+'</div>' : '')+
+        '</div>' +
         AREA.map(function(l,i){
-          const have = l.placeId && known.has(l.placeId);
+          const have = l.isClient || (l.placeId && known.has(l.placeId));
           return '<div class="row" style="align-items:center;border-top:1px solid #eef2f7;padding:8px 0;margin:0;">'+
             '<div style="flex:0 0 44px;font-weight:800;color:'+
               (l.field.band==="Knock now"?"#047857":l.field.band==="Worth a look"?"#b45309":"#94a3b8")+
@@ -732,7 +763,7 @@
             '<div style="flex:2;"><b>'+esc(l.businessName)+'</b><div class="muted" style="font-size:12px;">'+
               esc(l.category||"")+(l.rating!=null?' · '+l.rating+'★ · '+(l.reviewCount||0)+' reviews':'')+'</div></div>'+
             '<div style="flex:0;">'+(have
-              ? '<span class="muted" style="font-size:12px;">Already a lead</span>'
+              ? '<span class="muted" style="font-size:12px;">'+(l.isClient?"Already a client":"Already a lead")+'</span>'
               : '<button class="btn-secondary" id="as'+i+'" onclick="saveArea('+i+')">Save as lead</button>')+
             '</div></div>';
         }).join("");

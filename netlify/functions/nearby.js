@@ -44,6 +44,8 @@
 // a handful of calls, not one per shop. Field masks are set tight because Places
 // bills by the fields you ask for.
 
+const { getStore } = require("@netlify/blobs");
+
 const PLACES_BASE = "https://places.googleapis.com/v1";
 const TIMEOUT_MS = 8000;
 
@@ -64,6 +66,46 @@ const DETAIL_FIELDS = [
 // Identity, not a yes/no — see admin-auth.js. One shared implementation so the
 // four back-office endpoints can never drift apart on who may do what.
 const { adminIdentity, can, unauthorized, forbidden } = require("./admin-auth.js");
+
+/**
+ * Businesses you already sell to, so a live search never offers you one of your
+ * own customers as a hot prospect.
+ *
+ * Found the hard way: a DE21 search returned "Raven Holistics" as the top door to
+ * knock on, scored 97. That's Matthew's wife's business and already a client.
+ * Matching on place ID alone wasn't enough — a client that was never a scraped
+ * lead has no place ID stored — so names and phone numbers are matched too.
+ */
+const normName = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const normPhone = (s) => String(s || "").replace(/\D/g, "").slice(-9);
+
+async function clientMatchers() {
+  const empty = { placeIds: new Set(), names: new Set(), phones: new Set() };
+  try {
+    const store = getStore({ name: "clients", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+    const { blobs } = await store.list();
+    const m = { placeIds: new Set(), names: new Set(), phones: new Set() };
+    for (const b of blobs) {
+      const c = await store.get(b.key, { type: "json" });
+      if (!c) continue;
+      if (c.placeId) m.placeIds.add(c.placeId);
+      if (c.businessName) m.names.add(normName(c.businessName));
+      const p = normPhone(c.phone);
+      if (p.length === 9) m.phones.add(p);
+    }
+    return m;
+  } catch (e) {
+    // Not fatal — worst case you're shown a business you already own and you
+    // notice. Better than the whole search failing.
+    console.warn("[nearby] couldn't read clients to exclude them:", e.message);
+    return empty;
+  }
+}
+
+const isExistingClient = (l, m) =>
+  !!((l.placeId && m.placeIds.has(l.placeId)) ||
+     (l.businessName && m.names.has(normName(l.businessName))) ||
+     (normPhone(l.phone).length === 9 && m.phones.has(normPhone(l.phone))));
 
 async function places(path, bodyObj, fieldMask) {
   const key = process.env.GOOGLE_PLACES_API_KEY;
@@ -568,8 +610,17 @@ exports.handler = async (event) => {
       .sort((a, b) => b.field.total - a.field.total || (a.metresAway || 0) - (b.metresAway || 0));
     // Optional, because the base64 image roughly doubles the response size and
     // isn't wanted on every refresh.
+    // Flag anyone you already sell to rather than offering them as a prospect.
+    const mine = await clientMatchers();
+    const flagged = leads.map((l) => (isExistingClient(l, mine) ? { ...l, isClient: true } : l));
+    const clientCount = flagged.filter((l) => l.isClient).length;
+
+    // Optional, because the base64 image roughly doubles the response size and
+    // isn't wanted on every refresh.
     const map = body.includeMap === false ? null : await staticMap({ lat, lng }, leads);
-    return { statusCode: 200, body: JSON.stringify({ count: leads.length, radius, leads, placeLabel, centre: { lat, lng }, map }) };
+    return { statusCode: 200, body: JSON.stringify({
+      count: flagged.length, radius, leads: flagged, placeLabel,
+      centre: { lat, lng }, map, clientCount }) };
   } catch (err) { return fail(err); }
 };
 
