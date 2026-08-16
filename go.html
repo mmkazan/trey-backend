@@ -105,6 +105,34 @@
   .maplegend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin:-6px 0 12px;flex-wrap:wrap;}
   .maplegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:0;}
   .spin{text-align:center;color:var(--muted);font-size:14px;padding:26px 0;}
+  .offline{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;
+    padding:9px 11px;font-size:12.5px;line-height:1.5;margin-bottom:10px;}
+  /* The day's tally. Small, always there, because the doors-to-signups number
+     is the one thing a walk produces that nothing else can. */
+  .tally{display:flex;gap:8px;margin-bottom:12px;}
+  .tally div{flex:1;background:#fff;border:1px solid var(--border);border-radius:10px;
+    padding:8px 6px;text-align:center;}
+  .tally b{display:block;font-size:18px;line-height:1.15;color:var(--indigo);}
+  .tally span{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
+  /* Zoom, and the status pills. Same five colours as the desk list. */
+  .mapctl{display:flex;gap:6px;align-items:center;margin:-4px 0 10px;}
+  .mapctl button{font-size:15px;font-weight:800;width:38px;height:38px;padding:0;border-radius:9px;
+    border:1px solid var(--border);background:#fff;color:#334155;}
+  .mapctl button:disabled{opacity:.4;}
+  .mapctl .fit{width:auto;padding:0 12px;font-size:13px;font-weight:700;}
+  .mapctl button.on{background:var(--indigo);color:#fff;border-color:var(--indigo);}
+  .mapctl .lab{font-size:12px;color:var(--muted);}
+  .pills{display:flex;gap:5px;margin-top:9px;flex-wrap:wrap;}
+  .pills button{font-size:11.5px;font-weight:800;padding:6px 10px;border-radius:999px;
+    border:1px solid transparent;opacity:.5;}
+  .pills button.on{opacity:1;outline:2px solid rgba(0,0,0,.14);}
+  .p-New{background:#e2e8f0;color:#334155;} .p-Comeback{background:#ffedd5;color:#9a3412;}
+  .p-Contacted{background:#dbeafe;color:#1e40af;}
+  .p-Ontrial{background:#fef9c3;color:#854d0e;} .p-Converted{background:#dcfce7;color:#166534;}
+  .p-Lost{background:#fee2e2;color:#991b1b;}
+  .pin.st-new{background:#94a3b8;} .pin.st-comeback{background:#ea580c;} .pin.st-contacted{background:#2563eb;}
+  .pin.st-trial{background:#ca8a04;} .pin.st-converted{background:#16a34a;}
+  .pin.st-lost{background:#dc2626;}
   /* Doorstep consent. Deliberately plain and a bit serious-looking — this is a
      legal record being created in front of the person it's about, not a form. */
   .cbox{border:1px solid #c7d2fe;background:#f8faff;border-radius:11px;padding:11px;margin-top:10px;}
@@ -193,16 +221,25 @@
       <button id="fKnock" onclick="setFilter('knock')">Knock now</button>
     </div>
   </div>
+  <div id="tally"></div>
   <div id="out"></div>
 </main>
 </div>
 
 <script src="/map-pins.js"></script>
 <script>
-var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads";
+var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads", WALK_API="/.netlify/functions/walk";
 var token=localStorage.getItem("treyAdminToken")||"";
 var POOL=[], HERE=null, RADIUS=250, LABEL="";
 var MAP=null;          // {img, centre:{lat,lng}, zoom, width, height} from nearby.js
+var MAPZOOM=null;      // null = fitted to the pins; a number = you've zoomed
+var COLOUR_BY="tier";  // "tier" (who to knock on) or "status" (where they've got to)
+// "Come back" — the owner wasn't in. The commonest result of a cold knock, and
+// the one you most need to find again tomorrow.
+var STATUSES=["New","Come back","Contacted","On trial","Converted","Lost"];
+var WATCH=null;        // geolocation watch id, while the page is in front of you
+var LAST_RENDER_AT=null; // where you were when the list was last put in order
+var statusCls=function(s){ return "p-"+String(s||"New").replace(/\s/g,""); };
 // Leads already in the CRM, keyed by place ID. Swept from Apify the night before
 // a new town, these carry the one thing Places CANNOT give you: whether the owner
 // replies to reviews. See loadMyLeads().
@@ -219,7 +256,8 @@ function saveTok(){
   if(!v){document.getElementById("gateMsg").textContent="Paste your admin token.";return;}
   token=v; localStorage.setItem("treyAdminToken",v); showApp();
 }
-function showApp(){ document.getElementById("gate").style.display="none"; document.getElementById("app").style.display="block"; }
+function showApp(){
+  loadWalk(); document.getElementById("gate").style.display="none"; document.getElementById("app").style.display="block"; }
 if(token) showApp();
 
 async function api(payload){
@@ -264,6 +302,7 @@ function find(){
       POOL=d.leads||[]; MAP=d.map||null; CENTRE_IS_ME=true;
       await loadMyLeads();
       render(POOL,d.radius);
+      startWatching();
     }catch(e){
       out.innerHTML = e.config ? setupMsg() : '<div class="msg"><b>Couldn\'t search.</b><br>'+esc(e.message)+'</div>';
     }finally{ btn.disabled=false; }
@@ -275,15 +314,102 @@ function find(){
 
 // Pull the CRM list once per session. Cheap (no Places call at all) and it's
 // what lets yesterday's desk work show up on today's pavement.
+// ---- Working with no signal ------------------------------------------------
+// A high street is exactly where mobile data gives up, and a field tool that
+// shows a blank screen in a dead spot is worse than useless. So the list is
+// cached on the phone, and anything you tap while offline is queued and sent
+// when the signal comes back.
+//
+// Only the fields this page draws are cached — full records are several times
+// larger and localStorage is a few megabytes, not unlimited.
+var CACHE_KEY="treyLeadCache", QUEUE_KEY="treyQueue";
+var OFFLINE=false, OFFLINE_SINCE=null;
+var CACHE_FIELDS=["placeId","businessName","category","rating","reviewCount","phone",
+  "website","address","lat","lng","tier","score","hook","ownerResponseRate",
+  "recentUnanswered","legalStatus","marketingConsent","outreachStatus","isClient"];
+
+function cacheLeads(arr){
+  try{
+    var slim=arr.map(function(l){
+      var o={}; CACHE_FIELDS.forEach(function(f){
+        if(l[f]!==undefined&&l[f]!==null&&l[f]!=="") o[f]=l[f]; });
+      return o;
+    });
+    localStorage.setItem(CACHE_KEY,JSON.stringify({at:new Date().toISOString(),leads:slim}));
+  }catch(e){ /* a full quota isn't worth failing a walk over */ }
+}
+function readCache(){
+  try{ return JSON.parse(localStorage.getItem(CACHE_KEY)||"null"); }catch(e){ return null; }
+}
+
+function queued(){ try{ return JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]"); }catch(e){ return []; } }
+function enqueue(item){
+  try{ var q=queued(); q.push(item); localStorage.setItem(QUEUE_KEY,JSON.stringify(q.slice(-500))); }catch(e){}
+}
+async function flushQueue(){
+  var q=queued();
+  if(!q.length) return;
+  var left=[];
+  for(var i=0;i<q.length;i++){
+    try{
+      var r=await fetch(q[i].url,{method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+        body:JSON.stringify(q[i].body)});
+      if(!r.ok) left.push(q[i]);
+    }catch(e){ left.push(q[i]); }
+  }
+  try{ localStorage.setItem(QUEUE_KEY,JSON.stringify(left)); }catch(e){}
+  if(q.length!==left.length && POOL.length) render(POOL,RADIUS,LABEL);
+}
+window.addEventListener("online",function(){ OFFLINE=false; flushQueue(); });
+
+// Send now if we can, queue it if we can't. Never lose a tap.
+async function sendOrQueue(url,body){
+  try{
+    var r=await fetch(url,{method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+      body:JSON.stringify(body)});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return true;
+  }catch(e){ enqueue({url:url,body:body}); OFFLINE=true; return false; }
+}
+
+function offlineBanner(){
+  if(!OFFLINE) return "";
+  var age="";
+  if(OFFLINE_SINCE){
+    var mins=Math.round((Date.now()-Date.parse(OFFLINE_SINCE))/60000);
+    age = mins<60 ? (mins+" min old") : (Math.round(mins/60)+"h old");
+  }
+  var q=queued().length;
+  return '<div class="offline"><b>No signal &mdash; showing the copy on this phone</b>'+
+    (age?" ("+esc(age)+")":"")+
+    (q?'<br>'+q+' change'+(q===1?'':'s')+' waiting to be sent.':'')+'</div>';
+}
+
+// Pull the CRM list once per session. Cheap (no Places call at all) and it's
+// what lets yesterday's desk work show up on today's pavement.
 async function loadMyLeads(){
   if(MINE_LOADED) return;
   try{
     var r=await fetch(LEADS_API,{headers:{"Authorization":"Bearer "+token}});
-    if(!r.ok) return;
+    if(!r.ok) throw new Error("HTTP "+r.status);
     var arr=await r.json();
-    (Array.isArray(arr)?arr:[]).forEach(function(l){ if(l.placeId) MINE[l.placeId]=l; });
-    MINE_LOADED=true;
-  }catch(e){ /* the street tool still works without it */ }
+    if(!Array.isArray(arr)) throw new Error("bad response");
+    arr.forEach(function(l){ if(l.placeId) MINE[l.placeId]=l; });
+    MINE_LOADED=true; OFFLINE=false;
+    cacheLeads(arr);
+    flushQueue();
+  }catch(e){
+    // No signal, or the server is down. Fall back to the copy on the phone and
+    // SAY SO — silently showing yesterday's data as if it were live is how you
+    // knock on a door you converted this morning.
+    var c=readCache();
+    if(c && c.leads && c.leads.length){
+      c.leads.forEach(function(l){ if(l.placeId) MINE[l.placeId]=l; });
+      MINE_LOADED=true; OFFLINE=true; OFFLINE_SINCE=c.at;
+    }
+  }
 }
 
 // Tier from the desk score, which is a BETTER signal than fieldScore when it
@@ -401,6 +527,7 @@ function myLeadsNearMe(){
     }
     POOL=near; MAP=null;
     render(POOL,radius,"your saved leads");
+    startWatching();
   }, function(err){
     out.innerHTML='<div class="msg"><b>Location unavailable.</b><br>'+esc(err.message||"")+'</div>';
   }, {enableHighAccuracy:true,timeout:12000,maximumAge:30000});
@@ -431,6 +558,7 @@ function signThemUp(i){
       from:"go", at:new Date().toISOString(),
     }));
   }catch(e){ /* private mode — they can still type it in */ }
+  sendOrQueue(WALK_API,{event:"signup",placeId:l.placeId,businessName:l.businessName});
   window.open("/signup.html","_blank","noopener");
 }
 
@@ -492,21 +620,195 @@ function gapLine(l){
 // is how dots quietly end up in the wrong place.
 function pinPos(lat,lng){ return TreyMap.pinPos(MAP,lat,lng); }
 
+function statusPinCls(l){
+  var saved=l.placeId?MINE[l.placeId]:null;
+  var st=(saved&&saved.outreachStatus)||"New";
+  return st==="Come back"?"st-comeback":st==="Contacted"?"st-contacted":
+         st==="On trial"?"st-trial":st==="Converted"?"st-converted":
+         st==="Lost"?"st-lost":"st-new";
+}
+
 function mapFor(view,list){
+  if(!MAP||!MAP.img) return "";
   var on={};
   var pins=view.map(function(l,i){
     var idx=POOL.indexOf(l); on[idx]=1;
-    return { lat:l.lat, lng:l.lng, cls:bandCls(l.field.band), label:i+1,
+    return { lat:l.lat, lng:l.lng,
+             cls: COLOUR_BY==="status"?statusPinCls(l):bandCls(l.field.band),
+             label:i+1,
              title:l.businessName+" \u2014 "+l.field.band, onclick:"jump("+idx+")" };
   });
   var dim=list.filter(function(l){ return !on[POOL.indexOf(l)]; });
-  var legend=[{colour:"#047857",label:"Knock now"},{colour:"#b45309",label:"Worth a look"},
-              {colour:"#94a3b8",label:"Skip"},
-              {colour:"#4338ca",label:CENTRE_IS_ME?"You":"Centre"}];
+  var legend = COLOUR_BY==="status"
+    ? [{colour:"#94a3b8",label:"New"},{colour:"#ea580c",label:"Come back"},
+       {colour:"#2563eb",label:"Contacted"},{colour:"#ca8a04",label:"On trial"},
+       {colour:"#16a34a",label:"Converted"},{colour:"#dc2626",label:"Lost"},
+       {colour:"#4338ca",label:CENTRE_IS_ME?"You":"Centre"}]
+    : [{colour:"#047857",label:"Knock now"},{colour:"#b45309",label:"Worth a look"},
+       {colour:"#94a3b8",label:"Skip"},
+       {colour:"#4338ca",label:CENTRE_IS_ME?"You":"Centre"}];
   if(view.length<list.length) legend.push({colour:"#94a3b8",label:"Hidden by filter",faint:true});
-  return TreyMap.html({ map:MAP, pins:pins, dim:dim, me:HERE,
+
+  var ctl='<div class="mapctl">'+
+    '<button onclick="zoomMap(1)" aria-label="Zoom in">+</button>'+
+    '<button onclick="zoomMap(-1)" aria-label="Zoom out">\u2212</button>'+
+    '<button class="fit" onclick="zoomFit()"'+(MAPZOOM==null?" disabled":"")+'>Fit</button>'+
+    '<span class="lab">'+(MAPZOOM==null?"fitted":"zoom "+MAPZOOM)+'</span>'+
+    '<span style="flex:1"></span>'+
+    '<button class="fit'+(COLOUR_BY==="tier"?" on":"")+'" onclick="setColourBy(\'tier\')">Tier</button>'+
+    '<button class="fit'+(COLOUR_BY==="status"?" on":"")+'" onclick="setColourBy(\'status\')">Status</button>'+
+    '</div>'+
+    '<div id="recentre" style="display:none;margin:-4px 0 10px;">'+
+      '<button class="sec" style="width:100%" onclick="zoomFit()">You\'ve walked off the map \u2014 recentre</button></div>';
+
+  var html=TreyMap.html({ map:MAP, pins:pins, dim:dim, me:HERE,
     meLabel:CENTRE_IS_ME?"Y":"+", meTitle:CENTRE_IS_ME?"You are here":"Search centre",
     legend:legend, alt:"Map of the businesses around you" });
+  // Give the "you" dot an id so it can be moved on every GPS tick without
+  // redrawing the whole map.
+  html=html.replace('<span class="pin you"','<span class="pin you" id="meDot"');
+  return html+ctl;
+}
+
+function setColourBy(v){ COLOUR_BY=v; render(POOL,RADIUS,LABEL); }
+
+// ---- Today's tally ---------------------------------------------------------
+// Doors knocked, and how many became signups. This is the number the whole
+// runner question turns on — see claude/trey-go-runner-model.md — and it can
+// only be captured as it happens.
+async function loadWalk(){
+  var el=document.getElementById("tally");
+  if(!el) return;
+  try{
+    var r=await fetch(WALK_API+"?days=14",{headers:{"Authorization":"Bearer "+token}});
+    if(!r.ok) return;
+    var d=await r.json();
+    var today=(d.days||[])[0]||{doors:0,signups:0};
+    var t=d.totals||{};
+    el.innerHTML='<div class="tally">'+
+      '<div><b>'+today.doors+'</b><span>doors today</span></div>'+
+      '<div><b>'+today.signups+'</b><span>signed today</span></div>'+
+      '<div><b>'+t.doors+'</b><span>doors 14d</span></div>'+
+      '<div><b>'+(t.conversionPct==null?"&mdash;":t.conversionPct+"%")+'</b><span>'+
+        (t.doorsPerSignup?("1 in "+t.doorsPerSignup):"conversion")+'</span></div>'+
+      '</div>';
+  }catch(e){ /* the tally is never worth blocking a walk for */ }
+}
+
+// ---- Following you as you walk ---------------------------------------------
+// getCurrentPosition fires ONCE. On a tool you use while walking down a street
+// that means the "you" dot and every distance are wrong within a minute.
+//
+// So: watch continuously, but be careful what that triggers.
+//   - moving the dot and rewriting the distances is FREE (both are local maths)
+//   - re-ordering the list is NOT free to the user — a list that reshuffles
+//     under your thumb mid-tap is horrible — so it only happens after 50m,
+//     which at walking pace is about 40 seconds
+//   - the map PICTURE is never re-fetched automatically, because that costs a
+//     Static Maps call every time. You get a Recentre button instead.
+function startWatching(){
+  if(WATCH!=null || !navigator.geolocation) return;
+  WATCH=navigator.geolocation.watchPosition(function(pos){
+    var was=HERE;
+    HERE={lat:pos.coords.latitude,lng:pos.coords.longitude};
+    if(!POOL.length) return;
+    POOL.forEach(function(l){
+      if(l.lat!=null&&l.lng!=null) l.metresAway=metresBetween(HERE,l);
+    });
+    var movedSinceOrder = LAST_RENDER_AT ? metresBetween(LAST_RENDER_AT,HERE) : 1e9;
+    if(movedSinceOrder!=null && movedSinceOrder>50){
+      render(POOL,RADIUS,LABEL);          // far enough that the order is stale
+    }else{
+      updateInPlace(was);                 // just move the dot and the numbers
+    }
+  }, function(){ /* a dropped fix isn't worth interrupting a walk for */ },
+     {enableHighAccuracy:true,maximumAge:5000,timeout:20000});
+}
+
+function stopWatching(){
+  if(WATCH!=null && navigator.geolocation) navigator.geolocation.clearWatch(WATCH);
+  WATCH=null;
+}
+// Don't hold the GPS open while the phone is in a pocket.
+document.addEventListener("visibilitychange",function(){
+  if(document.hidden) stopWatching(); else if(POOL.length&&CENTRE_IS_ME) startWatching();
+});
+
+// Cheap refresh: the dot and the distance labels only. No re-order, no refetch.
+function updateInPlace(){
+  var me=document.getElementById("meDot");
+  if(me&&MAP){
+    var p=pinPos(HERE.lat,HERE.lng);
+    if(p){ me.style.left=p.x+"%"; me.style.top=p.y+"%"; me.style.display=""; }
+    else me.style.display="none";       // walked off the edge of the picture
+  }
+  POOL.forEach(function(l){
+    var el=document.getElementById("dist"+POOL.indexOf(l));
+    if(el&&l.metresAway!=null) el.textContent=" \u00b7 "+l.metresAway+"m away";
+  });
+  var rc=document.getElementById("recentre");
+  if(rc&&MAP&&HERE){
+    // Offer to recentre once you've walked off the picture you're looking at.
+    rc.style.display = pinPos(HERE.lat,HERE.lng) ? "none" : "";
+  }
+}
+
+// Zoom re-fetches only the PICTURE — one Static Maps call, no Places search.
+async function zoomMap(delta){
+  var base = MAPZOOM!=null ? MAPZOOM : (MAP?MAP.zoom:16);
+  MAPZOOM = Math.max(1,Math.min(20, base+delta));
+  await refreshPicture();
+}
+async function zoomFit(){ MAPZOOM=null; await refreshPicture(); }
+
+async function refreshPicture(){
+  var pts=POOL.filter(function(l){ return l.lat!=null&&l.lng!=null; })
+    .map(function(l){ return {lat:l.lat,lng:l.lng}; });
+  if(HERE) pts.push({lat:HERE.lat,lng:HERE.lng});
+  if(!pts.length) return;
+  try{
+    var r=await fetch(API,{method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+      body:JSON.stringify({action:"basemap",points:pts,
+        zoom: MAPZOOM==null?undefined:MAPZOOM,
+        // Keep yourself at the centre while zooming, so + doesn't wander off.
+        centreLat: HERE?HERE.lat:undefined, centreLng: HERE?HERE.lng:undefined })});
+    var d=await r.json();
+    if(d && d.map) MAP=d.map;
+  }catch(e){ /* keep the old picture rather than blanking the screen */ }
+  render(POOL,RADIUS,LABEL);
+}
+
+// Set where a business has got to, from the doorstep. Writes to the same leads
+// store the desk list reads, so the two are never out of step.
+async function setStatus(i,st){
+  var l=POOL[i]; if(!l||!l.placeId) return;
+  var box=document.getElementById("st"+i);
+  if(box) Array.prototype.forEach.call(box.querySelectorAll("button"),function(b){
+    b.className=statusCls(b.getAttribute("data-s"))+(b.getAttribute("data-s")===st?" on":""); });
+  await sendOrQueue(LEADS_API,{lead:{
+    placeId:l.placeId, businessName:l.businessName, outreachStatus:st,
+    category:l.category, phone:l.phone, address:l.address,
+  }});
+  // A door is a business you set a status on. Logged separately from the lead,
+  // because a lead only remembers where it ended up — not that you walked past
+  // it on Tuesday. See walk.js.
+  await sendOrQueue(WALK_API,{event:"door",placeId:l.placeId,
+    businessName:l.businessName,status:st});
+  if(MINE[l.placeId]) MINE[l.placeId].outreachStatus=st;
+  else MINE[l.placeId]={placeId:l.placeId,businessName:l.businessName,outreachStatus:st};
+  if(COLOUR_BY==="status") render(POOL,RADIUS,LABEL);
+  loadWalk();
+}
+
+function statusPills(l,i){
+  if(!l.placeId) return "";
+  var saved=MINE[l.placeId];
+  var cur=(saved&&saved.outreachStatus)||"New";
+  return '<div class="pills" id="st'+i+'">'+STATUSES.map(function(s){
+    return '<button data-s="'+esc(s)+'" class="'+statusCls(s)+(s===cur?" on":"")+
+      '" onclick="setStatus('+i+',\''+s+'\')">'+esc(s)+'</button>';
+  }).join("")+'</div>';
 }
 
 // Tap a dot, get the card. The map answers "which way", the card answers "why".
@@ -521,6 +823,7 @@ function jump(idx){
 function render(list,radius,label){
   var out=document.getElementById("out");
   RADIUS=radius; LABEL=label||"";
+  if(HERE) LAST_RENDER_AT={lat:HERE.lat,lng:HERE.lng};
   document.getElementById("ctl").style.display = list.length ? "block" : "none";
 
   // Filter by band, then sort. Both are pure view state — no refetch, no extra
@@ -544,14 +847,14 @@ function render(list,radius,label){
 
   var mapHtml = mapFor(view, list);
 
-  if(!view.length){ out.innerHTML=mapHtml+'<div class="msg">Nothing in that band here. Try <b>All</b>, or a wider radius.</div>'; return; }
-  out.innerHTML=mapHtml+view.map(function(l,i){
+  if(!view.length){ out.innerHTML=offlineBanner()+mapHtml+'<div class="msg">Nothing in that band here. Try <b>All</b>, or a wider radius.</div>'; return; }
+  out.innerHTML=offlineBanner()+mapHtml+view.map(function(l,i){
     var idx=POOL.indexOf(l);
     return '<div class="card" id="c'+idx+'">'+
       '<div class="row">'+
         '<div style="flex:1;min-width:0;">'+
           '<div class="name">'+esc(l.businessName)+pecr(l,idx)+savedChip(l)+'</div>'+
-          '<div class="cat">'+esc(l.category||"—")+(l.metresAway!=null?' · '+l.metresAway+'m away':'')+'</div>'+
+          '<div class="cat">'+esc(l.category||"—")+'<span id="dist'+idx+'">'+(l.metresAway!=null?' · '+l.metresAway+'m away':'')+'</span></div>'+
           '<div class="stats"><span class="stars">'+stars(l.rating)+'</span> '+(l.rating!=null?l.rating:"unrated")+' · <b>'+(l.reviewCount||0)+'</b> review'+((l.reviewCount||0)===1?"":"s")+'</div>'+
         '</div>'+
         '<div class="score '+bandCls(l.field.band)+'"><b>'+l.field.total+'</b><span>'+esc(l.field.band)+'</span></div>'+
@@ -566,6 +869,7 @@ function render(list,radius,label){
         '<button onclick="consentPanel('+idx+')" id="k'+idx+'">Got consent</button>'+
         '<button class="signup" onclick="signThemUp('+idx+')">Sign up now</button>'+
       '</div>'+
+      statusPills(l,idx)+
       '<div id="cons'+idx+'"></div>'+
       '<div id="d'+idx+'"></div>'+
     '</div>';

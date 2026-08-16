@@ -361,10 +361,11 @@ function fitZoom(centre, points) {
   return 1;
 }
 
-async function staticMap(centre, leads) {
+async function staticMap(centre, leads, forceZoom) {
   const key = process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_PLACES_API_KEY;
   if (!key) return null;
-  const zoom = fitZoom(centre, leads);
+  // forceZoom is the manual zoom control; without it, fit everything in frame.
+  const zoom = forceZoom != null ? forceZoom : fitZoom(centre, leads);
   const url = `https://maps.googleapis.com/maps/api/staticmap?center=${centre.lat},${centre.lng}` +
     `&zoom=${zoom}&size=${MAP_W}x${MAP_H}&scale=2&maptype=roadmap&key=${key}`;
   try {
@@ -505,6 +506,10 @@ exports.handler = async (event) => {
   // without running a Places search at all — no search, no cost beyond the one
   // Static Maps call.
   if (body.action === "basemap") {
+    // An explicit zoom/centre overrides the auto-fit, so the page can zoom and
+    // pan without re-running any Places search — one Static Maps call per step
+    // and nothing else.
+    const wantZoom = Number(body.zoom);
     // Number(null) is 0, not NaN — so a lead with null coordinates would become
     // a point in the Atlantic and drag the map's centre out to sea with it.
     // Reject empties explicitly before converting.
@@ -517,8 +522,11 @@ exports.handler = async (event) => {
       lat: pts.reduce((a, p) => a + p.lat, 0) / pts.length,
       lng: pts.reduce((a, p) => a + p.lng, 0) / pts.length,
     };
-    const map = await staticMap(centre, pts);
-    return { statusCode: 200, body: JSON.stringify({ map, centre, count: pts.length }) };
+    const c = (isFinite(Number(body.centreLat)) && isFinite(Number(body.centreLng)))
+      ? { lat: Number(body.centreLat), lng: Number(body.centreLng) } : centre;
+    const zoom = isFinite(wantZoom) ? Math.max(1, Math.min(20, Math.round(wantZoom))) : null;
+    const map = await staticMap(c, pts, zoom);
+    return { statusCode: 200, body: JSON.stringify({ map, centre: c, count: pts.length }) };
   }
 
   // --- One business: live reviews + who's beating them -------------------------

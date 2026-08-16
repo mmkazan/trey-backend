@@ -354,6 +354,19 @@ exports.handler = async (event) => {
 
     const now = new Date().toISOString();
     const incoming = Array.isArray(body.leads) ? body.leads : (body.lead ? [body.lead] : []);
+    // THE DISTINCTION THAT MAKES THE EDIT CONTROLS WORK.
+    //
+    // `leads: [...]` is a bulk import — a scrape, a CSV. It must never reset a
+    // status you set by hand or invent a legal status, because getting that
+    // wrong authorises an unlawful message.
+    //
+    // `lead: {...}` is a HUMAN editing one record in the UI. Their choice must
+    // win, or the control is decorative.
+    //
+    // The original code applied the import guard to both, so the status pill,
+    // the legal-status dropdown and the TPS dropdown all silently threw away
+    // what you chose. Three dead controls, found 17 Aug.
+    const isBulk = Array.isArray(body.leads);
     if (!incoming.length) {
       return { statusCode: 400, body: JSON.stringify({ error: "No lead(s) provided" }) };
     }
@@ -375,7 +388,9 @@ exports.handler = async (event) => {
       }
       const record = {
         ...existing, ...incomingClean, id: key,
-        outreachStatus: existing.outreachStatus || incomingClean.outreachStatus || "New",
+        outreachStatus: isBulk
+          ? (existing.outreachStatus || incomingClean.outreachStatus || "New")
+          : (incomingClean.outreachStatus || existing.outreachStatus || "New"),
         // Whose lead this is. Set once, on creation, and never reassigned by a
         // later import — a re-scrape must not move someone else's lead to you.
         // Ownership cannot be reconstructed after the fact, which is why it goes
@@ -385,10 +400,17 @@ exports.handler = async (event) => {
         // Compliance facts are decided by a human (or Companies House), never by
         // a scrape. A re-import must not be able to flip a sole trader to "ltd"
         // or manufacture consent and thereby authorise an unlawful message.
-        legalStatus: existing.legalStatus || "",
+        // Read from `raw`, not `incomingClean`, so a human can deliberately set it
+        // BACK to "" ("Unknown — restricted"). incomingClean strips empty values,
+        // which would make un-setting impossible.
+        legalStatus: (!isBulk && "legalStatus" in raw)
+          ? String(raw.legalStatus || "")
+          : (existing.legalStatus || ""),
         marketingConsent: existing.marketingConsent === true,
         consentSource: existing.consentSource || "",
-        tpsStatus: existing.tpsStatus || "unchecked",
+        tpsStatus: (!isBulk && "tpsStatus" in raw)
+          ? (String(raw.tpsStatus || "") || "unchecked")
+          : (existing.tpsStatus || "unchecked"),
         createdAt: existing.createdAt || now,
         updatedAt: now,
       };

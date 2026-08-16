@@ -39,7 +39,7 @@
   .lead-name{font-weight:600;font-size:15px;}
   .lead-sub{color:var(--muted);font-size:12px;}
   .pill{font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;border:none;cursor:pointer;white-space:nowrap;}
-  .s-New{background:#e2e8f0;color:#334155;}.s-Contacted{background:#dbeafe;color:#1e40af;}
+  .s-New{background:#e2e8f0;color:#334155;}.s-Comeback{background:#ffedd5;color:#9a3412;}.s-Contacted{background:#dbeafe;color:#1e40af;}
   .s-Ontrial{background:#fef9c3;color:#854d0e;}.s-Converted{background:#dcfce7;color:#166534;}.s-Lost{background:#fee2e2;color:#991b1b;}
   .badge{font-size:10px;font-weight:700;padding:3px 7px;border-radius:5px;}
   .b-client{background:#dcfce7;color:#166534;}.b-flag{background:#fee2e2;color:#991b1b;}.b-thin{background:#f1f5f9;color:#64748b;}
@@ -101,12 +101,23 @@
      map and the bands in go.html. Colouring by pipeline status (the first
      version) made every dot green, because every lead starts as "New". */
   .pin.t1{background:#047857;} .pin.t2{background:#b45309;} .pin.t3{background:#94a3b8;}
+  /* Status colours, matched to the .s-* pills so a dot and its row agree. */
+  .pin.st-new{background:#94a3b8;} .pin.st-comeback{background:#ea580c;} .pin.st-contacted{background:#2563eb;}
+  .pin.st-trial{background:#ca8a04;} .pin.st-converted{background:#16a34a;}
+  .pin.st-lost{background:#dc2626;}
   .pin.mine{background:#4338ca;}
   .pin.lost{background:#cbd5e1;color:#64748b;border-color:#e2e8f0;}
   .pin.you{background:#4338ca;width:18px;height:18px;line-height:14px;font-size:10px;cursor:default;}
   .dim{position:absolute;transform:translate(-50%,-50%);width:9px;height:9px;border-radius:50%;
        background:#94a3b8;border:1.5px solid #fff;opacity:.5;}
   .maplegend{display:flex;gap:14px;font-size:12px;color:#64748b;margin:0 0 12px;flex-wrap:wrap;}
+  .mapctl{display:flex;gap:6px;align-items:center;margin:0 0 8px;flex-wrap:wrap;}
+  .mapctl button{font-size:13px;font-weight:800;width:32px;height:32px;padding:0;border-radius:8px;
+    border:1px solid #cfe0f6;background:#fff;color:#334155;cursor:pointer;}
+  .mapctl button:disabled{opacity:.4;cursor:default;}
+  .mapctl .lab{font-size:12px;color:#64748b;margin-left:4px;}
+  .mapctl .colby{width:auto;padding:0 10px;font-size:12px;font-weight:700;}
+  .mapctl .colby.on{background:#4338ca;color:#fff;border-color:#4338ca;}
   .maplegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;}
   .viewtog{display:flex;gap:6px;}
   .viewtog button{font-size:12.5px;font-weight:700;padding:7px 13px;border-radius:999px;
@@ -183,7 +194,7 @@
         <div style="flex:0;min-width:150px;">
           <select id="leadStatusFilter" onchange="render()">
             <option value="">All statuses</option>
-            <option>New</option><option>Contacted</option><option>On trial</option><option>Converted</option><option>Lost</option>
+            <option>New</option><option>Come back</option><option>Contacted</option><option>On trial</option><option>Converted</option><option>Lost</option>
           </select>
         </div>
         <div style="flex:0;min-width:130px;">
@@ -215,7 +226,10 @@
 <script>
   const API = "/.netlify/functions/leads";
   const NEARBY_API = "/.netlify/functions/nearby";
-  const STATUSES = ["New","Contacted","On trial","Converted","Lost"];
+  // "Come back" is the most common outcome of a cold knock — the owner wasn't in.
+  // Without it that door is either wrongly marked Contacted or left as New and
+  // forgotten, and it's the one you most need to find again tomorrow.
+  const STATUSES = ["New","Come back","Contacted","On trial","Converted","Lost"];
   let token = sessionStorage.getItem("treyAdminToken") || "";
   let LEADS = [];
   let DRAFT_STATE = { phone:"", email:"" };
@@ -557,6 +571,20 @@
   // every subsequent filter or search just redraws dots over it instantly. A
   // "Refit" button appears when the filtered set has drifted off the frame.
   let VIEW = "list", ROWS = [], MAPDATA = null, MAPFOR = 0;
+  // null = fit everything in frame (the default). A number = you've zoomed.
+  let MAPZOOM = null;
+  // Colour the dots by prospect tier, or by where they are in the pipeline.
+  // Tier is the default because it's what you decide a walk on; status becomes
+  // the useful one once you've actually been out and set some.
+  let COLOUR_BY = "tier";
+
+  function setColourBy(v){ COLOUR_BY = v; drawMap(); }
+  function zoomMap(delta){
+    const base = MAPZOOM != null ? MAPZOOM : (MAPDATA ? MAPDATA.zoom : 14);
+    MAPZOOM = Math.max(1, Math.min(20, base + delta));
+    fetchBaseMap();
+  }
+  function zoomFit(){ MAPZOOM = null; fetchBaseMap(); }
 
   function setView(v){
     VIEW = v;
@@ -585,6 +613,15 @@
   // at all: already yours (indigo) or lost (faded).
   function pinCls(l){
     const st = l.outreachStatus || "New";
+    if (COLOUR_BY === "status") {
+      // The same five colours as the pills on the cards, so a dot and its row
+      // always agree at a glance.
+      return st === "Come back" ? "st-comeback"
+        : st === "Contacted" ? "st-contacted"
+        : st === "On trial" ? "st-trial"
+        : st === "Converted" ? "st-converted"
+        : st === "Lost" ? "st-lost" : "st-new";
+    }
     if (l.isClient || st === "Converted" || st === "On trial") return "mine";
     if (st === "Lost") return "lost";
     const t = Number(l.tier);
@@ -599,7 +636,9 @@
     try {
       const res = await fetch(NEARBY_API, { method:"POST",
         headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
-        body: JSON.stringify({ action:"basemap", points: pts }) });
+        body: JSON.stringify({ action:"basemap", points: pts,
+          // Only sent when you've zoomed; otherwise the server fits the pins.
+          zoom: MAPZOOM == null ? undefined : MAPZOOM }) });
       if (res.status === 403) { logout(); return; }
       const d = await res.json();
       MAPDATA = d.map || null;
@@ -636,17 +675,34 @@
         ' outside this view. <button class="btn-secondary" onclick="fetchBaseMap()">Refit map</button></div>';
     }
 
+    const ctl =
+      '<div class="mapctl">' +
+      '<button onclick="zoomMap(1)" title="Zoom in">+</button>' +
+      '<button onclick="zoomMap(-1)" title="Zoom out">&minus;</button>' +
+      '<button class="colby" style="width:auto" onclick="zoomFit()" ' +
+        (MAPZOOM == null ? 'disabled' : '') + ' title="Fit every pin back in frame">Fit</button>' +
+      '<span class="lab">' + (MAPZOOM == null ? 'fitted' : 'zoom ' + MAPZOOM) + '</span>' +
+      '<span style="flex:1"></span>' +
+      '<span class="lab">Colour</span>' +
+      '<button class="colby' + (COLOUR_BY === "tier" ? " on" : "") + '" onclick="setColourBy(\'tier\')">Tier</button>' +
+      '<button class="colby' + (COLOUR_BY === "status" ? " on" : "") + '" onclick="setColourBy(\'status\')">Status</button>' +
+      '</div>';
+
+    const legend = COLOUR_BY === "status"
+      ? [{colour:"#94a3b8",label:"New"},{colour:"#ea580c",label:"Come back"},
+         {colour:"#2563eb",label:"Contacted"},{colour:"#ca8a04",label:"On trial"},
+         {colour:"#16a34a",label:"Converted"},{colour:"#dc2626",label:"Lost"}]
+      : [{colour:"#047857",label:"Tier 1"},{colour:"#b45309",label:"Tier 2"},
+         {colour:"#94a3b8",label:"Tier 3"},{colour:"#4338ca",label:"Already yours"}];
+
     const pins = placed.map(o => ({
       lat:o.l.lat, lng:o.l.lng, cls:pinCls(o.l), label:"",
       title:(o.l.businessName||"") + " — Tier " + (o.l.tier||"?") +
             " · " + (o.l.outreachStatus||"New"),
       onclick:"jumpLead(" + o.i + ")",
     }));
-    box.innerHTML = note + TreyMap.html({
-      map: MAPDATA, pins: pins,
-      legend: [{colour:"#047857",label:"Tier 1"},{colour:"#b45309",label:"Tier 2"},
-               {colour:"#94a3b8",label:"Tier 3"},{colour:"#4338ca",label:"Already yours"}],
-      alt: "Map of your leads",
+    box.innerHTML = note + ctl + TreyMap.html({
+      map: MAPDATA, pins: pins, legend: legend, alt: "Map of your leads",
     }) + '<div class="mapnote">Showing <b>' + onFrame + '</b> of ' + ROWS.length +
       ' filtered leads. Click a dot to jump to it.</div>';
   }
