@@ -97,8 +97,12 @@
   .pin{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;padding:0;
        border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.5);
        color:#fff;font-size:11px;font-weight:800;line-height:18px;text-align:center;cursor:pointer;}
-  .pin.new{background:#047857;} .pin.contacted{background:#b45309;}
-  .pin.mine{background:#4338ca;} .pin.lost{background:#94a3b8;}
+  /* Colour is TIER — how good a prospect — matching the tier filter beside the
+     map and the bands in go.html. Colouring by pipeline status (the first
+     version) made every dot green, because every lead starts as "New". */
+  .pin.t1{background:#047857;} .pin.t2{background:#b45309;} .pin.t3{background:#94a3b8;}
+  .pin.mine{background:#4338ca;}
+  .pin.lost{background:#cbd5e1;color:#64748b;border-color:#e2e8f0;}
   .pin.you{background:#4338ca;width:18px;height:18px;line-height:14px;font-size:10px;cursor:default;}
   .dim{position:absolute;transform:translate(-50%,-50%);width:9px;height:9px;border-radius:50%;
        background:#94a3b8;border:1.5px solid #fff;opacity:.5;}
@@ -261,6 +265,52 @@
   // Trey Score says how healthy a business's profile is. Opportunity says how
   // much *Trey* can move the needle × how winnable they are — so the best leads
   // float to the top and we don't chase businesses we can't help or reach.
+  /**
+   * PROSPECT QUALITY — one number, one truth.
+   *
+   * There were two answers to "how good a lead is this", and on Matthew's real
+   * 286 they disagreed about 39 of the 62 Tier 1 leads — 63%.
+   *
+   *   - `l.score`/`l.tier`  computed at Apify import. KNOWS THE OWNER REPLY RATE.
+   *   - opportunityScore()  recomputed live, dominated by
+   *                         gap x (reviewCount/150) x 40 — i.e. review VOLUME.
+   *
+   * Example from the live data: Sir's Barber Shop, 4.7 stars, 96 reviews, 0%
+   * replies. Apify scores it 81 (Tier 1) because never replying is the whole
+   * pitch. opportunityScore says 49, "Warm", because 96 reviews isn't many.
+   * Meanwhile ROYAL BARBER — 4.9 stars, 295 reviews, 5% replies — comes out
+   * "Hot" on volume alone while Apify puts it in Tier 2.
+   *
+   * The Apify score wins because it is the only one that can see the reply rate,
+   * and because it targets the 4.0-4.7 sweet spot where a tap stand actually
+   * moves the needle. This is the same reasoning that produced fieldScore for
+   * the street tool.
+   *
+   * opportunityScore stays as the FALLBACK for leads that never came from Apify
+   * (quick-added, or saved from the field), which have no stored score. Those are
+   * marked so the difference is visible rather than silently mixed in.
+   *
+   * NOTE: the "Trey Score" badge is a DIFFERENT question and stays — that is the
+   * business's own Google health, the thing you show THEM. This is how good a
+   * prospect they are for you.
+   */
+  function prospectScore(l){
+    const stored = Number(l && l.score);
+    if (isFinite(stored) && stored > 0) {
+      const tier = Number(l.tier) || (stored >= 72 ? 1 : stored >= 52 ? 2 : 3);
+      return { total: Math.round(stored), tier,
+               band: tier === 1 ? "Best door" : tier === 2 ? "Worth a look" : "Skip",
+               color: tier === 1 ? "#047857" : tier === 2 ? "#b45309" : "#94a3b8",
+               source: "apify" };
+    }
+    const op = opportunityScore(l);
+    const tier = op.total >= 60 ? 1 : op.total >= 33 ? 2 : 3;
+    return { total: op.total, tier,
+             band: tier === 1 ? "Best door" : tier === 2 ? "Worth a look" : "Skip",
+             color: tier === 1 ? "#047857" : tier === 2 ? "#b45309" : "#94a3b8",
+             source: "live" };
+  }
+
   // Mirrors opportunityScore() in netlify/functions/profile-audit.js — keep in sync.
   function opportunityScore(l){
     var cl=function(x,a,b){return Math.max(a,Math.min(b,x));};
@@ -465,7 +515,8 @@
       const r=await fetch(API,{headers:{Authorization:"Bearer "+token}}); if(r.status===403){logout();return;}
       LEADS=await r.json(); if(!Array.isArray(LEADS))LEADS=[];
       // Default sort: Opportunity high→low (ring the best first), then old lead score.
-      LEADS.sort((a,b)=>(opportunityScore(b).total-opportunityScore(a).total)||((b.score||-1)-(a.score||-1)));
+      // One sort order, matching the badge and the map colours.
+      LEADS.sort((a,b)=>(prospectScore(b).total-prospectScore(a).total)||((b.score||-1)-(a.score||-1)));
       render();
     }catch(e){ list.innerHTML='<div class="muted" style="padding:10px;">Failed to load: '+esc(e.message)+'</div>'; }
   }
@@ -515,12 +566,25 @@
   const withGeo = (rows) => rows.filter(o => o.l.lat != null && o.l.lng != null);
   const needGeo = (rows) => rows.filter(o => (o.l.lat == null || o.l.lng == null) && o.l.placeId);
 
+  // Colour by TIER, not by pipeline status.
+  //
+  // The first version coloured by outreachStatus, which was a mistake that only
+  // showed up against real data: all 286 leads were "New", so the map was a sea
+  // of identical green dots. Tier is what actually varies (62 / 143 / 81) and
+  // it's what you're deciding on when planning a walk.
+  //
+  // It also means green/amber/grey now mean the SAME thing here as in go.html —
+  // best door, worth a look, skip. Two maps using one palette for two different
+  // things was asking to be misread, and was.
+  //
+  // Pipeline status only overrides the colour when the business isn't a prospect
+  // at all: already yours (indigo) or lost (faded).
   function pinCls(l){
     const st = l.outreachStatus || "New";
     if (l.isClient || st === "Converted" || st === "On trial") return "mine";
     if (st === "Lost") return "lost";
-    if (st === "Contacted") return "contacted";
-    return "new";
+    const t = Number(l.tier);
+    return t === 1 ? "t1" : t === 2 ? "t2" : t === 3 ? "t3" : "t3";
   }
 
   async function fetchBaseMap(){
@@ -570,13 +634,14 @@
 
     const pins = placed.map(o => ({
       lat:o.l.lat, lng:o.l.lng, cls:pinCls(o.l), label:"",
-      title:(o.l.businessName||"") + " — " + (o.l.outreachStatus||"New"),
+      title:(o.l.businessName||"") + " — Tier " + (o.l.tier||"?") +
+            " · " + (o.l.outreachStatus||"New"),
       onclick:"jumpLead(" + o.i + ")",
     }));
     box.innerHTML = note + TreyMap.html({
       map: MAPDATA, pins: pins,
-      legend: [{colour:"#047857",label:"New"},{colour:"#b45309",label:"Contacted"},
-               {colour:"#4338ca",label:"Trial / client"},{colour:"#94a3b8",label:"Lost"}],
+      legend: [{colour:"#047857",label:"Tier 1"},{colour:"#b45309",label:"Tier 2"},
+               {colour:"#94a3b8",label:"Tier 3"},{colour:"#4338ca",label:"Already yours"}],
       alt: "Map of your leads",
     }) + '<div class="mapnote">Showing <b>' + onFrame + '</b> of ' + ROWS.length +
       ' filtered leads. Click a dot to jump to it.</div>';
@@ -697,7 +762,7 @@
   function leadCard(l,i){
     // id lets a map dot scroll straight to this card — see jumpLead().
     const ts=estTreyFromLead(l);
-    const op=opportunityScore(l);
+    const op=prospectScore(l);
     const hasData=(l.rating!=null||l.reviewCount);
     const badges=(l.isClient?'<span class="badge b-client">Client ✓</span>':'')+
       (l.flag==="LOW RATING"?'<span class="badge b-flag">Low rating</span>':'')+
@@ -706,15 +771,20 @@
     const sub=[l.category,(l.rating!=null?l.rating+"★":""),(l.reviewCount!=null?l.reviewCount+" reviews":""),(l.ownerResponseRate?l.ownerResponseRate+" replies":"")].filter(Boolean).join(" · ");
     return '<div class="lead card" id="lead'+i+'">'+
       '<div class="lead-head" onclick="toggle('+i+')">'+
-        '<span class="opp" style="background:'+op.color+'" title="Opportunity — how much Trey can help × how winnable they are. List is sorted highest first."><b>'+op.total+'</b><small>'+op.band+'</small></span>'+
+        '<span class="opp" style="background:'+op.color+'" title="'+(op.source==="apify"
+          ? "Prospect quality from the Apify sweep — knows their owner reply rate. Sorted highest first."
+          : "Estimated: this lead never came from an Apify sweep, so there is no reply-rate data. Sorted highest first.")+
+          '"><b>'+op.total+'</b><small>'+esc(op.band)+'</small></span>'+
         '<span class="lead-main"><div class="lead-name">'+esc(l.businessName||"(no name)")+' '+badges+(hasData?'<span class="tsbadge" style="background:'+ts.color+'" title="Trey Score — estimated Google-health, out of 100">Trey '+ts.total+'</span>':'')+'</div><div class="lead-sub">'+esc(sub)+'</div></span>'+
         '<button class="pill draft-pill" onclick="event.stopPropagation();openDraft('+i+')" title="Draft outreach messages">✍ Draft</button>'+
         '<button class="pill '+clsStatus(l.outreachStatus)+'" onclick="event.stopPropagation();cycleStatus('+i+')">'+esc(l.outreachStatus||"New")+'</button>'+
       '</div>'+
       '<div class="lead-detail" id="detail_'+i+'">'+
           pecrBanner(l)+
-        '<div class="opphint"><b>Opportunity '+op.total+'/100 · '+op.band+'</b> — how much Trey can move the needle here × how winnable they are. This is the sort order.'+
-          (l.tier||l.score!=null?' <span style="color:#166534;">Lead quality: '+(l.tier?"T"+l.tier:"—")+(l.score!=null?" · score "+l.score:"")+'.</span>':'')+
+        '<div class="opphint"><b>Prospect quality '+op.total+'/100 · Tier '+op.tier+' · '+esc(op.band)+'</b> — '+
+          (op.source==="apify"
+            ? 'from the Apify sweep, which knows how often they reply to reviews. This is the sort order and the map colour.'
+            : '<span style="color:#b45309;">estimated — this lead never came from an Apify sweep, so there is no reply-rate data behind it.</span>')+
           (isDeadEnd(l)?' <span style="color:#b91c1c;">Flagged a possible dead end (low rating or very few reviews) — kept in the list, hide with the toggle.</span>':'')+'</div>'+
         (l.hook?'<div class="hook">'+esc(l.hook)+'</div>':'')+
         (l.scoreReasons?'<div class="reasons">'+esc(l.scoreReasons)+'</div>':'')+

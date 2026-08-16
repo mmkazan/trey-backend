@@ -143,28 +143,43 @@
   <div class="sub" id="hdr">Best door first &mdash; who to walk into, right now.</div>
 </header>
 <main>
-  <!-- Yesterday's Apify sweep, on today's pavement. Costs NOTHING — no Places
-       call, no map fetch — because the coordinates and the hook are already
-       stored. Works even before the Google key is set. -->
+  <!-- THE MAIN EVENT: your own leads, mirrored from the admin list. Same tier,
+       same score, same hook as the desk screen, and NO Google calls at all —
+       the sweep already paid for this data. -->
   <div class="bar">
-    <button class="sec" style="flex:1;" onclick="myLeadsNearMe()">My leads near me</button>
-  </div>
-  <div class="bar">
-    <button class="go" id="findBtn" onclick="find()">Find businesses near me</button>
+    <button class="go" onclick="myLeadsNearMe()">My leads near me</button>
     <select id="radius" aria-label="Search radius">
       <option value="150">150m</option>
       <option value="250" selected>250m</option>
       <option value="500">500m</option>
       <option value="1000">1km</option>
+      <option value="2000">2km</option>
     </select>
   </div>
-  <!-- Works without GPS: indoors, on a laptop, or planning tomorrow's round the
-       night before. Same search, different centre. -->
+  <!-- Postcode needs no lookup at all: it matches the postcode already sitting
+       in each lead's address. So it covers EVERY lead, not just the ones that
+       have coordinates — and it works with no GPS, indoors, on a bus. -->
   <div class="bar">
-    <input id="where" placeholder="…or a postcode / town — e.g. DE21 6NX" autocomplete="off"
-      style="flex:1;min-width:0;font-family:inherit;font-size:15px;padding:13px 12px;border:1px solid var(--border);border-radius:11px;" />
-    <button class="sec" onclick="findWhere()">Search</button>
+    <input id="pcQ" placeholder="…or a postcode — e.g. DE1, or DE23 8SF" autocomplete="off"
+      style="flex:1;min-width:0;font-family:inherit;font-size:15px;padding:13px 12px;border:1px solid var(--border);border-radius:11px;"
+      onkeydown="if(event.key==='Enter')myLeadsByPostcode()" />
+    <button class="sec" onclick="myLeadsByPostcode()">Go</button>
   </div>
+
+  <!-- Secondary, and deliberately behind a fold: this is the only thing here
+       that spends Google credit, and it is only needed for a shop the sweep
+       never saw. -->
+  <details style="margin-bottom:12px;">
+    <summary style="font-size:12.5px;color:var(--muted);cursor:pointer;padding:7px 2px;">Not in my list? Search Google live &mdash; uses API credit</summary>
+    <div class="bar" style="margin-top:9px;">
+      <button class="sec" style="flex:1;" id="findBtn" onclick="find()">Find businesses near me</button>
+    </div>
+    <div class="bar">
+      <input id="where" placeholder="…or a postcode / town" autocomplete="off"
+        style="flex:1;min-width:0;font-family:inherit;font-size:15px;padding:13px 12px;border:1px solid var(--border);border-radius:11px;" />
+      <button class="sec" onclick="findWhere()">Search</button>
+    </div>
+  </details>
   <div class="ctl" id="ctl">
     <div class="ctlrow">
       <span class="ctllab">Order</span>
@@ -301,6 +316,64 @@ function savedChip(l){
   return '<span class="tag mine">in your list'+(st&&st!=="New"?' · '+esc(st):'')+'</span>';
 }
 
+// Turn a stored lead into the shape render() draws. This is the mirror: the
+// tier, score and hook are EXACTLY what the admin screen shows — nothing is
+// recomputed here, so the two screens can never disagree.
+function asCard(l, metres){
+  return {
+    placeId:l.placeId, businessName:l.businessName, category:l.category,
+    rating:l.rating==null?null:Number(l.rating), reviewCount:Number(l.reviewCount)||0,
+    phone:l.phone, website:l.website, address:l.address, lat:l.lat, lng:l.lng,
+    legalStatus:l.legalStatus, marketingConsent:l.marketingConsent,
+    metresAway:metres, peerMedian:null, peerCount:0,
+    field:{ total:Number(l.score)||0, band:tierBand(Number(l.tier)) },
+  };
+}
+
+// Every lead that isn't already a customer. Clients aren't doors to knock on.
+function prospects(){
+  return Object.keys(MINE).map(function(k){ return MINE[k]; })
+    .filter(function(l){ return !l.isClient && (l.outreachStatus||"New")!=="Converted"; });
+}
+
+// UK postcode, outward code only ("DE1" from "DE1 2PL"). 283 of 286 real leads
+// carry a full postcode in their address, so matching on the stored text costs
+// nothing and reaches every lead — including the ones with no coordinates.
+var PC_RE=/\b([A-Z]{1,2}\d{1,2}[A-Z]?)\s*(\d[A-Z]{2})\b/i;
+function outwardOf(text){
+  var m=PC_RE.exec(String(text||""));
+  return m?m[1].toUpperCase():"";
+}
+
+function myLeadsByPostcode(){
+  var q=document.getElementById("pcQ").value.trim().toUpperCase().replace(/\s+/g," ");
+  var out=document.getElementById("out");
+  if(!q){ document.getElementById("pcQ").focus(); return; }
+  // Accept a full postcode or just the outward part.
+  var want=outwardOf(q)|| (/^[A-Z]{1,2}\d{1,2}[A-Z]?$/.test(q)?q:"");
+  if(!want){ out.innerHTML='<div class="msg"><b>That doesn\'t look like a postcode.</b><br>Try <b>DE1</b>, or a full one like <b>DE23 8SF</b>.</div>'; return; }
+  out.innerHTML='<div class="spin">Looking through your leads…</div>';
+  (async function(){
+    MINE_LOADED=false; MINE={};
+    await loadMyLeads();
+    var hits=prospects()
+      .filter(function(l){ return outwardOf(l.address)===want; })
+      .map(function(l){ return asCard(l, HERE?metresBetween(HERE,l):null); });
+    if(!hits.length){
+      var codes={};
+      prospects().forEach(function(l){ var o=outwardOf(l.address); if(o) codes[o]=(codes[o]||0)+1; });
+      var list=Object.keys(codes).sort(function(a,b){ return codes[b]-codes[a]; })
+        .slice(0,8).map(function(c){ return c+" ("+codes[c]+")"; }).join(", ");
+      out.innerHTML='<div class="msg"><b>No leads in '+esc(want)+'.</b>'+
+        (list?'<br><br>You have leads in: '+esc(list)+'.':'')+'</div>';
+      return;
+    }
+    HERE=null; MAP=null; CENTRE_IS_ME=false;
+    POOL=hits;
+    render(POOL,0,want);
+  })();
+}
+
 // Show the leads you already have, nearest first, from stored coordinates.
 // ZERO Google calls: no Places search, no map picture. This is the mode for the
 // morning after an Apify sweep — and the only one that works before the key is set.
@@ -315,22 +388,9 @@ function myLeadsNearMe(){
     out.innerHTML='<div class="spin">Loading your leads…</div>';
     await loadMyLeads();
     var radius=Number(document.getElementById("radius").value)||250;
-    var near=Object.keys(MINE).map(function(k){ return MINE[k]; })
-      .filter(function(l){ return l.lat!=null&&l.lng!=null&&!l.isClient; })
-      .map(function(l){
-        return {
-          placeId:l.placeId, businessName:l.businessName, category:l.category,
-          rating:l.rating==null?null:Number(l.rating), reviewCount:Number(l.reviewCount)||0,
-          phone:l.phone, website:l.website, address:l.address, lat:l.lat, lng:l.lng,
-          legalStatus:l.legalStatus, marketingConsent:l.marketingConsent,
-          metresAway:metresBetween(HERE,l),
-          peerMedian:null, peerCount:0,
-          // Ranked by the DESK score, not fieldScore. That's deliberate: these
-          // came from Apify, so their score knows the owner reply rate — which
-          // fieldScore can never see. Better data wins.
-          field:{ total:Number(l.score)||0, band:tierBand(Number(l.tier)) },
-        };
-      })
+    var near=prospects()
+      .filter(function(l){ return l.lat!=null&&l.lng!=null; })
+      .map(function(l){ return asCard(l, metresBetween(HERE,l)); })
       .filter(function(l){ return l.metresAway!=null && l.metresAway<=radius; });
     if(!near.length){
       out.innerHTML='<div class="msg"><b>No saved leads within '+radius+'m.</b><br>'+
@@ -478,7 +538,8 @@ function render(list,radius,label){
   });
 
   document.getElementById("hdr").textContent =
-    view.length+" of "+list.length+" within "+radius+"m of "+(label||"you")+
+    view.length+" of "+list.length+
+    (radius?(" within "+radius+"m of "+(label||"you")):(" in "+(label||"your list")))+
     " · "+(SORT==="distance"?"nearest first":"best door first");
 
   var mapHtml = mapFor(view, list);
