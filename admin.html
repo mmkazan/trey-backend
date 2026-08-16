@@ -212,6 +212,29 @@
     cursor: pointer;
   }
   .needs-banner:hover { background: #ffe4e6; }
+  /* Backup nag. Amber, not red — this is a chore, not a fault. */
+  .backup-banner {
+    display: none;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .backup-banner.show { display: flex; }
+  .backup-banner .grow { flex: 1; min-width: 180px; }
+  .backup-banner button {
+    font-size: 12.5px; font-weight: 700; padding: 7px 11px; border-radius: 7px;
+    border: 1px solid #fcd34d; background: #fff; color: #92400e; cursor: pointer;
+  }
+  .backup-banner button.main { background: #b45309; border-color: #b45309; color: #fff; }
+  .backup-banner button:disabled { opacity: .55; cursor: default; }
 </style>
 </head>
 <body>
@@ -412,8 +435,16 @@
     <div class="card">
       <div class="card-header">
         <h2>All clients</h2>
-        <button class="btn-primary" onclick="openAddForm()">+ Add new client</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-secondary" onclick="downloadBackup('csv')" id="csvBtn" title="Clients as a spreadsheet — for reading, not for restoring">Export CSV</button>
+          <button class="btn-secondary" onclick="downloadBackup('json')" id="jsonBtn" title="Every store, exactly as stored — this is the one that can rebuild the business">Full backup</button>
+          <button class="btn-secondary" onclick="document.getElementById('restoreFile').click()" id="restoreBtn" title="Load a .json backup — shows you what it would change before doing anything">Restore…</button>
+          <input type="file" id="restoreFile" accept=".json,application/json" style="display:none" onchange="restorePicked(this)" />
+          <button class="btn-primary" onclick="openAddForm()">+ Add new client</button>
+        </div>
       </div>
+      <div id="backupBanner" class="backup-banner"></div>
+      <div id="restorePanel" style="display:none;border:1px solid #c7d2fe;background:#f8faff;border-radius:9px;padding:13px;margin-bottom:14px;font-size:13px;line-height:1.55;"></div>
       <div id="needsBanner" class="needs-banner" onclick="showNeedsReview()"></div>
       <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
         <input id="clientSearch" placeholder="Search name, location, phone, contact…" oninput="filterClients()" style="flex:1;min-width:220px;" />
@@ -832,6 +863,195 @@
     if (c) editClient(c);
   }
 
+  // ---- Backups -------------------------------------------------------------
+  // A copy of the data on Matthew's own disk, so a lost key, a bad delete or a
+  // fat-fingered wipe is an inconvenience rather than the end of the business.
+  //
+  // WHY localStorage AND NOT sessionStorage: the admin TOKEN lives in
+  // sessionStorage on purpose, so closing the browser logs you out. But "have I
+  // got a copy on this machine" is a fact about the MACHINE, not about this
+  // session — keep it in sessionStorage and the nag resets every single time the
+  // browser closes, and a banner that cries wolf gets ignored.
+  const BACKUP_KEY = "treyLastBackup";
+  const SNOOZE_KEY = "treyBackupSnooze";
+  const BACKUP_EVERY_DAYS = 7;
+  const EXPORT_API = "/.netlify/functions/export";
+
+  function daysSince(iso) {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    if (isNaN(t)) return null;
+    return Math.floor((Date.now() - t) / 86400000);
+  }
+
+  function renderBackupBanner() {
+    const el = document.getElementById("backupBanner");
+    if (!el) return;
+    const snoozed = localStorage.getItem(SNOOZE_KEY);
+    if (snoozed && Date.parse(snoozed) > Date.now()) { el.className = "backup-banner"; return; }
+
+    const last = localStorage.getItem(BACKUP_KEY);
+    const age = daysSince(last);
+    if (age !== null && age < BACKUP_EVERY_DAYS) { el.className = "backup-banner"; return; }
+
+    const msg = age === null
+      ? "<b>No backup has ever been downloaded to this computer.</b> If the data went, there'd be no copy."
+      : `<b>Last backup was ${age} day${age === 1 ? "" : "s"} ago.</b> Worth taking a fresh one.`;
+    el.innerHTML =
+      '<span class="grow">' + msg + '</span>' +
+      '<button class="main" onclick="downloadBackup(\'json\')">Download backup</button>' +
+      '<button onclick="snoozeBackup()">Not now</button>';
+    el.className = "backup-banner show";
+  }
+
+  // Snooze, not dismiss. A dismissible backup reminder is dismissed once and
+  // never seen again, which is the same as not having one.
+  function snoozeBackup() {
+    const t = new Date(Date.now() + 86400000).toISOString();
+    localStorage.setItem(SNOOZE_KEY, t);
+    renderBackupBanner();
+  }
+
+  async function downloadBackup(format) {
+    const btn = document.getElementById(format === "csv" ? "csvBtn" : "jsonBtn");
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Preparing…"; }
+    try {
+      const url = EXPORT_API + "?format=" + encodeURIComponent(format);
+      // Fetched rather than linked, because the token goes in a header — putting
+      // it in a query string would leak it into history, logs and referrers.
+      const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+      if (res.status === 403) { logout(); return; }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const blob = await res.blob();
+      const stamp = new Date().toISOString().slice(0, 10);
+      const name = format === "csv" ? `trey-clients-${stamp}.csv` : `trey-backup-${stamp}.json`;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+
+      // Only a FULL backup clears the nag. A CSV is for reading — it can't
+      // restore anything, so counting it as a backup would be a lie that only
+      // becomes obvious on the worst possible day.
+      if (format === "json") {
+        localStorage.setItem(BACKUP_KEY, new Date().toISOString());
+        localStorage.removeItem(SNOOZE_KEY);
+      }
+      renderBackupBanner();
+    } catch (e) {
+      alert("Couldn't download the backup: " + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+  }
+
+  // ---- Restore -------------------------------------------------------------
+  // Preview first, always. The classic disaster is reaching for a backup in a
+  // panic and overwriting good data with an older copy — turning a partial loss
+  // into a total one. So the file is loaded, compared, and shown to you, and
+  // nothing is written until you pick a mode.
+  const RESTORE_API = "/.netlify/functions/restore";
+  let restoreBackup = null;
+
+  function restorePicked(input) {
+    const f = input.files && input.files[0];
+    input.value = "";                       // so re-picking the same file fires again
+    if (!f) return;
+    const panel = document.getElementById("restorePanel");
+    panel.style.display = "";
+    panel.innerHTML = "Reading " + esc(f.name) + "…";
+    const r = new FileReader();
+    r.onload = () => {
+      try { restoreBackup = JSON.parse(r.result); }
+      catch (e) {
+        panel.innerHTML = '<b>That file isn\'t valid JSON.</b><br>Use the <b>.json</b> backup, not the .csv.' + restoreCancelBtn();
+        return;
+      }
+      runRestore("preview", esc(f.name));
+    };
+    r.onerror = () => { panel.innerHTML = "Couldn't read that file." + restoreCancelBtn(); };
+    r.readAsText(f);
+  }
+
+  const restoreCancelBtn = () =>
+    ' <button class="btn-secondary" style="margin-top:10px" onclick="closeRestore()">Close</button>';
+
+  function closeRestore() {
+    restoreBackup = null;
+    const p = document.getElementById("restorePanel");
+    p.style.display = "none"; p.innerHTML = "";
+  }
+
+  async function runRestore(mode, filename) {
+    const panel = document.getElementById("restorePanel");
+    if (!restoreBackup) return;
+    const payload = { backup: restoreBackup, mode };
+    if (mode === "overwrite") {
+      const typed = prompt("This REPLACES existing records with the ones in the backup.\n\nNothing is deleted — records not in the backup are left alone.\n\nType OVERWRITE to confirm:");
+      if (String(typed || "").trim() !== "OVERWRITE") { return; }
+      payload.confirm = "OVERWRITE";
+    }
+    panel.innerHTML = mode === "preview" ? "Comparing against what's live…" : "Restoring…";
+    try {
+      const res = await fetch(RESTORE_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 403) { logout(); return; }
+      const d = await res.json();
+      if (!res.ok) { panel.innerHTML = "<b>" + esc(d.error || ("HTTP " + res.status)) + "</b>" + restoreCancelBtn(); return; }
+      renderRestoreResult(d, filename);
+      if (d.applied) loadClients();
+    } catch (e) {
+      panel.innerHTML = "<b>Restore failed:</b> " + esc(e.message) + restoreCancelBtn();
+    }
+  }
+
+  function renderRestoreResult(d, filename) {
+    const panel = document.getElementById("restorePanel");
+    const s = d.summary || {};
+    const rows = Object.entries(d.plan || {})
+      .map(([name, p]) => `<tr><td style="padding:2px 10px 2px 0"><b>${esc(name)}</b></td>` +
+        `<td style="padding:2px 10px 2px 0">${p.create} new</td>` +
+        `<td style="padding:2px 10px 2px 0">${p.overwrite} differ</td>` +
+        `<td style="padding:2px 0;color:#64748b">${p.identical} unchanged</td></tr>`).join("");
+
+    const warn = (d.warnings || []).length
+      ? '<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:7px;padding:8px 10px;margin:10px 0;">' +
+        d.warnings.map((w) => "⚠ " + esc(w)).join("<br>") + "</div>"
+      : "";
+
+    if (d.applied) {
+      panel.innerHTML = `<b>Restored.</b> ${s.created} record${s.created === 1 ? "" : "s"} created` +
+        (s.overwritten ? `, ${s.overwritten} replaced` : "") + `. ${s.identical} were already identical.` +
+        warn + restoreCancelBtn();
+      return;
+    }
+
+    const taken = d.backupTakenAt ? new Date(d.backupTakenAt).toLocaleString() : "unknown date";
+    const nothing = !s.wouldCreate && !s.wouldOverwrite;
+    panel.innerHTML =
+      `<b>${esc(filename || "Backup")}</b> — taken ${esc(taken)}<br>` +
+      (nothing
+        ? "Everything in this backup is already live. Nothing to do."
+        : `<b>${s.wouldCreate}</b> record${s.wouldCreate === 1 ? "" : "s"} missing from the live data, ` +
+          `<b>${s.wouldOverwrite}</b> that exist but differ, ${s.identical} identical.`) +
+      (rows ? `<table style="margin-top:9px;font-size:12.5px;border-collapse:collapse">${rows}</table>` : "") +
+      warn +
+      '<div style="margin-top:10px;color:#475569;">Nothing is ever deleted by a restore — records not in the backup are left alone.</div>' +
+      (nothing ? "" :
+        '<div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;">' +
+        (s.wouldCreate ? `<button class="btn-primary" onclick="runRestore('missing')">Add the ${s.wouldCreate} missing</button>` : "") +
+        (s.wouldOverwrite ? `<button class="btn-danger" onclick="runRestore('overwrite')">Replace all ${s.wouldOverwrite} differing too</button>` : "") +
+        '<button class="btn-secondary" onclick="closeRestore()">Cancel</button></div>') +
+      (nothing ? restoreCancelBtn() : "");
+  }
+
   async function loadClients() {
     const rowsEl = document.getElementById("clientRows");
     rowsEl.innerHTML = '<tr><td colspan="5" class="muted">Loading…</td></tr>';
@@ -840,6 +1060,7 @@
       if (res.status === 403) { logout(); return; }
       const clients = await res.json();
       clientsCache = Array.isArray(clients) ? clients : [];
+      renderBackupBanner();
       if (clientsCache.length === 0) {
         rowsEl.innerHTML = '<tr><td colspan="6" class="muted">No clients yet.</td></tr>';
         return;

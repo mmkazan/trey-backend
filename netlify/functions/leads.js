@@ -17,14 +17,91 @@ function blobsStore(name) {
 // Admin auth: token from the Authorization: Bearer header (preferred) or the
 // JSON body — never the query string (URLs leak via logs/history/referrers).
 // Constant-time comparison.
-function adminAuthorized(event, body) {
-  const h = event.headers || {};
-  const auth = h.authorization || h.Authorization || "";
-  const provided = auth.replace(/^Bearer\s+/i, "").trim() || (body && body.token) || "";
-  const expected = process.env.CLIENT_ADMIN_TOKEN || "";
-  if (!provided || !expected) return false;
-  const a = Buffer.from(provided), b = Buffer.from(expected);
-  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
+// Identity, not a yes/no — see admin-auth.js. One shared implementation so the
+// four back-office endpoints can never drift apart on who may do what.
+const { adminIdentity, can, unauthorized, forbidden } = require("./admin-auth.js");
+
+// Strip control characters (a stray newline in a consent record would break the
+// audit log) and cap the length, so nothing typed at a door distorts evidence.
+const clean = (v, max) => String(v == null ? "" : v)
+  .replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
+
+// --- DOORSTEP CONSENT ---------------------------------------------------------
+//
+// Consent is given in a shop doorway and, until now, could only be recorded back
+// at a desk from memory. That is the wrong way round: PECR consent must be
+// specific, informed and EVIDENCED, and a note typed up that evening evidences
+// nothing.
+//
+// The exact words are held HERE, not in the page, and are stamped into the record
+// server-side from the version number the runner's screen was showing. That way
+// the record says what was actually read out, and changing the script later can't
+// rewrite what someone agreed to last month. Add a new version, never edit an old
+// one.
+const CONSENT_CHANNELS = ["email", "whatsapp", "sms", "phone"];
+const CURRENT_SCRIPT = "v1";
+const CONSENT_SCRIPTS = {
+  v1: {
+    version: "v1",
+    text:
+      "I'm from Trey. Trey is a tap-to-review stand that helps you get more Google " +
+      "reviews, and drafts your replies for you. Is it alright if I follow up about " +
+      "Trey by the ways you've ticked? We won't pass your details to anyone else, " +
+      "every message will say it's from Trey, and you can stop them any time by " +
+      "replying STOP or clicking unsubscribe.",
+  },
+};
+
+// --- COORDINATES AND THE 30-DAY RULE -----------------------------------------
+//
+// A lead needs lat/lng to appear on the planning map. Google's Maps Platform
+// Service Terms allow a place_id to be cached INDEFINITELY, but latitude and
+// longitude for a maximum of **30 CONSECUTIVE CALENDAR DAYS**, after which they
+// must be deleted. (Matthew pushed back on an earlier flat "don't store
+// anything" and was right — the allowance is real, it's just narrow.)
+//
+// So coordinates are stored WITH THE DATE THEY WERE FETCHED, and purged the
+// moment they go stale. The place_id stays, so they can always be fetched again.
+//
+// The purge happens lazily, on read — meaning expired coordinates are actually
+// DELETED from the record, not merely hidden from the response. The leads list
+// is looked at often enough for that to be reliable, and it needs no extra
+// scheduled function to go wrong quietly.
+const GEO_MAX_AGE_DAYS = 30;
+
+function geoExpired(lead, now) {
+  if (!lead || lead.lat == null || lead.lng == null) return false;
+  const at = Date.parse(lead.geoAt || "");
+  // No timestamp means we can't prove it's fresh, so treat it as expired.
+  if (isNaN(at)) return true;
+  return (now - at) / 86400000 >= GEO_MAX_AGE_DAYS;
+}
+
+function stripGeo(lead) {
+  const out = { ...lead };
+  delete out.lat; delete out.lng; delete out.geoAt;
+  return out;
+}
+
+// Decide what lat/lng/geoAt a saved record ends up with. Incoming coordinates
+// win (they're fresher); otherwise keep existing ones unless they've expired.
+// A coordinate is NEVER stored without its timestamp.
+function geoFields(incoming, existing, nowIso) {
+  const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
+  const inLat = num(incoming.lat), inLng = num(incoming.lng);
+  const none = { lat: undefined, lng: undefined, geoAt: undefined };
+  if (inLat !== null && inLng !== null) {
+    const at = Date.parse(incoming.geoAt || "");
+    const stamp = isNaN(at) ? nowIso : new Date(at).toISOString();
+    // Being handed coordinates already older than the allowance is an upstream
+    // bug; drop them rather than laundering them into a fresh timestamp.
+    if (Date.now() - Date.parse(stamp) >= GEO_MAX_AGE_DAYS * 86400000) return none;
+    return { lat: inLat, lng: inLng, geoAt: stamp };
+  }
+  if (existing && existing.lat != null && existing.lng != null && !geoExpired(existing, Date.now())) {
+    return { lat: existing.lat, lng: existing.lng, geoAt: existing.geoAt };
+  }
+  return none;
 }
 
 // --- OUTREACH COMPLIANCE (PECR) ----------------------------------------------
@@ -124,7 +201,8 @@ function leadKey(lead) {
 exports.handler = async (event) => {
   let body = {};
   if (event.body) { try { body = JSON.parse(event.body); } catch (e) { /* ignore */ } }
-  if (!adminAuthorized(event, body)) {
+  const who = adminIdentity(event, body);
+  if (!who) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
@@ -154,10 +232,21 @@ exports.handler = async (event) => {
   if (event.httpMethod === "GET") {
     const m = await clientMatchers();
     const { blobs } = await leadsStore.list();
+    const nowMs = Date.now();
+    let purged = 0;
     const leads = await Promise.all(blobs.map(async (b) => {
-      const l = await leadsStore.get(b.key, { type: "json" });
-      return l ? { ...l, id: b.key, isClient: isClient(l, m) } : null;
+      let l = await leadsStore.get(b.key, { type: "json" });
+      if (!l) return null;
+      // Coordinates past their 30 days are DELETED from the stored record here,
+      // not merely omitted from the response. See GEO_MAX_AGE_DAYS above.
+      if (geoExpired(l, nowMs)) {
+        l = stripGeo(l);
+        await leadsStore.setJSON(b.key, l).catch(() => {});
+        purged++;
+      }
+      return { ...l, id: b.key, isClient: isClient(l, m) };
     }));
+    if (purged) console.log(`[leads] purged coordinates older than ${GEO_MAX_AGE_DAYS} days from ${purged} lead(s)`);
     // Attach the compliance verdict server-side so the UI can't disagree with it.
     let suppressedTails = new Set();
     try {
@@ -178,9 +267,91 @@ exports.handler = async (event) => {
 
   if (event.httpMethod === "POST") {
     if (body.delete) {
+      if (!can(who, "delete_lead")) return forbidden("delete_lead");
       await leadsStore.delete(body.delete);
       return { statusCode: 200, body: JSON.stringify({ success: true, deleted: body.delete }) };
     }
+
+    // ---- Doorstep consent -------------------------------------------------
+    // A DELIBERATELY SEPARATE PATH from the bulk upsert below, which is hard-wired
+    // never to set consent. A scrape must not be able to manufacture permission to
+    // message someone; a person standing in front of the owner must.
+    //
+    // Every ICO PECR penalty has the same root cause: the organisation could not
+    // produce evidence of consent. So this stores what the ICO would ask for —
+    // who agreed, when, by what method, which channels, and THE EXACT WORDS THEY
+    // AGREED TO. The wording is resolved server-side from CONSENT_SCRIPTS by
+    // version, never taken from the request, so a record can't claim a script that
+    // was never read out. Old records keep the text that was current when taken.
+    if (body.consent) {
+      const c = body.consent;
+      const lead = c.lead || {};
+      const key = leadKey(lead);
+      const existing = (await leadsStore.get(key, { type: "json" })) || {};
+      const now = new Date().toISOString();
+
+      if (c.withdraw) {
+        // Withdrawal must be at least as easy as giving it, and must never erase
+        // the evidence — the history is the audit trail.
+        const record = { ...existing, id: key, marketingConsent: false,
+          consentSource: "", updatedAt: now,
+          consentHistory: [...(existing.consentHistory || []),
+            { action: "withdrawn", at: now, takenBy: clean(c.takenBy, 60) || "unknown" }] };
+        await leadsStore.setJSON(key, record);
+        return { statusCode: 200, body: JSON.stringify({ success: true, id: key, marketingConsent: false }) };
+      }
+
+      const channels = (Array.isArray(c.channels) ? c.channels : [])
+        .map((x) => String(x).toLowerCase())
+        .filter((x) => CONSENT_CHANNELS.includes(x));
+      const script = CONSENT_SCRIPTS[c.scriptVersion] || CONSENT_SCRIPTS[CURRENT_SCRIPT];
+      const givenBy = clean(c.givenBy, 80);
+      const takenBy = clean(c.takenBy, 60);
+
+      // Refuse a record that wouldn't stand up. An unusable consent record is
+      // worse than none — it authorises a message you can't defend.
+      const missing = [];
+      if (!channels.length) missing.push("at least one channel");
+      if (!givenBy) missing.push("the name of the person who agreed");
+      if (!takenBy) missing.push("who took the consent");
+      if (!lead.placeId && !lead.businessName) missing.push("the business");
+      if (missing.length) {
+        return { statusCode: 400, body: JSON.stringify({ error: "Can't record consent without " + missing.join(", ") + "." }) };
+      }
+
+      const entry = {
+        action: "given", at: now, channels,
+        method: clean(c.method, 40) || "verbal, in person",
+        givenBy, givenByRole: clean(c.givenByRole, 60), takenBy,
+        scriptVersion: script.version, wording: script.text,
+        // takenBy is what the runner typed; takenByUser is who was authenticated.
+        // Once runners have their own tokens the typed field can go entirely.
+        takenByUser: who.id,
+        where: clean(c.where, 120),
+      };
+      // Identity facts only. This path must not become a side door for setting
+      // outreachStatus, legalStatus, tpsStatus or anything else compliance-bearing.
+      const identity = {};
+      for (const f of ["placeId", "businessName", "category", "phone", "website", "address"]) {
+        if (lead[f]) identity[f] = clean(lead[f], 200);
+      }
+      const record = {
+        ...existing, ...identity, id: key,
+        marketingConsent: true,
+        consentSource: `Verbal, in person — ${givenBy} on ${now.slice(0, 10)} (script ${script.version})`,
+        consentChannels: channels,
+        consentGivenAt: now,
+        consentHistory: [...(existing.consentHistory || []), entry],
+        outreachStatus: existing.outreachStatus || "Contacted",
+        ownerId: existing.ownerId != null ? existing.ownerId : who.id,
+        source: existing.source || clean(lead.source, 80) || "field walk " + now.slice(0, 10),
+        createdAt: existing.createdAt || now,
+        updatedAt: now,
+      };
+      await leadsStore.setJSON(key, record);
+      return { statusCode: 200, body: JSON.stringify({ success: true, id: key, marketingConsent: true, recorded: entry }) };
+    }
+
     const now = new Date().toISOString();
     const incoming = Array.isArray(body.leads) ? body.leads : (body.lead ? [body.lead] : []);
     if (!incoming.length) {
@@ -205,6 +376,12 @@ exports.handler = async (event) => {
       const record = {
         ...existing, ...incomingClean, id: key,
         outreachStatus: existing.outreachStatus || incomingClean.outreachStatus || "New",
+        // Whose lead this is. Set once, on creation, and never reassigned by a
+        // later import — a re-scrape must not move someone else's lead to you.
+        // Ownership cannot be reconstructed after the fact, which is why it goes
+        // on now rather than when there is a second person to scope it for.
+        ownerId: existing.ownerId != null ? existing.ownerId : who.id,
+        ...geoFields(incomingClean, existing, now),
         // Compliance facts are decided by a human (or Companies House), never by
         // a scrape. A re-import must not be able to flip a sole trader to "ltd"
         // or manufacture consent and thereby authorise an unlawful message.

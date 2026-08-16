@@ -23,16 +23,9 @@ function blobsStore(name) {
 // mode and the scheduled monthly-google-sync call). Constant-time compare.
 // NOTE: the previous version trusted an `x-nf-scheduled` request header to skip
 // auth entirely — any external caller could set that header, so it's removed.
-function adminAuthorized(event, body, params) {
-  const h = event.headers || {};
-  const auth = h.authorization || h.Authorization || "";
-  const provided = auth.replace(/^Bearer\s+/i, "").trim() ||
-    (body && body.token) || (params && params.token) || "";
-  const expected = process.env.CLIENT_ADMIN_TOKEN || "";
-  if (!provided || !expected) return false;
-  const a = Buffer.from(provided), b = Buffer.from(expected);
-  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
-}
+// Identity, not a yes/no — see admin-auth.js. One shared implementation so the
+// four back-office endpoints can never drift apart on who may do what.
+const { adminIdentity, can, unauthorized, forbidden } = require("./admin-auth.js");
 
 // YYYY-MM of the last complete calendar month. A monthly sync running on the
 // 1st records the rating that the month just ended on.
@@ -66,7 +59,8 @@ exports.handler = async (event) => {
   if (event.body) {
     try { body = JSON.parse(event.body); } catch (e) { /* ignore */ }
   }
-  if (!adminAuthorized(event, body, params)) {
+  const who = adminIdentity(event, body, params);
+  if (!who) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
   if (!process.env.GOOGLE_PLACES_API_KEY) {

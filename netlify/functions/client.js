@@ -22,15 +22,9 @@ function blobsStore(name) {
 // or the JSON body — never the query string, because URLs leak through server,
 // CDN and proxy logs, browser history and Referer headers. Compared in constant
 // time so a wrong token can't be recovered by timing.
-function adminAuthorized(event, body) {
-  const h = event.headers || {};
-  const auth = h.authorization || h.Authorization || "";
-  const provided = auth.replace(/^Bearer\s+/i, "").trim() || (body && body.token) || "";
-  const expected = process.env.CLIENT_ADMIN_TOKEN || "";
-  if (!provided || !expected) return false;
-  const a = Buffer.from(provided), b = Buffer.from(expected);
-  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
-}
+// Identity, not a yes/no — see admin-auth.js. One shared implementation so the
+// four back-office endpoints can never drift apart on who may do what.
+const { adminIdentity, can, unauthorized, forbidden } = require("./admin-auth.js");
 
 // --- DELETE a client and everything keyed to it -------------------------------
 //
@@ -163,7 +157,8 @@ exports.handler = async (event) => {
     }
   }
 
-  if (!adminAuthorized(event, requestBody)) {
+  const who = adminIdentity(event, requestBody);
+  if (!who) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 
@@ -198,9 +193,15 @@ exports.handler = async (event) => {
   }
 
   if (event.httpMethod === "POST" && requestBody && requestBody.action === "delete") {
+    // This wipes the business across sixteen stores and cannot be undone. The
+    // role check passes trivially today — there is one user and they are the
+    // owner — but it EXISTS, so the day somebody else holds a token nobody has
+    // to remember to add it while under pressure. See admin-auth.js.
+    if (!can(who, "delete_client")) return forbidden("delete_client");
     if (!requestBody.locationId) {
       return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
     }
+    console.warn(`[client] DESTRUCTIVE DELETE of ${requestBody.locationId} by ${who.id}`);
     return await deleteClient(requestBody.locationId, requestBody.confirmName);
   }
 
@@ -217,6 +218,20 @@ exports.handler = async (event) => {
       updatedAt: new Date().toISOString(),
       createdAt: existing.createdAt || new Date().toISOString(),
     };
+    // Provenance fields, set once on creation and never overwritten afterwards.
+    // See admin-auth.js: retrofitting ownership onto records that never carried
+    // it is impossible, so it goes on now while it costs a line.
+    if (isNewClient) {
+      record.ownerId = record.ownerId || who.id;
+      record.country = record.country || "GB";
+    } else {
+      record.ownerId = existing.ownerId != null ? existing.ownerId : (record.ownerId || "");
+      record.country = existing.country || record.country || "GB";
+    }
+    // Preserve the number as typed, for the same reason as signup.js.
+    if (requestBody.phone && !requestBody.phoneRaw) {
+      record.phoneRaw = existing.phoneRaw || String(requestBody.phone);
+    }
     // Store ratings/counts as numbers regardless of how the form posted them,
     // so the report page and monthly sender read consistent types.
     for (const f of ["initialGoogleRating", "googleRating", "initialReviewCount", "reviewCount"]) {

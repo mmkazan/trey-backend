@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#4338ca" />
+<title>Trey on the go</title>
+<!--
+  FIELD PROSPECTING, for a phone, on a high street.
+
+  Stand outside a row of shops, tap Find, and see every business around you
+  ranked by how much Trey would help them — best door first. Tap one for its
+  recent reviews and where it sits against the neighbours.
+
+  DESIGN NOTES
+  - Ranked by fieldScore (see nearby.js), NOT the desktop Opportunity score.
+    Opportunity is built for scraped data with an owner reply rate and would put
+    a 400-review cafe above an 8-review barber, which is backwards out here.
+  - Reviews are shown, never stored. Google's Places terms restrict caching
+    content, and the 15 Aug compliance audit flagged review text in a sales
+    database as the most exposed thing in the repo. Save-as-lead writes only the
+    durable facts: place ID, name, category, rating, count, phone, website.
+  - The PECR verdict is shown BEFORE any contact button, so you know on the
+    doorstep whether you may follow up by WhatsApp or only by phone/post.
+  - Token is held in localStorage like admin.html/leads.html, sent as a header,
+    never in a URL.
+  - The map is a Google Static Maps picture fetched server-side (key never
+    reaches the phone), with the coloured dots drawn over it in HTML so they
+    follow the filter and the sort instantly and cost nothing to redraw.
+-->
+<style>
+  :root{--bg:#eef3fc;--card:#fff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--accent:#4f46e5;--indigo:#4338ca;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));}
+  header{background:linear-gradient(165deg,#4f46e5,#4338ca);color:#fff;padding:calc(14px + env(safe-area-inset-top,0px)) 16px 14px;position:sticky;top:0;z-index:5;}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:17px;letter-spacing:-.3px;}
+  .brand svg{height:26px;width:26px;}
+  .sub{font-size:12.5px;opacity:.9;margin-top:3px;}
+  main{padding:12px 12px 40px;max-width:640px;margin:0 auto;}
+  .bar{display:flex;gap:8px;margin-bottom:12px;}
+  button{font-family:inherit;border:0;border-radius:11px;font-size:15px;font-weight:700;cursor:pointer;padding:13px 16px;}
+  .go{flex:1;background:var(--indigo);color:#fff;}
+  .go:disabled{opacity:.55;}
+  .sec{background:#fff;color:#334155;border:1px solid var(--border);padding:13px 14px;border-radius:11px;font-size:14px;font-weight:600;}
+  select{font-family:inherit;font-size:14px;padding:12px 10px;border:1px solid var(--border);border-radius:11px;background:#fff;color:var(--text);}
+  .card{background:var(--card);border:1px solid #cfe0f6;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
+  .row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
+  .name{font-weight:800;font-size:15.5px;letter-spacing:-.2px;}
+  .cat{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .stats{font-size:13.5px;margin-top:6px;font-weight:600;}
+  .stars{color:#f59e0b;}
+  .score{flex:0 0 auto;text-align:center;min-width:62px;}
+  .score b{display:block;font-size:20px;line-height:1.1;letter-spacing:-.5px;}
+  .score span{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;}
+  .knock b,.knock span{color:#047857;}
+  .look b,.look span{color:#b45309;}
+  .skip b,.skip span{color:#94a3b8;}
+  .gap{font-size:12.5px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;border-radius:9px;padding:7px 9px;margin-top:8px;line-height:1.45;}
+  /* Compact PECR marker. The full verdict lives in the leads list, where the
+     messaging actually happens — out here you're walking in, so it only needs to
+     be a fact, not a paragraph. */
+  .tag{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:999px;border:1px solid;margin-left:6px;vertical-align:1px;letter-spacing:.02em;}
+  .tag.ok{background:#ecfdf5;border-color:#a7f3d0;color:#047857;}
+  .tag.no{background:#fffbeb;border-color:#fde68a;color:#92400e;}
+  .tag.mine{background:#eef2ff;border-color:#c7d2fe;color:#3730a3;}
+  /* The Apify hook — the one thing the live Places search can never tell you. */
+  .hook{font-size:12.5px;color:#7c2d12;background:#fff7ed;border:1px solid #fed7aa;
+        border-radius:9px;padding:7px 9px;margin-top:8px;line-height:1.45;}
+  .hookq{color:#9a3412;font-style:italic;margin-top:4px;font-size:12px;}
+  .acts .signup{background:#047857;color:#fff;border-color:#047857;}
+  /* Two deliberate rows rather than one that wraps raggedly on a phone. */
+  .ctl{display:none;margin-bottom:12px;}
+  .ctlrow{display:flex;gap:6px;align-items:center;margin-bottom:6px;}
+  .ctllab{flex:0 0 34px;font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+  .ctl button{font-size:12.5px;font-weight:700;padding:8px 12px;border-radius:999px;border:1px solid var(--border);background:#fff;color:#475569;}
+  .ctl button.on{background:var(--indigo);color:#fff;border-color:var(--indigo);}
+  .acts{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap;}
+  .acts a,.acts button{font-size:13px;font-weight:700;padding:9px 12px;border-radius:9px;text-decoration:none;border:1px solid var(--border);background:#f8fafc;color:#334155;}
+  .acts .prim{background:var(--indigo);color:#fff;border-color:var(--indigo);}
+  .rev{border-top:1px solid #eef2f7;margin-top:10px;padding-top:9px;}
+  .rev .r{font-size:13px;line-height:1.5;margin-bottom:9px;}
+  .rev .r b{color:#b45309;}
+  .rev .r.bad b{color:#b91c1c;}
+  .rev .w{color:var(--muted);font-size:11.5px;}
+  .note{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:6px;}
+  .msg{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px;font-size:14px;line-height:1.6;color:#334155;}
+  .msg b{color:var(--text);}
+  .msg code{background:#f1f5f9;padding:2px 5px;border-radius:5px;font-size:12.5px;word-break:break-all;}
+  .gate{max-width:380px;margin:60px auto;padding:0 16px;}
+  .gate input{width:100%;padding:13px;border:1px solid var(--border);border-radius:11px;font-size:16px;margin-bottom:10px;}
+  .mapwrap{position:relative;margin-bottom:12px;line-height:0;}
+  .map{width:100%;border-radius:12px;border:1px solid #cfe0f6;display:block;}
+  /* Dots are positioned in PERCENTAGES of the picture, so they stay put at any
+     screen width and through a rotation, with no resize listener. */
+  .pin{position:absolute;transform:translate(-50%,-50%);width:25px;height:25px;padding:0;
+       border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.5);
+       color:#fff;font-size:12px;font-weight:800;line-height:21px;text-align:center;cursor:pointer;}
+  .pin.knock{background:#047857;} .pin.look{background:#b45309;} .pin.skip{background:#94a3b8;}
+  .pin.you{background:var(--indigo);width:19px;height:19px;line-height:15px;font-size:10px;cursor:default;}
+  /* Hidden by the filter: still there, but obviously not a door you're walking to. */
+  .dim{position:absolute;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;
+       background:#94a3b8;border:1.5px solid #fff;opacity:.5;}
+  .card{transition:box-shadow .25s;}
+  .card.flash{box-shadow:0 0 0 3px #a5b4fc;}
+  .maplegend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin:-6px 0 12px;flex-wrap:wrap;}
+  .maplegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:0;}
+  .spin{text-align:center;color:var(--muted);font-size:14px;padding:26px 0;}
+  /* Doorstep consent. Deliberately plain and a bit serious-looking — this is a
+     legal record being created in front of the person it's about, not a form. */
+  .cbox{border:1px solid #c7d2fe;background:#f8faff;border-radius:11px;padding:11px;margin-top:10px;}
+  .clab{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--indigo);margin-bottom:6px;}
+  .cscript{font-size:13.5px;line-height:1.55;color:#1e293b;background:#fff;border:1px solid #e0e7ff;border-radius:9px;padding:9px 10px;margin-bottom:9px;}
+  .cchan{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:9px;}
+  .cchan label{font-size:13px;font-weight:700;color:#334155;display:flex;align-items:center;gap:5px;}
+  .cchan input{width:19px;height:19px;accent-color:var(--indigo);}
+  .cin{width:100%;padding:10px;border:1px solid var(--border);border-radius:9px;font-size:16px;margin-bottom:7px;font-family:inherit;}
+  .cbtn{width:100%;border:0;}
+  .cnote{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:7px;}
+  .cnote.good{color:#047857;font-weight:700;}
+  .cnote.bad{color:#b91c1c;font-weight:700;}
+</style>
+</head>
+<body>
+
+<div id="gate" class="gate">
+  <div class="msg">
+    <div style="text-align:center;margin-bottom:12px;">
+      <svg viewBox="0 0 100 100" width="46" height="46" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.28"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round" opacity="0.55"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#4338CA" stroke-width="5" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#4338CA"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#4338CA"/></svg>
+      <div style="font-weight:800;font-size:17px;margin-top:6px;">Trey on the go</div>
+    </div>
+    <input type="password" id="tok" placeholder="Admin token" autocomplete="current-password" />
+    <button class="go" style="width:100%;" onclick="saveTok()">Enter</button>
+    <div class="note" id="gateMsg"></div>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-20 50 50)"><path d="M21.7,83.7 A44,44 0 1 1 78.3,83.7" fill="none" stroke="#eef2ff" stroke-width="5" stroke-linecap="round" opacity="0.35"/><path d="M28.8,75.3 A33,33 0 1 1 71.2,75.3" fill="none" stroke="#eef2ff" stroke-width="5" stroke-linecap="round" opacity="0.62"/><path d="M35.85,66.85 A22,22 0 1 1 64.15,66.85" fill="none" stroke="#eef2ff" stroke-width="5" stroke-linecap="round"/></g><rect x="37" y="39" width="26" height="8" rx="2" fill="#eef2ff"/><rect x="46" y="39" width="8" height="25" rx="2" fill="#eef2ff"/></svg>
+    trey on the go
+  </div>
+  <div class="sub" id="hdr">Best door first &mdash; who to walk into, right now.</div>
+</header>
+<main>
+  <!-- Yesterday's Apify sweep, on today's pavement. Costs NOTHING — no Places
+       call, no map fetch — because the coordinates and the hook are already
+       stored. Works even before the Google key is set. -->
+  <div class="bar">
+    <button class="sec" style="flex:1;" onclick="myLeadsNearMe()">My leads near me</button>
+  </div>
+  <div class="bar">
+    <button class="go" id="findBtn" onclick="find()">Find businesses near me</button>
+    <select id="radius" aria-label="Search radius">
+      <option value="150">150m</option>
+      <option value="250" selected>250m</option>
+      <option value="500">500m</option>
+      <option value="1000">1km</option>
+    </select>
+  </div>
+  <!-- Works without GPS: indoors, on a laptop, or planning tomorrow's round the
+       night before. Same search, different centre. -->
+  <div class="bar">
+    <input id="where" placeholder="…or a postcode / town — e.g. DE21 6NX" autocomplete="off"
+      style="flex:1;min-width:0;font-family:inherit;font-size:15px;padding:13px 12px;border:1px solid var(--border);border-radius:11px;" />
+    <button class="sec" onclick="findWhere()">Search</button>
+  </div>
+  <div class="ctl" id="ctl">
+    <div class="ctlrow">
+      <span class="ctllab">Order</span>
+      <button id="sortScore" class="on" onclick="setSort('score')">Best door</button>
+      <button id="sortDist" onclick="setSort('distance')">Nearest</button>
+    </div>
+    <div class="ctlrow">
+      <span class="ctllab">Show</span>
+      <button id="fAll" class="on" onclick="setFilter('all')">All</button>
+      <button id="fLook" onclick="setFilter('look')">Worth a look +</button>
+      <button id="fKnock" onclick="setFilter('knock')">Knock now</button>
+    </div>
+  </div>
+  <div id="out"></div>
+</main>
+</div>
+
+<script src="/map-pins.js"></script>
+<script>
+var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads";
+var token=localStorage.getItem("treyAdminToken")||"";
+var POOL=[], HERE=null, RADIUS=250, LABEL="";
+var MAP=null;          // {img, centre:{lat,lng}, zoom, width, height} from nearby.js
+// Leads already in the CRM, keyed by place ID. Swept from Apify the night before
+// a new town, these carry the one thing Places CANNOT give you: whether the owner
+// replies to reviews. See loadMyLeads().
+var MINE={}, MINE_LOADED=false;
+var CENTRE_IS_ME=true; // false when the centre came from a typed postcode/town
+var SORT="score";      // "score" = best door first, "distance" = nearest first
+var FILTER="all";      // "all" | "look" (Knock now + Worth a look) | "knock"
+
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+function stars(r){ if(r==null) return "—"; var n=Math.round(r); return "★".repeat(n)+"☆".repeat(5-n); }
+
+function saveTok(){
+  var v=document.getElementById("tok").value.trim();
+  if(!v){document.getElementById("gateMsg").textContent="Paste your admin token.";return;}
+  token=v; localStorage.setItem("treyAdminToken",v); showApp();
+}
+function showApp(){ document.getElementById("gate").style.display="none"; document.getElementById("app").style.display="block"; }
+if(token) showApp();
+
+async function api(payload){
+  var r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
+  if(r.status===403){ localStorage.removeItem("treyAdminToken"); location.reload(); return null; }
+  var d=await r.json().catch(function(){return {};});
+  if(!r.ok) throw Object.assign(new Error(d.error||("HTTP "+r.status)),{config:d.config});
+  return d;
+}
+
+// Search a named place instead of your own position.
+async function findWhere(){
+  var q=document.getElementById("where").value.trim();
+  if(!q){ document.getElementById("where").focus(); return; }
+  var out=document.getElementById("out");
+  out.innerHTML='<div class="spin">Looking up '+esc(q)+'…</div>';
+  try{
+    var d=await api({where:q,radius:Number(document.getElementById("radius").value)});
+    if(!d) return;
+    HERE=d.centre||null; POOL=d.leads||[]; MAP=d.map||null; CENTRE_IS_ME=false;
+    await loadMyLeads();
+    render(POOL,d.radius,d.placeLabel);
+  }catch(e){
+    out.innerHTML = e.config ? setupMsg() : '<div class="msg"><b>Couldn\'t search.</b><br>'+esc(e.message)+'</div>';
+  }
+}
+
+function setupMsg(){
+  return '<div class="msg"><b>Not set up yet.</b><br>This needs a Google Places API key in Netlify as <code>GOOGLE_PLACES_API_KEY</code>.<br><br>Google Cloud Console → enable <b>Places API (New)</b> → Credentials → create an API key → restrict it to Places API. Then add it in Netlify and redeploy.<br><br>It is <b>separate</b> from the Business Profile API application you\'re waiting on — no approval needed, just billing enabled.</div>';
+}
+
+function find(){
+  var out=document.getElementById("out"), btn=document.getElementById("findBtn");
+  if(!navigator.geolocation){ out.innerHTML='<div class="msg">This phone won\'t share its location with the browser.</div>'; return; }
+  btn.disabled=true; out.innerHTML='<div class="spin">Finding your location…</div>';
+  navigator.geolocation.getCurrentPosition(async function(pos){
+    HERE={lat:pos.coords.latitude,lng:pos.coords.longitude};
+    out.innerHTML='<div class="spin">Looking up what\'s around you…</div>';
+    try{
+      var d=await api({lat:HERE.lat,lng:HERE.lng,radius:Number(document.getElementById("radius").value)});
+      if(!d) return;
+      POOL=d.leads||[]; MAP=d.map||null; CENTRE_IS_ME=true;
+      await loadMyLeads();
+      render(POOL,d.radius);
+    }catch(e){
+      out.innerHTML = e.config ? setupMsg() : '<div class="msg"><b>Couldn\'t search.</b><br>'+esc(e.message)+'</div>';
+    }finally{ btn.disabled=false; }
+  }, function(err){
+    btn.disabled=false;
+    out.innerHTML='<div class="msg"><b>Location unavailable.</b><br>'+esc(err.message||"")+'<br><br>On iPhone: Settings → Safari → Location. The page must also be on https, which trey.today is.</div>';
+  }, {enableHighAccuracy:true,timeout:12000,maximumAge:30000});
+}
+
+// Pull the CRM list once per session. Cheap (no Places call at all) and it's
+// what lets yesterday's desk work show up on today's pavement.
+async function loadMyLeads(){
+  if(MINE_LOADED) return;
+  try{
+    var r=await fetch(LEADS_API,{headers:{"Authorization":"Bearer "+token}});
+    if(!r.ok) return;
+    var arr=await r.json();
+    (Array.isArray(arr)?arr:[]).forEach(function(l){ if(l.placeId) MINE[l.placeId]=l; });
+    MINE_LOADED=true;
+  }catch(e){ /* the street tool still works without it */ }
+}
+
+// Tier from the desk score, which is a BETTER signal than fieldScore when it
+// exists — because it knows the reply rate and fieldScore never can.
+function tierBand(t){ return t===1?"Knock now":t===2?"Worth a look":"Skip"; }
+
+// What Places can't tell you, and Apify can: does this owner answer anybody?
+function hookFor(l){
+  var saved=l && l.placeId && MINE[l.placeId];
+  if(!saved) return "";
+  var bits="";
+  var rr=String(saved.ownerResponseRate||"").trim();
+  var un=Number(saved.recentUnanswered)||0;
+  if(rr && rr!=="n/a"){
+    var pct=parseInt(rr,10);
+    bits+= (!isNaN(pct)&&pct<=20)
+      ? '<b>Replies to '+esc(rr)+' of reviews.</b> '
+      : 'Replies to '+esc(rr)+' of reviews. ';
+  }
+  if(un>0) bits+='<b>'+un+'</b> poor review'+(un===1?'':'s')+' left unanswered. ';
+  if(!bits && !saved.hook) return "";
+  return '<div class="hook">'+bits+
+    (saved.hook?'<div class="hookq">'+esc(saved.hook)+'</div>':'')+'</div>';
+}
+
+function savedChip(l){
+  var saved=l && l.placeId && MINE[l.placeId];
+  if(!saved) return "";
+  var st=saved.outreachStatus||"New";
+  return '<span class="tag mine">in your list'+(st&&st!=="New"?' · '+esc(st):'')+'</span>';
+}
+
+// Show the leads you already have, nearest first, from stored coordinates.
+// ZERO Google calls: no Places search, no map picture. This is the mode for the
+// morning after an Apify sweep — and the only one that works before the key is set.
+function myLeadsNearMe(){
+  var out=document.getElementById("out");
+  if(!navigator.geolocation){ out.innerHTML='<div class="msg">This phone won\'t share its location.</div>'; return; }
+  out.innerHTML='<div class="spin">Finding your location…</div>';
+  navigator.geolocation.getCurrentPosition(async function(pos){
+    HERE={lat:pos.coords.latitude,lng:pos.coords.longitude};
+    CENTRE_IS_ME=true;
+    MINE_LOADED=false; MINE={};
+    out.innerHTML='<div class="spin">Loading your leads…</div>';
+    await loadMyLeads();
+    var radius=Number(document.getElementById("radius").value)||250;
+    var near=Object.keys(MINE).map(function(k){ return MINE[k]; })
+      .filter(function(l){ return l.lat!=null&&l.lng!=null&&!l.isClient; })
+      .map(function(l){
+        return {
+          placeId:l.placeId, businessName:l.businessName, category:l.category,
+          rating:l.rating==null?null:Number(l.rating), reviewCount:Number(l.reviewCount)||0,
+          phone:l.phone, website:l.website, address:l.address, lat:l.lat, lng:l.lng,
+          legalStatus:l.legalStatus, marketingConsent:l.marketingConsent,
+          metresAway:metresBetween(HERE,l),
+          peerMedian:null, peerCount:0,
+          // Ranked by the DESK score, not fieldScore. That's deliberate: these
+          // came from Apify, so their score knows the owner reply rate — which
+          // fieldScore can never see. Better data wins.
+          field:{ total:Number(l.score)||0, band:tierBand(Number(l.tier)) },
+        };
+      })
+      .filter(function(l){ return l.metresAway!=null && l.metresAway<=radius; });
+    if(!near.length){
+      out.innerHTML='<div class="msg"><b>No saved leads within '+radius+'m.</b><br>'+
+        'Try a wider radius, or use <b>Find businesses near me</b> for a live search.<br><br>'+
+        '<span class="note">Leads only appear here once they have coordinates — the '+
+        'Apify import brings them in, or use <b>Look up</b> on the leads map.</span></div>';
+      return;
+    }
+    POOL=near; MAP=null;
+    render(POOL,radius,"your saved leads");
+  }, function(err){
+    out.innerHTML='<div class="msg"><b>Location unavailable.</b><br>'+esc(err.message||"")+'</div>';
+  }, {enableHighAccuracy:true,timeout:12000,maximumAge:30000});
+}
+
+// Haversine, metres. Mirrors metres() in nearby.js.
+function metresBetween(a,b){
+  if(!a||!b||a.lat==null||b.lat==null) return null;
+  var R=6371000, t=Math.PI/180;
+  var dLat=(b.lat-a.lat)*t, dLng=(b.lng-a.lng)*t;
+  var h=Math.sin(dLat/2)*Math.sin(dLat/2)+
+        Math.cos(a.lat*t)*Math.cos(b.lat*t)*Math.sin(dLng/2)*Math.sin(dLng/2);
+  return Math.round(R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h)));
+}
+
+// ---- Sign them up, there and then ----------------------------------------
+// Hands the phone to the owner on the existing, tested signup flow rather than
+// inventing a second way to create a client. Prefill goes via sessionStorage,
+// NOT the query string — a business phone number in a URL ends up in browser
+// history, and this phone is Matthew's, not theirs.
+function signThemUp(i){
+  var l=POOL[i]; if(!l) return;
+  try{
+    sessionStorage.setItem("treyPrefill", JSON.stringify({
+      businessName:l.businessName||"", phone:l.phone||"", businessType:l.category||"",
+      companyAddress:l.address||"",
+      googleReviewUrl:l.placeId?("https://search.google.com/local/writereview?placeid="+l.placeId):"",
+      from:"go", at:new Date().toISOString(),
+    }));
+  }catch(e){ /* private mode — they can still type it in */ }
+  window.open("/signup.html","_blank","noopener");
+}
+
+function setSort(v){
+  SORT=v;
+  document.getElementById("sortScore").className = v==="score"?"on":"";
+  document.getElementById("sortDist").className  = v==="distance"?"on":"";
+  render(POOL,RADIUS,LABEL);
+}
+function setFilter(v){
+  FILTER=v;
+  document.getElementById("fAll").className   = v==="all"?"on":"";
+  document.getElementById("fLook").className  = v==="look"?"on":"";
+  document.getElementById("fKnock").className = v==="knock"?"on":"";
+  render(POOL,RADIUS,LABEL);
+}
+
+function bandCls(b){ return b==="Knock now"?"knock":b==="Worth a look"?"look":"skip"; }
+
+// PECR marker, deliberately tiny. Walking in needs no permission — this is about
+// the FOLLOW-UP, which is where the rule actually bites: message a sole trader
+// cold next week and that's the breach. The full verdict and the consent tickbox
+// live in the leads list, where the messaging happens.
+function pecr(l,i){
+  if(l.marketingConsent===true) return '<span class="tag ok" id="pec'+i+'" title="Consent recorded at the door.">consented · can message</span>';
+  return l.legalStatus==="ltd"
+    ? '<span class="tag ok" id="pec'+i+'" title="Limited company — cold email/WhatsApp allowed. Identify yourself and include an opt-out.">Ltd · can message</span>'
+    : '<span class="tag no" id="pec'+i+'" title="Sole trader or unknown — no cold email/WhatsApp without consent. Ask on the doorstep and it opens up.">ask first to message</span>';
+}
+
+// Google's universal directions URL — opens the Maps app on a phone, walking
+// mode, and uses the place ID so it lands on the right shop rather than a
+// same-named one down the road.
+function directionsUrl(l){
+  if(l.lat==null||l.lng==null) return "";
+  var u="https://www.google.com/maps/dir/?api=1&travelmode=walking&destination="+
+    encodeURIComponent(l.lat+","+l.lng);
+  if(l.placeId) u+="&destination_place_id="+encodeURIComponent(l.placeId);
+  return u;
+}
+
+function gapLine(l){
+  if(l.peerMedian==null||!l.peerCount) return "";
+  var rc=l.reviewCount||0;
+  if(rc>=l.peerMedian) return '<div class="gap">Ahead of the local median ('+l.peerMedian+' reviews across '+l.peerCount+' similar nearby).</div>';
+  var behind=l.peerMedian-rc;
+  return '<div class="gap"><b>'+behind+' reviews behind</b> the local median of '+l.peerMedian+' ('+l.peerCount+' similar businesses nearby).</div>';
+}
+
+// ---- the map -------------------------------------------------------------
+// The picture from nearby.js is a BARE Google map. Every dot on it is drawn
+// here, in HTML, so filtering and sorting move the pins instantly and for free.
+// Baking them into the image server-side (the first version) meant the map
+// still showed businesses you'd filtered out, and the numbers stopped matching
+// the cards the moment you sorted by distance — which defeats the point of it.
+
+// The projection and the dot markup live in map-pins.js, shared with leads.html,
+// because the same maths also exists server-side in nearby.js and three copies
+// is how dots quietly end up in the wrong place.
+function pinPos(lat,lng){ return TreyMap.pinPos(MAP,lat,lng); }
+
+function mapFor(view,list){
+  var on={};
+  var pins=view.map(function(l,i){
+    var idx=POOL.indexOf(l); on[idx]=1;
+    return { lat:l.lat, lng:l.lng, cls:bandCls(l.field.band), label:i+1,
+             title:l.businessName+" \u2014 "+l.field.band, onclick:"jump("+idx+")" };
+  });
+  var dim=list.filter(function(l){ return !on[POOL.indexOf(l)]; });
+  var legend=[{colour:"#047857",label:"Knock now"},{colour:"#b45309",label:"Worth a look"},
+              {colour:"#94a3b8",label:"Skip"},
+              {colour:"#4338ca",label:CENTRE_IS_ME?"You":"Centre"}];
+  if(view.length<list.length) legend.push({colour:"#94a3b8",label:"Hidden by filter",faint:true});
+  return TreyMap.html({ map:MAP, pins:pins, dim:dim, me:HERE,
+    meLabel:CENTRE_IS_ME?"Y":"+", meTitle:CENTRE_IS_ME?"You are here":"Search centre",
+    legend:legend, alt:"Map of the businesses around you" });
+}
+
+// Tap a dot, get the card. The map answers "which way", the card answers "why".
+function jump(idx){
+  var el=document.getElementById("c"+idx);
+  if(!el) return;
+  el.scrollIntoView({behavior:"smooth",block:"center"});
+  el.classList.add("flash");
+  setTimeout(function(){ el.classList.remove("flash"); },1400);
+}
+
+function render(list,radius,label){
+  var out=document.getElementById("out");
+  RADIUS=radius; LABEL=label||"";
+  document.getElementById("ctl").style.display = list.length ? "block" : "none";
+
+  // Filter by band, then sort. Both are pure view state — no refetch, no extra
+  // API spend for changing your mind on the pavement.
+  var view=list.filter(function(l){
+    if(FILTER==="knock") return l.field.band==="Knock now";
+    if(FILTER==="look")  return l.field.band==="Knock now"||l.field.band==="Worth a look";
+    return true;
+  }).slice().sort(function(a,b){
+    if(SORT==="distance"){
+      var da=a.metresAway==null?1e9:a.metresAway, db=b.metresAway==null?1e9:b.metresAway;
+      return da-db || b.field.total-a.field.total;
+    }
+    return b.field.total-a.field.total || (a.metresAway||0)-(b.metresAway||0);
+  });
+
+  document.getElementById("hdr").textContent =
+    view.length+" of "+list.length+" within "+radius+"m of "+(label||"you")+
+    " · "+(SORT==="distance"?"nearest first":"best door first");
+
+  var mapHtml = mapFor(view, list);
+
+  if(!view.length){ out.innerHTML=mapHtml+'<div class="msg">Nothing in that band here. Try <b>All</b>, or a wider radius.</div>'; return; }
+  out.innerHTML=mapHtml+view.map(function(l,i){
+    var idx=POOL.indexOf(l);
+    return '<div class="card" id="c'+idx+'">'+
+      '<div class="row">'+
+        '<div style="flex:1;min-width:0;">'+
+          '<div class="name">'+esc(l.businessName)+pecr(l,idx)+savedChip(l)+'</div>'+
+          '<div class="cat">'+esc(l.category||"—")+(l.metresAway!=null?' · '+l.metresAway+'m away':'')+'</div>'+
+          '<div class="stats"><span class="stars">'+stars(l.rating)+'</span> '+(l.rating!=null?l.rating:"unrated")+' · <b>'+(l.reviewCount||0)+'</b> review'+((l.reviewCount||0)===1?"":"s")+'</div>'+
+        '</div>'+
+        '<div class="score '+bandCls(l.field.band)+'"><b>'+l.field.total+'</b><span>'+esc(l.field.band)+'</span></div>'+
+      '</div>'+
+      gapLine(l)+hookFor(l)+
+      '<div class="acts">'+
+        '<button class="prim" onclick="details('+idx+')">Reviews &amp; rivals</button>'+
+        (directionsUrl(l)?'<a href="'+esc(directionsUrl(l))+'" target="_blank" rel="noopener">Directions</a>':'')+
+        (l.phone?'<a href="tel:'+esc(l.phone.replace(/\s/g,""))+'">Call</a>':'')+
+        (l.mapsUri?'<a href="'+esc(l.mapsUri)+'" target="_blank" rel="noopener">Google</a>':'')+
+        '<button onclick="saveLead('+idx+')" id="s'+idx+'">Save as lead</button>'+
+        '<button onclick="consentPanel('+idx+')" id="k'+idx+'">Got consent</button>'+
+        '<button class="signup" onclick="signThemUp('+idx+')">Sign up now</button>'+
+      '</div>'+
+      '<div id="cons'+idx+'"></div>'+
+      '<div id="d'+idx+'"></div>'+
+    '</div>';
+  }).join("");
+}
+
+async function details(i){
+  var l=POOL[i], box=document.getElementById("d"+i);
+  box.innerHTML='<div class="spin">Loading reviews…</div>';
+  try{
+    var d=await api({action:"details",placeId:l.placeId,pool:POOL});
+    if(!d) return;
+    var revs=(d.reviews||[]).slice(0,5);
+    var c=d.competitors;
+    var comp="";
+    if(c){
+      comp='<div class="gap"><b>'+ordinal(c.rank)+' of '+c.of+'</b> similar businesses nearby.'+
+        (c.best?' Best: <b>'+esc(c.best.name)+'</b> — '+c.best.rating+'★, '+c.best.reviewCount+' reviews'+
+          (c.best.multiple?' ('+c.best.multiple+'× yours)':'')+'.':'')+'</div>';
+    }
+    var rv=revs.length
+      ? '<div class="rev">'+revs.map(function(r){
+          var badOne=(r.rating||5)<=3;
+          return '<div class="r'+(badOne?' bad':'')+'"><b>'+(r.rating||"?")+'★</b> <span class="w">'+esc(r.when)+'</span><br>'+esc((r.text||"(no text)").slice(0,220))+'</div>';
+        }).join("")+'<div class="note">Live from Google — shown here only, never saved.</div></div>'
+      : '<div class="note" style="margin-top:9px;">No review text available.</div>';
+    box.innerHTML=comp+rv;
+  }catch(e){ box.innerHTML='<div class="note">Couldn\'t load: '+esc(e.message)+'</div>'; }
+}
+function ordinal(n){ var s=["th","st","nd","rd"],v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
+
+// Save only the durable, non-personal facts. No review text, no competitor data
+// — both go stale and both are somebody else's personal data.
+// ---- doorstep consent ----------------------------------------------------
+// Consent is given HERE, in the doorway, not back at a desk that evening. PECR
+// consent has to be specific, informed and evidenced — and every ICO penalty on
+// record comes down to an organisation that couldn't produce the evidence.
+//
+// So the panel shows the exact words to say, and the record is written server-
+// side with the script version stamped in. Nothing here is a substitute for
+// actually reading it out.
+var CONSENT_SCRIPT_V = "v1";
+// Ids must match CONSENT_CHANNELS in leads.js; labels are how they read.
+var CONSENT_CHANNELS=[{id:"email",label:"Email"},{id:"whatsapp",label:"WhatsApp"},
+                      {id:"sms",label:"SMS"},{id:"phone",label:"Phone"}];
+var CONSENT_WORDS =
+  "I'm from Trey. Trey is a tap-to-review stand that helps you get more Google "+
+  "reviews, and drafts your replies for you. Is it alright if I follow up about "+
+  "Trey by the ways you've ticked? We won't pass your details to anyone else, "+
+  "every message will say it's from Trey, and you can stop them any time by "+
+  "replying STOP or clicking unsubscribe.";
+
+function consentPanel(i){
+  var box=document.getElementById("cons"+i);
+  if(!box) return;
+  if(box.innerHTML){ box.innerHTML=""; return; }   // tap again to close
+  var l=POOL[i];
+  box.innerHTML=
+    '<div class="cbox">'+
+      '<div class="clab">Read this out — then tick what they agreed to</div>'+
+      '<div class="cscript">'+esc(CONSENT_WORDS)+'</div>'+
+      '<div class="cchan">'+
+        CONSENT_CHANNELS.map(function(c){
+          return '<label><input type="checkbox" id="ch_'+i+'_'+c.id+'" /> '+c.label+'</label>';
+        }).join('')+
+      '</div>'+
+      '<input class="cin" id="cg'+i+'" placeholder="Who agreed? e.g. Dave, owner" autocomplete="off" />'+
+      '<input class="cin" id="ct'+i+'" placeholder="Your name" value="'+esc(runnerName())+'" autocomplete="off" />'+
+      '<button class="prim cbtn" onclick="saveConsent('+i+')">Record consent</button>'+
+      '<div class="cnote" id="cmsg'+i+'">Only tick what they actually said yes to. '+
+        'This is the evidence if anyone ever asks.</div>'+
+    '</div>';
+}
+
+// Remembered between doors so it isn't retyped at every shop.
+function runnerName(){ return localStorage.getItem("treyRunner")||""; }
+
+async function saveConsent(i){
+  var l=POOL[i], msg=document.getElementById("cmsg"+i);
+  var channels=CONSENT_CHANNELS.map(function(c){ return c.id; }).filter(function(c){
+    var b=document.getElementById("ch_"+i+"_"+c); return b&&b.checked;
+  });
+  var givenBy=document.getElementById("cg"+i).value.trim();
+  var takenBy=document.getElementById("ct"+i).value.trim();
+  if(takenBy) localStorage.setItem("treyRunner",takenBy);
+  if(!channels.length||!givenBy||!takenBy){
+    msg.className="cnote bad";
+    msg.textContent="Need at least one channel, their name, and yours — an incomplete record is worse than none.";
+    return;
+  }
+  msg.className="cnote"; msg.textContent="Saving…";
+  try{
+    var r=await fetch(LEADS_API,{method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+      body:JSON.stringify({consent:{
+        scriptVersion:CONSENT_SCRIPT_V, channels:channels,
+        givenBy:givenBy, takenBy:takenBy, method:"verbal, in person",
+        where:l.address||"",
+        lead:{ placeId:l.placeId, businessName:l.businessName, category:l.category,
+               phone:l.phone, website:l.website, address:l.address,
+               source:"field walk "+new Date().toISOString().slice(0,10) }
+      }})});
+    var d=await r.json().catch(function(){ return {}; });
+    if(!r.ok) throw new Error(d.error||("HTTP "+r.status));
+    l.marketingConsent=true; l.legalStatus="consented";
+    msg.className="cnote good";
+    msg.textContent="Recorded — "+channels.join(", ")+" now open for "+l.businessName+".";
+    var btn=document.getElementById("s"+i);
+    if(btn){ btn.disabled=true; btn.textContent="Saved ✓"; }
+    var chip=document.getElementById("pec"+i);
+    if(chip){ chip.className="tag ok"; chip.textContent="consented · can message"; }
+  }catch(e){
+    msg.className="cnote bad"; msg.textContent=e.message;
+  }
+}
+
+async function saveLead(i){
+  var l=POOL[i], btn=document.getElementById("s"+i);
+  btn.disabled=true; btn.textContent="Saving…";
+  try{
+    var r=await fetch(LEADS_API,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+      body:JSON.stringify({lead:{
+        placeId:l.placeId, businessName:l.businessName, category:l.category,
+        rating:l.rating, reviewCount:l.reviewCount, phone:l.phone, website:l.website,
+        address:l.address, outreachStatus:"New",
+        // We already have these in memory, so storing them costs nothing and is
+        // what puts the lead on the planning map back at the desk. leads.js
+        // stamps geoAt and deletes them again after 30 days — Google's limit.
+        lat:l.lat, lng:l.lng,
+        source:"field walk "+new Date().toISOString().slice(0,10)
+      }})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    btn.textContent="Saved ✓";
+  }catch(e){ btn.disabled=false; btn.textContent="Retry save"; }
+}
+</script>
+</body>
+</html>

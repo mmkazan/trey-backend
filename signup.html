@@ -93,6 +93,7 @@
     <div class="row2">
       <div>
         <label>First name<span class="req"> *</span></label>
+        <div id="prefillNote" style="display:none;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:9px;padding:9px 11px;font-size:13px;font-weight:600;margin-bottom:14px;">Filled in from Trey on the go &mdash; check it with them, then they take it from here.</div>
         <input id="f_firstName" autocomplete="given-name" />
         <div class="err-msg" id="e_firstName"></div>
       </div>
@@ -223,6 +224,39 @@
       var t = document.getElementById("heroTitle"); if (t) t.textContent = "Start your 30-day free trial";
     });
   }
+
+  // Prefill from "Sign up now" in the field tool (go.html), so the owner isn't
+  // watching you type their own address back to them on a doorstep.
+  //
+  // It arrives via sessionStorage, NOT the query string, deliberately: a phone
+  // number or business address in a URL lands in browser history and any
+  // referrer. It is READ ONCE AND CLEARED, so the next person handed this phone
+  // gets a blank form rather than the last shop's details.
+  //
+  // Only fields the owner will confirm out loud are prefilled — never their
+  // name, email or brand voice, which they must give themselves.
+  document.addEventListener("DOMContentLoaded", function () {
+    var raw;
+    try { raw = sessionStorage.getItem("treyPrefill"); sessionStorage.removeItem("treyPrefill"); }
+    catch (e) { return; }
+    if (!raw) return;
+    var p; try { p = JSON.parse(raw); } catch (e) { return; }
+    if (!p || p.from !== "go") return;
+    // Stale prefill is worse than none — if the phone has been sitting in a
+    // pocket since the last shop, start clean.
+    if (p.at && Date.now() - Date.parse(p.at) > 30 * 60 * 1000) return;
+    [["businessName", "f_businessName"], ["phone", "f_phone"], ["businessType", "f_businessType"],
+     ["companyAddress", "f_companyAddress"], ["googleReviewUrl", "f_googleReviewUrl"]]
+      .forEach(function (pair) {
+        var v = p[pair[0]];
+        var el = document.getElementById(pair[1]);
+        if (el && v) el.value = String(v).slice(0, 300);
+      });
+    var note = document.getElementById("prefillNote");
+    if (note) note.style.display = "block";
+    var fn = document.getElementById("f_firstName");
+    if (fn) fn.focus();
+  });
   const API = "/.netlify/functions/signup";
   let voicePerspective = "Individual";
 

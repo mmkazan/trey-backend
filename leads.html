@@ -89,6 +89,29 @@
   .copybtn{background:#f1f5f9;color:#0f172a;padding:5px 11px;font-size:12px;border-radius:6px;}
   .copybtn.ok{background:#dcfce7;color:#166534;}
   .linkbtn{background:#eef2ff;color:#4338ca;padding:5px 11px;font-size:12px;border-radius:6px;border:none;cursor:pointer;}
+  /* Planning map. Same dot mechanics as go.html — see map-pins.js. */
+  /* Capped, or at full desktop width a 640x380 picture is ~800px tall and you
+     scroll past the list to reach it. */
+  .mapwrap{position:relative;line-height:0;margin-bottom:10px;max-width:820px;}
+  .map{width:100%;border-radius:10px;border:1px solid #cfe0f6;display:block;}
+  .pin{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;padding:0;
+       border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.5);
+       color:#fff;font-size:11px;font-weight:800;line-height:18px;text-align:center;cursor:pointer;}
+  .pin.new{background:#047857;} .pin.contacted{background:#b45309;}
+  .pin.mine{background:#4338ca;} .pin.lost{background:#94a3b8;}
+  .pin.you{background:#4338ca;width:18px;height:18px;line-height:14px;font-size:10px;cursor:default;}
+  .dim{position:absolute;transform:translate(-50%,-50%);width:9px;height:9px;border-radius:50%;
+       background:#94a3b8;border:1.5px solid #fff;opacity:.5;}
+  .maplegend{display:flex;gap:14px;font-size:12px;color:#64748b;margin:0 0 12px;flex-wrap:wrap;}
+  .maplegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;}
+  .viewtog{display:flex;gap:6px;}
+  .viewtog button{font-size:12.5px;font-weight:700;padding:7px 13px;border-radius:999px;
+       border:1px solid #e2e8f0;background:#fff;color:#475569;cursor:pointer;}
+  .viewtog button.on{background:#4338ca;color:#fff;border-color:#4338ca;}
+  .card.flash,.lead.flash{box-shadow:0 0 0 3px #a5b4fc;}
+  .card,.lead{transition:box-shadow .25s;}
+  .mapnote{font-size:12.5px;color:#64748b;margin-bottom:10px;line-height:1.5;}
+  .mapnote b{color:#0f172a;}
 </style>
 </head>
 <body>
@@ -128,6 +151,27 @@
       <div id="status"></div>
     </div>
 
+    <!-- Plan the round at a desk. The same nearby.js search go.html runs in the
+         street, but on a screen big enough to read properly before you walk. -->
+    <div class="card">
+      <h2>Prospect an area</h2>
+      <div class="row">
+        <div style="flex:2;">
+          <label>Postcode or town</label>
+          <input id="areaQ" placeholder="e.g. DE1 3GL, or Ashbourne" onkeydown="if(event.key==='Enter')prospect()" />
+        </div>
+        <div style="flex:0;min-width:130px;">
+          <label>Radius</label>
+          <select id="areaRadius">
+            <option value="250">250m</option><option value="500" selected>500m</option>
+            <option value="1000">1km</option><option value="2000">2km</option>
+          </select>
+        </div>
+        <div style="flex:0;"><button class="btn-primary" onclick="prospect()">Search</button></div>
+      </div>
+      <div id="areaOut"></div>
+    </div>
+
     <div class="card" style="padding:14px 18px;">
       <div class="row" style="align-items:center;margin:0;">
         <div style="flex:2;"><input id="leadSearch" placeholder="Search leads — name, category, address…" oninput="render()" /></div>
@@ -148,17 +192,24 @@
             <input type="checkbox" id="hideDeadEnds" onchange="render()" /> Hide dead ends
           </label>
         </div>
+        <div style="flex:0;" class="viewtog">
+          <button id="vList" class="on" onclick="setView('list')">List</button>
+          <button id="vMap" onclick="setView('map')">Map</button>
+        </div>
       </div>
     </div>
 
     <div class="counts" id="counts"></div>
+    <div id="leadMap"></div>
     <div id="leadList"></div>
   </main>
   <div id="draftModal" class="modal-bg" onclick="if(event.target===this)closeDraft()"></div>
 </div>
 
+<script src="/map-pins.js"></script>
 <script>
   const API = "/.netlify/functions/leads";
+  const NEARBY_API = "/.netlify/functions/nearby";
   const STATUSES = ["New","Contacted","On trial","Converted","Lost"];
   let token = sessionStorage.getItem("treyAdminToken") || "";
   let LEADS = [];
@@ -290,7 +341,14 @@
     if(pool.length){ const L=pool.slice().sort((a,b)=>(b.dt||0)-(a.dt||0))[0]; const t=L.text.slice(0,120)+(L.text.length>120?"...":""); hook="["+L.stars+"★ "+fmtDate(L.dt)+"] \""+t+"\""; }
     const reviewsLast90=revs.filter(r=>r.dt&&(REF-r.dt)/86400000<=90).length;
     let secondaryCount=0,ci=1; while(("categories/"+ci) in row){ if((row["categories/"+ci]||"").trim())secondaryCount++; ci++; }
+    // Apify's export already carries the coordinates. Taking them here means a
+    // town swept the night before is instantly mappable, with ZERO Places
+    // lookups — they'd otherwise cost one paid call each for data that arrived
+    // free. Column names vary with how the CSV was flattened, so try the ones
+    // Apify actually emits. leads.js stamps geoAt and enforces the 30-day clock.
+    const geo=apifyGeo(row);
     return {placeId:(row["placeId"]||"").trim(),businessName:(row["title"]||"").trim(),category:fne(row,["categoryName","categories/0"]),
+      lat:geo.lat,lng:geo.lng,
       email,phone,website,rating,reviewCount,ownerResponseRate:rate===null?"n/a":Math.round(rate*100)+"%",recentUnanswered:recent.length,
       reviewsLast90:(revs.length?reviewsLast90:undefined),secondaryCount,
       hook,scoreReasons:R.join(" · "),flag,reviewUrl:(row["placeId"]?"https://search.google.com/local/writereview?placeid="+row["placeId"]:""),
@@ -298,13 +356,37 @@
       // NB: no outreachStatus here on purpose — the server keeps any existing
       // pipeline status on re-import, so re-scraping never resets a lead to "New".
   }
+  // Apify flattens nested objects with a slash, but the exact shape depends on
+  // the export options, so accept the handful of spellings it produces.
+  function apifyGeo(row){
+    const pick=(keys)=>{
+      for(const k of keys){
+        const v=row[k];
+        if(v===undefined||v===null||String(v).trim()==="") continue;
+        const n=Number(v);
+        if(!isNaN(n)&&isFinite(n)) return n;
+      }
+      return undefined;
+    };
+    const lat=pick(["location/lat","location/latitude","latitude","lat"]);
+    const lng=pick(["location/lng","location/longitude","longitude","lng","lon"]);
+    // Both or neither — half a coordinate is worse than none, because
+    // Number(undefined) downstream would put it in the Atlantic.
+    if(lat===undefined||lng===undefined) return {};
+    // A plausibility check. 0,0 is the classic "missing data" value and sits in
+    // the Gulf of Guinea; a real UK business is never there.
+    if(Math.abs(lat)>90||Math.abs(lng)>180||(lat===0&&lng===0)) return {};
+    return {lat,lng};
+  }
+
   function fromScored(row){
     return {businessName:(row["Business Name"]||"").trim(),category:(row["Category"]||"").trim(),email:(row["Primary Email"]||"").trim(),
       phone:(row["Phone"]||"").replace(/^'/,"").trim(),rating:toNum(row["Google Rating"]),reviewCount:parseInt(row["Total Reviews"])||0,
       ownerResponseRate:(row["Owner Response Rate"]||"").trim(),recentUnanswered:parseInt(row["Recent Unanswered Poor Reviews"]||row["Unanswered Poor Reviews Count"])||0,
       hook:(row["Key Sales Hook / Review Sample"]||"").trim(),scoreReasons:(row["Score Reasons"]||"").trim(),flag:(row["Flag"]||"").trim(),
       reviewUrl:(row["Direct Review URL"]||"").trim(),website:(row["Website"]||"").trim(),address:(row["Address"]||"").trim(),
-      tier:parseInt(row["Tier"])||null,score:parseInt(row["Score"]),outreachStatus:(row["Outreach Status"]||"New").trim()||"New"};
+      tier:parseInt(row["Tier"])||null,score:parseInt(row["Score"]),outreachStatus:(row["Outreach Status"]||"New").trim()||"New",
+      ...apifyGeo(row)};
   }
 
   // ---------- upload ----------
@@ -407,11 +489,201 @@
       const okDead=!hideDead||!isDeadEnd(l);
       return okQ&&okSt&&okT&&okDead;
     });
+    ROWS = rows;
     document.getElementById("leadList").innerHTML = rows.length
       ? rows.map(function(o){return leadCard(o.l,o.i);}).join("")
       : '<div class="card muted">No leads match your search.</div>';
+    drawMap();
+  }
+
+  // ---- The planning map ----------------------------------------------------
+  // Same idea as go.html: the PICTURE costs a Static Maps call, the DOTS are
+  // free. So the picture is fetched once, fitted to whatever is on screen, and
+  // every subsequent filter or search just redraws dots over it instantly. A
+  // "Refit" button appears when the filtered set has drifted off the frame.
+  let VIEW = "list", ROWS = [], MAPDATA = null, MAPFOR = 0;
+
+  function setView(v){
+    VIEW = v;
+    document.getElementById("vList").className = v === "list" ? "" : "";
+    document.getElementById("vList").className = v === "list" ? "on" : "";
+    document.getElementById("vMap").className  = v === "map"  ? "on" : "";
+    if (v === "map" && !MAPDATA) { fetchBaseMap(); return; }
+    drawMap();
+  }
+
+  const withGeo = (rows) => rows.filter(o => o.l.lat != null && o.l.lng != null);
+  const needGeo = (rows) => rows.filter(o => (o.l.lat == null || o.l.lng == null) && o.l.placeId);
+
+  function pinCls(l){
+    const st = l.outreachStatus || "New";
+    if (l.isClient || st === "Converted" || st === "On trial") return "mine";
+    if (st === "Lost") return "lost";
+    if (st === "Contacted") return "contacted";
+    return "new";
+  }
+
+  async function fetchBaseMap(){
+    const box = document.getElementById("leadMap");
+    const pts = withGeo(ROWS).map(o => ({ lat:o.l.lat, lng:o.l.lng }));
+    if (!pts.length) { drawMap(); return; }
+    box.innerHTML = '<div class="card muted">Drawing the map…</div>';
+    try {
+      const res = await fetch(NEARBY_API, { method:"POST",
+        headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+        body: JSON.stringify({ action:"basemap", points: pts }) });
+      if (res.status === 403) { logout(); return; }
+      const d = await res.json();
+      MAPDATA = d.map || null;
+      MAPFOR = pts.length;
+    } catch(e) { MAPDATA = null; }
+    drawMap();
+  }
+
+  function drawMap(){
+    const box = document.getElementById("leadMap");
+    if (VIEW !== "map") { box.innerHTML = ""; return; }
+
+    const placed = withGeo(ROWS), missing = needGeo(ROWS);
+    let note = "";
+    if (missing.length) {
+      // Never silently show fewer pins than leads. Say what's missing and offer
+      // to fix it, with the cost stated up front.
+      note += '<div class="mapnote"><b>' + missing.length + '</b> of ' + ROWS.length +
+        ' leads have no coordinates yet, so they can\'t be drawn. ' +
+        '<button class="btn-secondary" style="margin-left:6px" onclick="locateMissing()">Look up ' +
+        Math.min(missing.length, 60) + '</button> ' +
+        '<span class="muted">(one Google lookup each; kept 30 days)</span></div>';
+    }
+    if (!MAPDATA) {
+      box.innerHTML = note + '<div class="card muted">' +
+        (placed.length ? 'No map picture — is <b>Maps Static API</b> enabled on the Google key?'
+                       : 'None of these leads have coordinates yet.') + '</div>';
+      return;
+    }
+
+    const onFrame = TreyMap.countPlaceable(MAPDATA, placed.map(o => o.l));
+    if (onFrame < placed.length) {
+      note += '<div class="mapnote">' + (placed.length - onFrame) +
+        ' outside this view. <button class="btn-secondary" onclick="fetchBaseMap()">Refit map</button></div>';
+    }
+
+    const pins = placed.map(o => ({
+      lat:o.l.lat, lng:o.l.lng, cls:pinCls(o.l), label:"",
+      title:(o.l.businessName||"") + " — " + (o.l.outreachStatus||"New"),
+      onclick:"jumpLead(" + o.i + ")",
+    }));
+    box.innerHTML = note + TreyMap.html({
+      map: MAPDATA, pins: pins,
+      legend: [{colour:"#047857",label:"New"},{colour:"#b45309",label:"Contacted"},
+               {colour:"#4338ca",label:"Trial / client"},{colour:"#94a3b8",label:"Lost"}],
+      alt: "Map of your leads",
+    }) + '<div class="mapnote">Showing <b>' + onFrame + '</b> of ' + ROWS.length +
+      ' filtered leads. Click a dot to jump to it.</div>';
+  }
+
+  // Click a dot, get the lead. The map answers "where", the card answers "who".
+  function jumpLead(i){
+    const el = document.getElementById("lead" + i) || document.querySelectorAll("#leadList .card")[0];
+    if (!el) return;
+    el.scrollIntoView({ behavior:"smooth", block:"center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1400);
+  }
+
+  // Fill in coordinates for leads that have a place_id but no lat/lng — anything
+  // imported from Apify, and anything saved before the map existed.
+  async function locateMissing(){
+    const missing = needGeo(ROWS).slice(0, 60);
+    if (!missing.length) return;
+    const box = document.getElementById("leadMap");
+    box.innerHTML = '<div class="card muted">Looking up ' + missing.length + ' locations…</div>';
+    try {
+      const res = await fetch(NEARBY_API, { method:"POST",
+        headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+        body: JSON.stringify({ action:"locate", placeIds: missing.map(o => o.l.placeId) }) });
+      if (res.status === 403) { logout(); return; }
+      const d = await res.json();
+      if (d.error) { box.innerHTML = '<div class="card muted">'+esc(d.error)+'</div>'; return; }
+      const updates = [];
+      missing.forEach(o => {
+        const hit = d.found && d.found[o.l.placeId];
+        if (!hit) return;
+        o.l.lat = hit.lat; o.l.lng = hit.lng;
+        updates.push({ id:o.l.id, placeId:o.l.placeId, businessName:o.l.businessName,
+                       lat:hit.lat, lng:hit.lng });
+      });
+      if (updates.length) {
+        await fetch(API, { method:"POST",
+          headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+          body: JSON.stringify({ leads: updates }) });
+      }
+      MAPDATA = null;
+      await fetchBaseMap();
+    } catch(e){ box.innerHTML = '<div class="card muted">Lookup failed: '+esc(e.message)+'</div>'; }
+  }
+
+  // ---- Prospect an area from the desk --------------------------------------
+  let AREA = [];
+  async function prospect(){
+    const q = document.getElementById("areaQ").value.trim();
+    const out = document.getElementById("areaOut");
+    if (!q) { document.getElementById("areaQ").focus(); return; }
+    out.innerHTML = '<div class="muted" style="padding:10px 0;">Searching '+esc(q)+'…</div>';
+    try {
+      const res = await fetch(NEARBY_API, { method:"POST",
+        headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+        body: JSON.stringify({ where:q, radius:Number(document.getElementById("areaRadius").value) }) });
+      if (res.status === 403) { logout(); return; }
+      const d = await res.json();
+      if (!res.ok || d.error) {
+        out.innerHTML = '<div class="muted" style="padding:10px 0;">'+
+          esc(d.error||("HTTP "+res.status))+(d.config?' — set GOOGLE_PLACES_API_KEY in Netlify.':'')+'</div>';
+        return;
+      }
+      AREA = d.leads || [];
+      const known = new Set(LEADS.map(l => l.placeId).filter(Boolean));
+      out.innerHTML = '<div class="mapnote" style="margin-top:10px;"><b>'+AREA.length+
+        '</b> businesses within '+d.radius+'m of '+esc(d.placeLabel||q)+
+        '. Best door first — save the ones worth a walk.</div>' +
+        AREA.map(function(l,i){
+          const have = l.placeId && known.has(l.placeId);
+          return '<div class="row" style="align-items:center;border-top:1px solid #eef2f7;padding:8px 0;margin:0;">'+
+            '<div style="flex:0 0 44px;font-weight:800;color:'+
+              (l.field.band==="Knock now"?"#047857":l.field.band==="Worth a look"?"#b45309":"#94a3b8")+
+              '">'+l.field.total+'</div>'+
+            '<div style="flex:2;"><b>'+esc(l.businessName)+'</b><div class="muted" style="font-size:12px;">'+
+              esc(l.category||"")+(l.rating!=null?' · '+l.rating+'★ · '+(l.reviewCount||0)+' reviews':'')+'</div></div>'+
+            '<div style="flex:0;">'+(have
+              ? '<span class="muted" style="font-size:12px;">Already a lead</span>'
+              : '<button class="btn-secondary" id="as'+i+'" onclick="saveArea('+i+')">Save as lead</button>')+
+            '</div></div>';
+        }).join("");
+    } catch(e){ out.innerHTML = '<div class="muted" style="padding:10px 0;">'+esc(e.message)+'</div>'; }
+  }
+
+  async function saveArea(i){
+    const l = AREA[i], btn = document.getElementById("as"+i);
+    if (!l) return;
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    try {
+      const res = await fetch(API, { method:"POST",
+        headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+        body: JSON.stringify({ lead:{
+          placeId:l.placeId, businessName:l.businessName, category:l.category,
+          rating:l.rating, reviewCount:l.reviewCount, phone:l.phone, website:l.website,
+          address:l.address, outreachStatus:"New",
+          // Free here — we already have them, and it's what puts the lead on the map.
+          lat:l.lat, lng:l.lng,
+          source:"area search "+new Date().toISOString().slice(0,10),
+        }})});
+      if (!res.ok) throw new Error("HTTP "+res.status);
+      if (btn) btn.textContent = "Saved ✓";
+      await loadLeads();
+    } catch(e){ if (btn) { btn.disabled=false; btn.textContent="Retry"; } }
   }
   function leadCard(l,i){
+    // id lets a map dot scroll straight to this card — see jumpLead().
     const ts=estTreyFromLead(l);
     const op=opportunityScore(l);
     const hasData=(l.rating!=null||l.reviewCount);
@@ -420,7 +692,7 @@
       (l.flag==="THIN"?'<span class="badge b-thin">Thin</span>':'')+
       (isDeadEnd(l)?'<span class="badge b-thin">Dead end?</span>':'');
     const sub=[l.category,(l.rating!=null?l.rating+"★":""),(l.reviewCount!=null?l.reviewCount+" reviews":""),(l.ownerResponseRate?l.ownerResponseRate+" replies":"")].filter(Boolean).join(" · ");
-    return '<div class="lead">'+
+    return '<div class="lead card" id="lead'+i+'">'+
       '<div class="lead-head" onclick="toggle('+i+')">'+
         '<span class="opp" style="background:'+op.color+'" title="Opportunity — how much Trey can help × how winnable they are. List is sorted highest first."><b>'+op.total+'</b><small>'+op.band+'</small></span>'+
         '<span class="lead-main"><div class="lead-name">'+esc(l.businessName||"(no name)")+' '+badges+(hasData?'<span class="tsbadge" style="background:'+ts.color+'" title="Trey Score — estimated Google-health, out of 100">Trey '+ts.total+'</span>':'')+'</div><div class="lead-sub">'+esc(sub)+'</div></span>'+

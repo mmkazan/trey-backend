@@ -21,19 +21,12 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
-function adminAuthorized(event, params) {
-  const h = event.headers || {};
-  const auth = h.authorization || h.Authorization || "";
-  const provided = auth.replace(/^Bearer\s+/i, "").trim() || (params && params.token) || "";
-  const expected = process.env.CLIENT_ADMIN_TOKEN || "";
-  if (!provided || !expected) return false;
-  const a = Buffer.from(provided), b = Buffer.from(expected);
-  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
-}
+// Identity, not a yes/no — see admin-auth.js. Shared so auth can't drift.
+const { adminIdentity } = require("./admin-auth.js");
 
 exports.handler = async (event) => {
   const params = event.queryStringParameters || {};
-  if (!adminAuthorized(event, params)) {
+  if (!adminIdentity(event, null, params)) {
     return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
   }
 

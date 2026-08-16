@@ -266,7 +266,8 @@ exports.handler = async (event) => {
   if (body.website || body.hp) return { statusCode: 200, body: JSON.stringify({ success: true }) };
 
   const businessName = clean(body.businessName, 120);
-  const phone = toE164(clean(body.phone, 40));
+  const phoneRaw = clean(body.phone, 40);
+  const phone = toE164(phoneRaw);
   const email = clean(body.email, 120);
 
   if (!businessName || (!phone && !email)) {
@@ -305,6 +306,12 @@ exports.handler = async (event) => {
     contactFirstName: clean(body.firstName, 60),
     contactSurname: clean(body.surname, 60),
     phone,
+    // The number EXACTLY as it was typed. toE164() assumes a bare 0-number is
+    // British and rewrites it to +44 — correct today, silently wrong the first
+    // time a business outside the UK signs up, and by then unrecoverable because
+    // the original is gone. Keeping the raw string costs nothing and makes any
+    // future re-normalisation possible. See country, below.
+    phoneRaw,
     email,
     companyAddress: clean(body.companyAddress, 200),
     brandVoice: clean(body.brandVoice, 400),
@@ -333,6 +340,15 @@ exports.handler = async (event) => {
     referredBy: validReferral ? referredBy : "",
     referralCredited: false,
     source: "self-serve",
+    // WHO BROUGHT THEM IN. Self-serve signups have no runner, hence "". Set on
+    // creation because attribution exists only at this moment — it cannot be
+    // reconstructed later, which is exactly where commission arguments start.
+    ownerId: "",
+    // Stamped so a UK record is positively marked as UK rather than merely
+    // assumed to be. Everything else about localisation (currency, timezone,
+    // the PECR rules) can be added later without touching existing records —
+    // this is the one fact that becomes unknowable once phone is normalised.
+    country: "GB",
     needsReview: true,
     termsAccepted: !!body.termsAccepted,
     termsAcceptedAt: body.termsAccepted ? new Date().toISOString() : "",
