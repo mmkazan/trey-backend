@@ -1024,8 +1024,18 @@
         body: JSON.stringify(payload),
       });
       if (res.status === 403) { logout(); return; }
-      const d = await res.json();
-      if (!res.ok) { panel.innerHTML = "<b>" + esc(d.error || ("HTTP " + res.status)) + "</b>" + restoreCancelBtn(); return; }
+      if (res.status === 502 || res.status === 504) {
+        panel.innerHTML = "<b>The server ran out of time.</b> Restoring is safe to repeat — " +
+          "press the same button again and it'll carry on from where it got to." + restoreCancelBtn();
+        return;
+      }
+      const d = await res.json().catch(function(){ return {}; });
+      if (!res.ok) {
+        panel.innerHTML = "<b>" + esc(d.error || ("HTTP " + res.status)) + "</b>" +
+          (d.advice ? '<div class="mapnote" style="margin-top:8px;">' + esc(d.advice) + "</div>" : "") +
+          restoreCancelBtn();
+        return;
+      }
       renderRestoreResult(d, filename);
       if (d.applied) loadClients();
     } catch (e) {
@@ -1048,9 +1058,17 @@
       : "";
 
     if (d.applied) {
+      const left = Object.values(d.plan || {}).reduce((a, p) => a + (p.remaining || 0), 0);
       panel.innerHTML = `<b>Restored.</b> ${s.created} record${s.created === 1 ? "" : "s"} created` +
         (s.overwritten ? `, ${s.overwritten} replaced` : "") + `. ${s.identical} were already identical.` +
-        warn + restoreCancelBtn();
+        warn +
+        // A restore is idempotent, so "press it again" is genuinely safe advice
+        // rather than a shrug — anything already back shows as identical.
+        (d.ranOutOfTime
+          ? `<div style="margin-top:10px;"><b>${left} record${left === 1 ? "" : "s"} still to go.</b> ` +
+            `<button class="btn-primary" style="margin-left:6px" onclick="runRestore('${d.mode}')">Carry on</button></div>`
+          : "") +
+        restoreCancelBtn();
       return;
     }
 

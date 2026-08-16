@@ -55,6 +55,17 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return json(405, { error: "Method Not Allowed" });
 
+  // Netlify caps a synchronous function's request body at roughly 6 MB. A backup
+  // bigger than that never even reaches this code, so say what to do about it
+  // rather than letting it look like a mystery failure.
+  const rawLen = (event.body || "").length;
+  if (rawLen > 5_500_000) {
+    return json(413, {
+      error: `That backup is ${(rawLen / 1048576).toFixed(1)} MB, past what one request can carry.`,
+      advice: "Export and restore one store at a time: Full backup with ?stores=leads, then ?stores=clients, and so on.",
+    });
+  }
+
   let body = {};
   try { body = JSON.parse(event.body || "{}"); }
   catch (e) { return json(400, { error: "That file isn't valid JSON. Is it the .json backup rather than the .csv?" }); }
@@ -98,43 +109,63 @@ exports.handler = async (event) => {
   const plan = {};
   let toCreate = 0, toOverwrite = 0, identical = 0, skipped = 0;
 
+  // Netlify kills a synchronous function at 10 seconds, and this does a read AND
+  // a write per record. Done one at a time — as the first version did — a few
+  // hundred records is well past the limit and the whole restore dies.
+  //
+  // Batching is safe here in a way it wouldn't be for most writes, because a
+  // restore is IDEMPOTENT: anything already put back shows as "identical" next
+  // time round. So running out of time is recoverable — say what's left and let
+  // the user press again — rather than a half-finished mess.
+  const CONCURRENCY = 20;
+  const DEADLINE = Date.now() + 7500;
+  let ranOutOfTime = false;
+
   try {
     for (const name of ALL_STORES) {
+      if (ranOutOfTime) break;
       const entries = backup.stores[name];
       if (!entries || typeof entries !== "object") continue;
       const keys = Object.keys(entries);
       if (!keys.length) continue;
 
       const store = blobsStore(name);
-      const s = { create: 0, overwrite: 0, identical: 0, skipped: 0, examples: [] };
+      const s = { create: 0, overwrite: 0, identical: 0, skipped: 0, remaining: 0, examples: [] };
 
-      for (const key of keys) {
-        const v = valueFor(entries[key]);
-        if (v.skip) { s.skipped++; skipped++; continue; }
-
-        let existing;
-        let exists = true;
-        try { existing = await store.get(key, { type: "json" }); }
-        catch (e) { try { existing = await store.get(key); } catch (e2) { existing = null; } }
-        if (existing === null || existing === undefined) exists = false;
-
-        const incoming = "raw" in v ? v.raw : v.json;
-        if (exists && same(existing, incoming)) { s.identical++; identical++; continue; }
-
-        if (exists) {
-          s.overwrite++; toOverwrite++;
-          if (s.examples.length < 5) s.examples.push({ key, action: "overwrite" });
-          if (mode !== "overwrite") continue;              // preview, or "missing" mode: leave it alone
-        } else {
-          s.create++; toCreate++;
-          if (s.examples.length < 5) s.examples.push({ key, action: "create" });
-          if (mode === "preview") continue;
+      for (let i = 0; i < keys.length; i += CONCURRENCY) {
+        if (Date.now() > DEADLINE) {
+          ranOutOfTime = true;
+          s.remaining += keys.length - i;
+          break;
         }
+        await Promise.all(keys.slice(i, i + CONCURRENCY).map(async (key) => {
+          const v = valueFor(entries[key]);
+          if (v.skip) { s.skipped++; skipped++; return; }
 
-        if ("raw" in v) await store.set(key, v.raw);
-        else await store.setJSON(key, v.json);
+          let existing;
+          let exists = true;
+          try { existing = await store.get(key, { type: "json" }); }
+          catch (e) { try { existing = await store.get(key); } catch (e2) { existing = null; } }
+          if (existing === null || existing === undefined) exists = false;
+
+          const incoming = "raw" in v ? v.raw : v.json;
+          if (exists && same(existing, incoming)) { s.identical++; identical++; return; }
+
+          if (exists) {
+            s.overwrite++; toOverwrite++;
+            if (s.examples.length < 5) s.examples.push({ key, action: "overwrite" });
+            if (mode !== "overwrite") return;            // preview, or "missing": leave it alone
+          } else {
+            s.create++; toCreate++;
+            if (s.examples.length < 5) s.examples.push({ key, action: "create" });
+            if (mode === "preview") return;
+          }
+
+          if ("raw" in v) await store.set(key, v.raw);
+          else await store.setJSON(key, v.json);
+        }));
       }
-      if (s.create || s.overwrite || s.identical || s.skipped) plan[name] = s;
+      if (s.create || s.overwrite || s.identical || s.skipped || s.remaining) plan[name] = s;
     }
   } catch (err) {
     console.error("[restore] failed part-way:", err);
@@ -150,8 +181,12 @@ exports.handler = async (event) => {
     console.warn(`[restore] ${mode} by ${who.id}: created ${toCreate}, overwrote ${mode === "overwrite" ? toOverwrite : 0}`);
   }
 
+  if (ranOutOfTime) warnings.push(
+    "Ran out of time part-way. Nothing is broken — restoring is safe to repeat, " +
+    "and anything already put back will show as identical. Press the same button again.");
+
   return json(200, {
-    mode, applied,
+    mode, applied, ranOutOfTime,
     backupTakenAt: backup.takenAt || null,
     backupTakenBy: backup.takenBy || null,
     summary: {
