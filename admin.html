@@ -922,8 +922,29 @@
       // it in a query string would leak it into history, logs and referrers.
       const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
       if (res.status === 403) { logout(); return; }
+      // 502 means the function died — almost always because there was more data
+      // than it could read inside Netlify's 10-second limit. Say that, rather
+      // than a bare status code.
+      if (res.status === 502 || res.status === 504) {
+        throw new Error("the server ran out of time gathering it. Try again — and if it keeps happening, tell Claude, because it means a store has grown past what one request can carry.");
+      }
       if (!res.ok) throw new Error("HTTP " + res.status);
+
       const blob = await res.blob();
+      // A partial backup that LOOKS complete is the most dangerous outcome, so
+      // the server returns a JSON error instead of a file when it can't finish.
+      // Catch that here and refuse to count it as a backup.
+      if (format === "json" && blob.size < 4000) {
+        const peek = await blob.text();
+        let j = null; try { j = JSON.parse(peek); } catch (e) {}
+        if (j && j.partial) {
+          alert("Couldn't take a COMPLETE backup — so none was saved.\n\n" +
+            (j.error || "") + "\n\n" +
+            (j.missing ? "Still to get: " + j.missing.join(", ") + "\n\n" : "") +
+            (j.advice || ""));
+          return;
+        }
+      }
       const stamp = new Date().toISOString().slice(0, 10);
       const name = format === "csv" ? `trey-clients-${stamp}.csv` : `trey-backup-${stamp}.json`;
       const a = document.createElement("a");

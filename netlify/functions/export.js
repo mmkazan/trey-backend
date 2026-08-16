@@ -49,9 +49,18 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
-async function dumpStore(name) {
+// Netlify kills a synchronous function at 10 seconds. The first version fetched
+// every blob STRICTLY SEQUENTIALLY — one network round trip each — and with a few
+// hundred records across twenty stores that ran past the limit and the whole
+// thing died with a 502. The CSV kept working because it only ever reads ONE
+// store, which is why the two behaved differently.
+//
+// Fetching in parallel batches turns minutes of round trips into seconds.
+const FETCH_CONCURRENCY = 25;
+
+async function dumpStore(name, deadline) {
   const store = blobsStore(name);
-  const out = { entries: {}, count: 0, truncated: false, error: null };
+  const out = { entries: {}, count: 0, truncated: false, error: null, timedOut: false };
   let blobs = [];
   try {
     ({ blobs } = await store.list());
@@ -65,14 +74,19 @@ async function dumpStore(name) {
     out.totalKeys = blobs.length;
     blobs = blobs.slice(0, MAX_KEYS_PER_STORE);
   }
-  for (const b of blobs) {
-    try {
-      out.entries[b.key] = await store.get(b.key, { type: "json" });
-    } catch (e) {
-      // Not every blob is JSON. Keep the raw text rather than dropping the record.
-      try { out.entries[b.key] = { __raw: await store.get(b.key) }; }
-      catch (e2) { out.entries[b.key] = { __unreadable: e2.message }; }
-    }
+
+  for (let i = 0; i < blobs.length; i += FETCH_CONCURRENCY) {
+    if (deadline && Date.now() > deadline) { out.timedOut = true; break; }
+    const batch = blobs.slice(i, i + FETCH_CONCURRENCY);
+    await Promise.all(batch.map(async (b) => {
+      try {
+        out.entries[b.key] = await store.get(b.key, { type: "json" });
+      } catch (e) {
+        // Not every blob is JSON. Keep the raw text rather than dropping the record.
+        try { out.entries[b.key] = { __raw: await store.get(b.key) }; }
+        catch (e2) { out.entries[b.key] = { __unreadable: e2.message }; }
+      }
+    }));
   }
   out.count = Object.keys(out.entries).length;
   return out;
@@ -153,14 +167,46 @@ exports.handler = async (event) => {
       };
     }
 
+    // Let the caller grab a subset, so an enormous single store can always be
+    // fetched on its own even if everything at once won't fit in the time.
+    const only = String(params.stores || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const wanted = only.length ? ALL_STORES.filter((s) => only.includes(s)) : ALL_STORES;
+    if (only.length && !wanted.length) {
+      return { statusCode: 400, body: JSON.stringify({ error: `Unknown store(s). Valid: ${ALL_STORES.join(", ")}` }) };
+    }
+
+    const deadline = Date.now() + 8000;
     const stores = {};
     let total = 0;
     const truncated = [];
-    for (const name of ALL_STORES) {
-      const d = await dumpStore(name);
+    const incomplete = [];
+    for (const name of wanted) {
+      const d = await dumpStore(name, deadline);
       stores[name] = d.entries;
       total += d.count;
       if (d.truncated) truncated.push({ store: name, saved: d.count, total: d.totalKeys });
+      if (d.timedOut) incomplete.push(name);
+      if (Date.now() > deadline && wanted.indexOf(name) < wanted.length - 1) {
+        // Ran out of time with stores still to go. A backup that LOOKS complete
+        // but isn't is the worst possible outcome, so refuse rather than hand
+        // one over.
+        const done = wanted.slice(0, wanted.indexOf(name) + 1);
+        const missed = wanted.filter((s) => !done.includes(s));
+        return { statusCode: 200, headers: headers("trey-backup-INCOMPLETE.json", "application/json; charset=utf-8"),
+          body: JSON.stringify({
+            error: "Too much data to back up in one request.",
+            partial: true, completed: done, missing: missed,
+            advice: `Download these separately: /.netlify/functions/export?format=json&stores=${missed.join(",")}`,
+          }) };
+      }
+    }
+    if (incomplete.length) {
+      return { statusCode: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify({
+          error: `Ran out of time reading: ${incomplete.join(", ")}. Nothing was written to; this is a read-only operation.`,
+          partial: true,
+          advice: `Download the big ones on their own: /.netlify/functions/export?format=json&stores=${incomplete.join(",")}`,
+        }) };
     }
 
     const backup = {
@@ -168,7 +214,8 @@ exports.handler = async (event) => {
       takenAt: new Date().toISOString(),
       takenBy: who.id,
       site: process.env.URL || "",
-      storeCount: ALL_STORES.length,
+      storeCount: wanted.length,
+      partOfSet: only.length ? only : null,
       recordCount: total,
       // If anything was capped, say so IN THE FILE. A backup that quietly omits
       // records is worse than no backup, because you'd trust it.
