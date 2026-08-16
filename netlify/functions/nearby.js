@@ -412,27 +412,49 @@ exports.handler = async (event) => {
 
     const found = {};
     const failed = [];
-    // Sequential on purpose. A burst of parallel Places calls is a good way to
-    // hit a rate limit and get a confusing half-empty map.
-    for (const id of ids) {
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-        const r = await fetch(`${PLACES_BASE}/places/${encodeURIComponent(id)}`, {
-          headers: { "X-Goog-Api-Key": key, "X-Goog-FieldMask": "id,location" },
-          signal: ctrl.signal,
-        });
-        clearTimeout(timer);
-        const d = await r.json().catch(() => ({}));
-        if (r.ok && d && d.location) found[id] = { lat: d.location.latitude, lng: d.location.longitude };
-        else failed.push(id);
-      } catch (e) { failed.push(id); }
+    let cursor = 0;
+
+    // A Netlify synchronous function is killed at 10 seconds. The first version
+    // of this ran the lookups STRICTLY SEQUENTIALLY, which meant 60 places at
+    // even 200ms each blew the budget and the whole call died — returning
+    // nothing, having spent the money anyway. Found the moment it met a real
+    // list of 286 leads.
+    //
+    // So: a few at a time, and a hard deadline. Whatever is done by then comes
+    // back; the rest is reported as not attempted so the page can ask again.
+    // Partial and honest beats complete and dead.
+    const DEADLINE = Date.now() + 7000;
+    const CONCURRENCY = 6;
+
+    async function worker() {
+      while (true) {
+        if (Date.now() > DEADLINE) return;
+        const i = cursor++;
+        if (i >= ids.length) return;
+        const id = ids[i];
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 4000);
+          const r = await fetch(`${PLACES_BASE}/places/${encodeURIComponent(id)}`, {
+            headers: { "X-Goog-Api-Key": key, "X-Goog-FieldMask": "id,location" },
+            signal: ctrl.signal,
+          });
+          clearTimeout(timer);
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d && d.location) found[id] = { lat: d.location.latitude, lng: d.location.longitude };
+          else failed.push(id);
+        } catch (e) { failed.push(id); }
+      }
     }
-    // Say what couldn't be found rather than quietly returning fewer pins than
-    // the caller asked for.
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
+
+    const attempted = Object.keys(found).length + failed.length;
+    // Never quietly return fewer pins than were asked for.
     return { statusCode: 200, body: JSON.stringify({
       found, foundCount: Object.keys(found).length, failed,
-      requested: ids.length, capped: (body.placeIds || []).length > 60,
+      requested: ids.length,
+      notAttempted: Math.max(0, ids.length - attempted),
+      capped: (body.placeIds || []).length > 60,
     }) };
   }
 

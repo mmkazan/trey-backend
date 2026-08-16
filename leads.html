@@ -618,8 +618,20 @@
           headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
           body: JSON.stringify({ leads: updates }) });
       }
+      // The server works to a deadline (Netlify kills a function at 10s), so a
+      // big backlog needs more than one press. Say how many are left rather than
+      // looking finished when it isn't.
       MAPDATA = null;
       await fetchBaseMap();
+      const left = needGeo(ROWS).length;
+      if (left) {
+        const box2 = document.getElementById("leadMap");
+        box2.insertAdjacentHTML("afterbegin",
+          '<div class="mapnote">Located <b>' + updates.length + '</b>. <b>' + left +
+          '</b> still to go — press <b>Look up</b> again.' +
+          ((d.failed && d.failed.length) ? ' ' + d.failed.length + ' had no location on Google.' : '') +
+          '</div>');
+      }
     } catch(e){ box.innerHTML = '<div class="card muted">Lookup failed: '+esc(e.message)+'</div>'; }
   }
 
