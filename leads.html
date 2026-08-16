@@ -151,6 +151,7 @@
         <div style="flex:2;"><input type="file" id="csvFile" accept=".csv" /></div>
         <div style="flex:0;"><button class="btn-primary" onclick="uploadCSV()">Upload &amp; score</button></div>
         <div style="flex:0;"><button class="btn-secondary" onclick="exportCSV()">Export CSV</button></div>
+        <div style="flex:0;"><button class="btn-secondary" onclick="findDupes()">Find duplicates</button></div>
       </div>
       <div id="status"></div>
     </div>
@@ -430,7 +431,10 @@
   }
 
   function fromScored(row){
-    return {businessName:(row["Business Name"]||"").trim(),category:(row["Category"]||"").trim(),email:(row["Primary Email"]||"").trim(),
+    // placeId is the identity. Reading it back is what makes an export/import
+    // round trip UPDATE the lead instead of duplicating it.
+    return {placeId:(row["Place ID"]||row["placeId"]||"").trim(),
+      businessName:(row["Business Name"]||"").trim(),category:(row["Category"]||"").trim(),email:(row["Primary Email"]||"").trim(),
       phone:(row["Phone"]||"").replace(/^'/,"").trim(),rating:toNum(row["Google Rating"]),reviewCount:parseInt(row["Total Reviews"])||0,
       ownerResponseRate:(row["Owner Response Rate"]||"").trim(),recentUnanswered:parseInt(row["Recent Unanswered Poor Reviews"]||row["Unanswered Poor Reviews Count"])||0,
       hook:(row["Key Sales Hook / Review Sample"]||"").trim(),scoreReasons:(row["Score Reasons"]||"").trim(),flag:(row["Flag"]||"").trim(),
@@ -855,8 +859,120 @@
   }
 
   // ---------- export ----------
+  // ---- Duplicates ----------------------------------------------------------
+  // The same business can end up stored twice under different keys: leadKey()
+  // uses the place ID when there is one ("p_ChIJ…") and falls back to
+  // name+phone ("l_acebarbers_447…") when there isn't. A CSV that had lost its
+  // Place ID column therefore re-imported as NEW records rather than updates.
+  //
+  // The export and import both carry the place ID now, so this shouldn't recur —
+  // but 106 duplicates already exist, and they need merging rather than deleting,
+  // because the two halves hold different things: the Apify copy has the place ID
+  // and coordinates, the re-imported copy may hold a status you set by hand.
+  const normName = (v) => String(v||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+
+  function dupeGroups(){
+    const by = {};
+    LEADS.forEach(l => { const k = normName(l.businessName); if (k) (by[k] = by[k] || []).push(l); });
+    return Object.values(by).filter(v => v.length > 1);
+  }
+
+  // Prefer the record with a place ID — it's the one future imports will match,
+  // and it carries the coordinates. Tie-break on how much it actually holds.
+  function pickKeeper(group){
+    return group.slice().sort((a,b) =>
+      (b.placeId ? 1 : 0) - (a.placeId ? 1 : 0) ||
+      (b.lat != null ? 1 : 0) - (a.lat != null ? 1 : 0) ||
+      Object.keys(b).length - Object.keys(a).length)[0];
+  }
+
+  // Anything the keeper is missing gets taken from the others, so a merge can
+  // only ever ADD information. Status and consent are treated specially: a real
+  // pipeline status beats "New", and consent evidence is never dropped.
+  function mergeGroup(group){
+    const keeper = pickKeeper(group);
+    const losers = group.filter(l => l !== keeper);
+    const merged = Object.assign({}, keeper);
+    const SKIP = { id:1, isClient:1, outreach:1, updatedAt:1 };
+    losers.forEach(l => {
+      Object.keys(l).forEach(k => {
+        if (SKIP[k]) return;
+        const cur = merged[k], inc = l[k];
+        if (inc === undefined || inc === null || inc === "") return;
+        if (cur === undefined || cur === null || cur === "") merged[k] = inc;
+      });
+      if ((merged.outreachStatus||"New") === "New" && l.outreachStatus && l.outreachStatus !== "New") {
+        merged.outreachStatus = l.outreachStatus;
+      }
+      if (l.marketingConsent === true) merged.marketingConsent = true;
+      if (l.consentHistory && l.consentHistory.length) {
+        merged.consentHistory = (merged.consentHistory||[]).concat(l.consentHistory);
+      }
+    });
+    return { keeper, merged, losers };
+  }
+
+  function findDupes(){
+    const groups = dupeGroups();
+    const st = document.getElementById("status");
+    if (!groups.length) { st.innerHTML = '<div class="ok">No duplicates found.</div>'; return; }
+    const extra = groups.reduce((a,g) => a + g.length - 1, 0);
+    const preview = groups.slice(0,6).map(g => {
+      const { keeper } = mergeGroup(g);
+      return "&bull; " + esc((g[0].businessName||"").slice(0,34)) + " &mdash; " + g.length +
+        " copies, keeping the one " + (keeper.placeId ? "with a Place ID" : "with the most data");
+    }).join("<br>");
+    st.innerHTML =
+      '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:12px;margin-top:10px;">'+
+      '<b>' + groups.length + ' business' + (groups.length===1?"":"es") + ' stored more than once</b> &mdash; ' +
+      extra + ' extra record' + (extra===1?"":"s") + '.<br>' +
+      '<div style="font-size:12.5px;color:#78350f;margin-top:6px;line-height:1.6;">' + preview +
+      (groups.length > 6 ? "<br>&hellip;and " + (groups.length-6) + " more" : "") + '</div>' +
+      '<div style="font-size:12.5px;color:#78350f;margin-top:8px;">Merging keeps everything: any field the survivor is missing is taken from the copy, a real status beats &ldquo;New&rdquo;, and consent records are never dropped.</div>' +
+      '<button class="btn-primary" style="margin-top:10px;" onclick="mergeDupes()">Merge all ' + groups.length + '</button>' +
+      '</div>';
+  }
+
+  async function mergeDupes(){
+    const groups = dupeGroups();
+    if (!groups.length) return;
+    if (!confirm("Merge " + groups.length + " duplicated businesses?\n\n" +
+      "Each survivor keeps everything both copies had. The spare records are then deleted.\n\n" +
+      "Take a backup first if you haven't today.")) return;
+    const st = document.getElementById("status");
+    let merged = 0, removed = 0, failed = 0;
+    for (let i = 0; i < groups.length; i++) {
+      st.innerHTML = '<div class="muted">Merging ' + (i+1) + ' of ' + groups.length + '…</div>';
+      const g = mergeGroup(groups[i]);
+      try {
+        const rec = Object.assign({}, g.merged);
+        delete rec.id; delete rec.isClient; delete rec.outreach;
+        const r = await fetch(API, { method:"POST",
+          headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+          body: JSON.stringify({ lead: rec }) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        merged++;
+        // Only delete the spares AFTER the survivor is safely written.
+        for (const l of g.losers) {
+          if (l.id === g.keeper.id) continue;
+          const d = await fetch(API, { method:"POST",
+            headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+            body: JSON.stringify({ delete: l.id }) });
+          if (d.ok) removed++;
+        }
+      } catch (e) { failed++; }
+    }
+    st.innerHTML = '<div class="ok">Merged ' + merged + ', removed ' + removed + ' spare record' +
+      (removed===1?"":"s") + (failed ? ', ' + failed + ' failed' : '') + '.</div>';
+    await loadLeads();
+  }
+
   function exportCSV(){
-    const cols=[["Tier","tier"],["Score","score"],["Business Name","businessName"],["Category","category"],["Primary Email","email"],["Phone","phone"],["Google Rating","rating"],["Total Reviews","reviewCount"],["Owner Response Rate","ownerResponseRate"],["Recent Unanswered Poor Reviews","recentUnanswered"],["Key Sales Hook / Review Sample","hook"],["Score Reasons","scoreReasons"],["Flag","flag"],["Direct Review URL","reviewUrl"],["Website","website"],["Address","address"],["Outreach Status","outreachStatus"]];
+    // Place ID FIRST and always. Without it a re-imported CSV can't be matched to
+    // the record it came from, so leadKey() falls back to name+phone, writes to a
+    // different key, and you get two records for one business. That is exactly
+    // what produced 106 duplicates on 17 Aug.
+    const cols=[["Place ID","placeId"],["Tier","tier"],["Score","score"],["Business Name","businessName"],["Category","category"],["Primary Email","email"],["Phone","phone"],["Google Rating","rating"],["Total Reviews","reviewCount"],["Owner Response Rate","ownerResponseRate"],["Recent Unanswered Poor Reviews","recentUnanswered"],["Key Sales Hook / Review Sample","hook"],["Score Reasons","scoreReasons"],["Flag","flag"],["Direct Review URL","reviewUrl"],["Website","website"],["Address","address"],["Outreach Status","outreachStatus"]];
     const q=v=>{ v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
     const lines=[cols.map(c=>c[0]).join(",")];
     LEADS.forEach(l=>lines.push(cols.map(c=>{ let v=l[c[1]]; if(c[1]==="phone"&&v)v="'"+v; return q(v); }).join(",")));
