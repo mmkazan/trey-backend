@@ -167,6 +167,14 @@
   .walkn{flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;
          font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;
          margin-top:10px;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.35);}
+  /* Take a door off the walk. Deliberately quiet until you hover the row — it
+     sits next to a card full of things you press on purpose, and an always-loud
+     × invites the mis-tap it exists to undo. */
+  .dropstop{flex:0 0 26px;height:26px;margin-top:10px;border-radius:50%;border:1px solid var(--border);
+       background:#fff;color:#94a3b8;font-size:16px;line-height:1;cursor:pointer;padding:0;opacity:.45;
+       transition:opacity .15s,color .15s,border-color .15s;}
+  .walkstop:hover .dropstop{opacity:1;}
+  .dropstop:hover{color:var(--danger);border-color:#fecaca;background:#fef2f2;}
   .walkbox ol{margin:8px 0 0;padding-left:20px;font-size:12.5px;color:#334155;}
   .mapctl button{font-size:13px;font-weight:800;width:32px;height:32px;padding:0;border-radius:8px;
     border:1px solid #cfe0f6;background:#fff;color:#334155;cursor:pointer;}
@@ -269,6 +277,10 @@
           <select id="leadTierFilter" onchange="render()">
             <option value="">All tiers</option>
             <option value="1">Tier 1</option><option value="2">Tier 2</option><option value="3">Tier 3</option>
+            <!-- Tier 1 alone sends you down a street to knock on two doors and
+                 walk past six. Planning 1+2 in one pass is how you avoid
+                 walking the same street twice a fortnight later. -->
+            <option value="12">Tier 1 &amp; 2</option>
           </select>
         </div>
         <div style="flex:0;">
@@ -661,7 +673,11 @@
       const hay=[l.businessName,l.category,l.address,l.contactName,l.phone,l.email].filter(Boolean).join(" ").toLowerCase();
       const okQ=!q||hay.indexOf(q)>-1;
       const okSt=!st||(l.outreachStatus||"New")===st;
-      const okT=!tier||String(l.tier||"")===tier;
+      // "12" is a SET, not the tier twelve. Kept as an explicit list so adding
+      // "2 & 3" later is one more entry rather than a parsing trick.
+      const TIER_SETS={"12":["1","2"]};
+      const wantTiers=TIER_SETS[tier]||(tier?[tier]:null);
+      const okT=!wantTiers||wantTiers.indexOf(String(l.tier||""))>-1;
       const okDead=!hideDead||!isDeadEnd(l);
       return okQ&&okSt&&okT&&okDead;
     });
@@ -1003,7 +1019,50 @@
 
     const plan = TreyRoute.planWalk(start, cands, mins);
     plan.minutes = mins;   // what it was planned FOR, for the phone
+    plan.start = start;    // kept so a stop can be removed and the route redrawn
+    plan.removed = [];     // doors YOU took out, tracked separately from `dropped`
     WALK = plan;
+    renderWalk();
+  }
+
+  // Drop one door from the plan.
+  //
+  // The planner maximises score inside the time budget, which is the right
+  // objective and has one visible side effect: given twenty spare minutes it
+  // will add one more door a long way from the rest, because one door scores
+  // more than none. On the map that reads as a random outlier. It is also just
+  // useful — the shop is shut, or you know the owner, or you have been already.
+  //
+  // The route is NOT re-planned. You removed a specific door; silently
+  // reshuffling the rest, or quietly promoting a replacement off the dropped
+  // pile, is not what you asked for. The remaining stops keep their order, get
+  // renumbered from 1, and every total is recomputed by route.js against the
+  // same walking-speed and dwell assumptions that produced them.
+  function removeStop(n){
+    if (!WALK || !WALK.order) return;
+    const gone = WALK.order.filter(function (o) { return o.n === n; })[0];
+    const keep = WALK.order.filter(function (o) { return o.n !== n; });
+
+    const totals = TreyRoute.recompute(WALK.start, keep.map(function (o) {
+      return { lat: o.lat, lng: o.lng, lead: o.lead, score: (o.lead && o.lead.score) || 0 };
+    }), {});
+
+    // Carry the planning-only fields across — recompute() deliberately does not
+    // invent them, because it never saw the candidates.
+    WALK = Object.assign({}, WALK, totals, {
+      skipped: WALK.skipped, dropped: WALK.dropped, considered: WALK.considered,
+      minutes: WALK.minutes, start: WALK.start,
+      removed: WALK.removed.concat(gone && gone.lead ? [gone.lead.lead || gone.lead] : []),
+    });
+    renderWalk();
+  }
+
+  // Everything that puts a plan on the screen. Split out of planWalk so that
+  // removing a stop redraws through exactly the same path a fresh plan does —
+  // two renderers that drift apart is how a map ends up disagreeing with the
+  // list beside it.
+  function renderWalk(){
+    const plan = WALK, start = WALK.start, mins = WALK.minutes;
     document.getElementById("walkClear").style.display = "";
 
     LROUTE.clearLayers();
@@ -1051,6 +1110,13 @@
           ? '; <b>' + plan.skipped.length + '</b> that couldn\'t be placed on the map at all — ' + esc(reasons)
           : '') +
         '. Planned from <b>' + plan.considered + '</b> of ' + ROWS.length + ' filtered leads.' +
+        // Doors YOU removed are counted separately from ones the planner could
+        // not fit. Rolling them together would quietly overstate how tight the
+        // time budget was, and the whole point of this panel is not doing that.
+        (plan.removed && plan.removed.length
+          ? ' You removed <b>' + plan.removed.length + '</b> by hand' +
+            '; the time and distance above are for the route that is left.'
+          : '') +
       '</div>' +
       // CLOSE THE WALKBOX HERE. The stop cards used to be nested INSIDE it, and
       // .walkbox sets color:#3730a3 with a `.walkbox b{color:#312e81}` for its
@@ -1083,7 +1149,10 @@
               return '<div class="walkstop">' +
                      '<span class="walkn" style="background:' + esc(c) + ';color:' + textOn(c) + '">' +
                      o.n + '</span>' +
-                     leadCard(l, o.lead.i != null ? o.lead.i : 0) + '</div>';
+                     leadCard(l, o.lead.i != null ? o.lead.i : 0) +
+                     '<button class="dropstop" title="Take this door off the walk" ' +
+                     'onclick="removeStop(' + o.n + ')">&times;</button>' +
+                     '</div>';
             }).join("") +
           '</div>'
         : "");

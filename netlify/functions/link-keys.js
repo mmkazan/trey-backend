@@ -144,6 +144,36 @@ function linkUrl(fn, locationId, extraParams) {
   return `${base}/.netlify/functions/${fn}?${qs}`;
 }
 
+/**
+ * Constant-time compare for two secrets that are NOT capability keys — the
+ * admin token, principally. Always fails CLOSED.
+ *
+ * WHY THIS IS NOT linkValid(). linkValid is purpose-scoped by design; the admin
+ * token has no purpose and no locationId, so it could not use it and every call
+ * site hand-rolled the compare instead:
+ *
+ *     provided.length === expected.length && crypto.timingSafeEqual(...)
+ *
+ * `String.length` counts UTF-16 code units. `Buffer.from()` counts BYTES. A
+ * token containing any non-ASCII character passes that length guard and then
+ * throws inside timingSafeEqual, turning an unauthenticated request into a 500.
+ * It fails closed, so it was never a bypass — but a stranger could make the
+ * function throw at will, and this file's own header has documented the correct
+ * pattern since the C2 fix while two call sites carried on doing it by hand.
+ */
+function safeEqual(provided, expected) {
+  try {
+    if (typeof provided !== "string" || typeof expected !== "string") return false;
+    if (!expected) return false;   // an unset token must never match anything
+    const a = Buffer.from(provided, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch (e) {
+    return false;
+  }
+}
+
 module.exports = {
   KEY_LEN,
   PURPOSES,
@@ -151,5 +181,6 @@ module.exports = {
   linkKey,
   linkValid,
   linkUrl,
+  safeEqual,
   FN_TO_PURPOSE,
 };

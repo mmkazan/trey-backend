@@ -106,4 +106,102 @@ exports.run = function (t) {
   // fetch-reviews starves the SAME tail every 15 minutes without a rotating start.
   t.ok(/cursor/i.test(src("fetch-reviews.mjs")),
     "fetch-reviews rotates its start offset so no client is starved forever");
+
+  // === Consent: every WhatsApp to a client honours the opt-out ============
+  //
+  // THE BUG THIS SWEEP EXISTS TO CATCH. Five senders checked an opt-out flag
+  // before messaging a client. review-webhook.js — the most frequent message
+  // Trey sends — checked NONE: not reportsOptOut, not nudgesOptOut, not the
+  // suppressed list. So a client who replied STOP kept getting review alerts
+  // while whatsapp-inbound told them "you won't get any more messages from
+  // Trey". Failing to honour an opt-out is the classic PECR enforcement
+  // trigger, and it survived because every test asked about one file at a time.
+  //
+  // So this asks the question of ALL of them at once: if you post to Twilio
+  // about a client, you check an opt-out first. A new sender added without one
+  // fails here on the day it is written.
+  const CLIENT_SENDERS = [
+    "review-webhook.js", "tap.js",
+    "weekly-report-send.mjs", "monthly-report-send.mjs",
+    "google-post-send.mjs", "photo-refresh-send.mjs",
+  ];
+  for (const f of CLIENT_SENDERS) {
+    const s = src(f);
+    t.ok(/Messages\.json/.test(s), `${f} does send WhatsApp (the sweep is looking at the right file)`);
+    t.ok(/reportsOptOut|nudgesOptOut/.test(s),
+      `${f} checks an opt-out flag before messaging a client`);
+  }
+
+  // Behavioural, not just textual: the guard has to sit BEFORE the send.
+  {
+    const s = src("review-webhook.js");
+    const guardAt = s.indexOf("const optedOut");
+    const sendAt = s.indexOf("Messages.json");
+    t.ok(guardAt > 0, "review-webhook computes an opted-out check");
+    t.ok(guardAt < sendAt, "…and it is evaluated BEFORE the Twilio call, not after");
+    t.ok(/alertSuppressed/.test(s),
+      "a suppressed alert is recorded as suppressed, not left looking unsent");
+    // The review itself must survive. Opting out of messages is not opting out
+    // of the product — their inbox link still works and the reply is still there.
+    const optBlock = s.slice(guardAt, sendAt);
+    t.ok(/reviewsStore\.setJSON/.test(optBlock),
+      "the review is still stored when the alert is suppressed — nothing is lost");
+    t.ok(!/alertSentAt: new Date/.test(optBlock),
+      "…and it is NOT stamped as alerted, which would hide it from every retry");
+  }
+
+  // === STOP says what it costs ===========================================
+  //
+  // Trey IS a WhatsApp service. "Messages off" is not a volume control, it
+  // disconnects them — and the old reply said only "you won't get any more
+  // messages", which read like a preference rather than a consequence.
+  {
+    const wi = src("whatsapp-inbound.js");
+    const reply = (wi.match(/const STOP_REPLY =([\s\S]*?);\n/) || [])[1] || "";
+    t.ok(!!reply, "whatsapp-inbound has a STOP_REPLY");
+    t.ok(/WhatsApp/.test(reply), "the STOP reply says Trey works over WhatsApp");
+    t.ok(/review/i.test(reply), "…names what stops working — the review alerts");
+    t.ok(/START/.test(reply), "…and how to undo it");
+    t.ok(/cancel/i.test(reply),
+      "…and where to go if they meant cancel rather than silence, which is the likelier intent");
+    // The specific false promise that was there before.
+    t.ok(!/won't get any more messages from Trey/.test(reply),
+      "REGRESSION: the reply no longer promises a silence it cannot deliver");
+
+    // STOP must still be handled first and always, printed or not.
+    t.ok(/STOP_WORDS/.test(wi), "STOP keywords are still matched");
+    const stopAt = wi.indexOf("STOP_WORDS.includes");
+    const welcomeAt = wi.indexOf("welcome to Trey");
+    t.ok(stopAt > 0 && welcomeAt > 0, "both the STOP branch and the welcome exist");
+
+    // The welcome no longer advertises the off switch for the channel the
+    // product runs on. Everything Trey sends a subscriber is the service they
+    // bought, so PECR's opt-out line is not required on it.
+    // Comments stripped first. The code carries a note explaining which line was
+    // REMOVED and why — a check that reads prose finds the removed text quoted
+    // back at it and fails a correct file. This is the second time that has
+    // happened today; strip before you match.
+    const welcome = wi.slice(welcomeAt, welcomeAt + 1600)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    t.ok(!/Reply STOP any time/.test(welcome),
+      "the welcome auto-reply no longer prompts STOP");
+    t.ok(/tap approve/.test(welcome), "…and still explains the loop it replaced it with");
+  }
+
+  // === The win-back is the one that WILL need an opt-out ==================
+  //
+  // A monthly "you got X taps and Y reviews and answered none of them" sent to
+  // someone who is NOT subscribing is direct marketing to a lapsed customer —
+  // the only Trey message that is. It is not built yet, and this asserts that:
+  // if it ever starts going to cancelled clients, the assertion below fails and
+  // whoever built it has to come back and read why.
+  {
+    const m = src("monthly-report-send.mjs");
+    t.ok(/isSendable/.test(m), "the monthly report gates who it sends to");
+    t.ok(/cancelled|canceled/.test(m),
+      "…and currently excludes cancelled clients, so no marketing goes out yet");
+    t.ok(/reportsOptOut === true\) return false/.test(m),
+      "…and honours the opt-out flag");
+  }
 };

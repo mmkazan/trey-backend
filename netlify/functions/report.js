@@ -96,7 +96,7 @@ function blobsStore(name) {
 // derive the same value from the same secret.
 
 // Constant-time compare so a bad key can't be brute-forced by timing.
-const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+const { linkKey, linkValid, secretConfigured, safeEqual } = require("./link-keys");
 
 // This page's own purpose. Its key opens THIS page and nothing else — see
 // link-keys.js for why. A key minted for another page will not validate here.
@@ -693,8 +693,9 @@ exports.handler = async (event) => {
     const gh = event.headers || {};
     const provided = (gh.authorization || gh.Authorization || "").replace(/^Bearer\s+/i, "").trim() || params.token || "";
     const expected = process.env.CLIENT_ADMIN_TOKEN || "";
-    const authOk = !!expected && provided.length === expected.length &&
-      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    // safeEqual compares BYTES — see link-keys.js. String.length counts UTF-16
+    // units, so a non-ASCII token passed the old guard and then threw a 500.
+    const authOk = safeEqual(provided, expected);
     if (!authOk) {
       return { statusCode: 403, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Unauthorized" }) };
     }

@@ -73,8 +73,26 @@ async function clientReply(match) {
     return `${hello}, and welcome to Trey \u{1F44B}\n\n` +
       "Please save this number — your review alerts come from here, and it's easier to trust a name than a number.\n\n" +
       `Here's your Trey inbox, no password needed:\n${url}\n\n` +
-      "When a review comes in, I'll message you a ready-to-send reply. You read it, tap approve, done. " +
-      "Reply STOP any time to switch messages off.";
+      "When a review comes in, I'll message you a ready-to-send reply. You read it, tap approve, done.";
+    // "Reply STOP any time to switch messages off" was here. Removed 17 Aug,
+    // deliberately, and the same line came out of the activation template.
+    //
+    // Everything Trey sends a subscriber IS the service they bought — the review
+    // alert, the weekly and monthly reports, the post and photo prompts. None of
+    // it is direct marketing, so PECR's opt-out line is not required on it, and
+    // advertising the off switch for the channel the product runs on inside the
+    // welcome message is actively unhelpful.
+    //
+    // STOP still works. Twilio and Meta honour the keyword regardless of whether
+    // we print it, whatsapp-inbound handles it first and always, and STOP_REPLY
+    // now explains what it costs. This removes the prompt, not the right.
+    //
+    // WHERE THE OPT-OUT LINE DOES BELONG: the hardware-only win-back — the
+    // monthly "you got X taps and Y reviews and answered none of them" sent to
+    // someone who is NOT subscribing. That one is direct marketing to a lapsed
+    // customer, and it must carry an opt-out and honour it. It is not built yet
+    // (monthly-report-send.mjs skips cancelled and paused). See
+    // feature-hardware-only-winback.md — do not ship it without the line.
   }
 
   return `${hello} — here's your Trey inbox:\n${url}\n\n` +
@@ -101,9 +119,24 @@ async function fallbackReply(fromDigits) {
 const STOP_WORDS  = ["stop", "stopall", "stop all", "unsubscribe", "cancel", "quit", "end", "optout", "opt out", "no more", "remove me"];
 const START_WORDS = ["start", "unstop", "resubscribe", "resume", "opt in", "optin", "yes please"];
 
+// STOP now means STOP, and the reply says what that costs.
+//
+// It used to promise "you won't get any more messages from Trey" while
+// review-webhook.js sent review alerts anyway — the most frequent message of the
+// lot, and the only one it never checked an opt-out before sending. The promise
+// was false. That is fixed at the other end; this text is the half that has to
+// be honest about the consequence.
+//
+// And the consequence is real: Trey IS a WhatsApp service. Switching messages
+// off does not quieten Trey down, it disconnects them from it. Someone who
+// wanted to cancel rather than go silent needs pointing at the way to do that,
+// or they will sit there assuming Trey is working.
 const STOP_REPLY =
-  "Done — you won't get any more messages from Trey. If you change your mind, just reply START. " +
-  "For anything else, email info@trey.today.";
+  "Done — Trey messages are off.\n\n" +
+  "Worth knowing: Trey works over WhatsApp. That means you'll no longer be told when a new " +
+  "review comes in, so replies won't get approved and posted. Your reviews are still collected " +
+  "and still waiting in your Trey inbox — you'd just have to go and look.\n\n" +
+  "Reply START to switch messages back on. To cancel your subscription instead, email info@trey.today.";
 const START_REPLY =
   "Welcome back — messages are switched back on. Reply STOP at any time to turn them off again.";
 

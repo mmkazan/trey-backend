@@ -298,6 +298,27 @@ exports.handler = async (event) => {
   }
 
   // 6. Send the WhatsApp alert via Twilio — short message, link only.
+  //
+  // HONOUR THE OPT-OUT. Until 17 Aug this function checked no opt-out at all —
+  // not `reportsOptOut`, not `nudgesOptOut`, not the `suppressed` list. Every
+  // other sender checked; this one, the most frequent message Trey sends, did
+  // not. So a client who replied STOP kept receiving review alerts while
+  // whatsapp-inbound.js told them "you won't get any more messages from Trey".
+  // The promise was false, and failing to honour an opt-out is the classic PECR
+  // enforcement trigger.
+  //
+  // The review is still RECORDED and the reply still DRAFTED — only the WhatsApp
+  // is suppressed. Their inbox link keeps working, so nothing is lost; they just
+  // have to come and look. That is the honest meaning of "messages off".
+  const optedOut = client.reportsOptOut === true || client.nudgesOptOut === true;
+  if (optedOut) {
+    const record = { ...reviewRecord, alertSentAt: null, alertSuppressed: "opted-out" };
+    await reviewsStore.setJSON(`pending:${reviewId}`, record);
+    await reviewsStore.setJSON(recordKey, record);
+    console.warn(`[review-webhook] ${locationId} has opted out — review stored, alert suppressed.`);
+    return { statusCode: 200, body: JSON.stringify({ success: true, reviewId, alert: "suppressed: opted out" }) };
+  }
+
   // Per-review signature — the approve link only works for this one review
   // (replaces the old shared token). Must match signReview() in approve.js.
   const approveSig = require("crypto")

@@ -19,6 +19,21 @@
   h2 { font-size:17px; margin-top:32px; margin-bottom:10px; color:#0f172a; }
   p, li { font-size:14px; color:#334155; }
   a { color:var(--accent2); }
+  /* Section 11 (the Article 28 processor terms) is the only part of this page
+     with sub-headings and tables. Without these it rendered as unstyled browser
+     defaults — Times New Roman next to the rest of the page — which is not what
+     you want a prospective client's advisor to open. */
+  h3 { font-size:14.5px; margin:22px 0 6px; color:#0f172a; }
+  table { border-collapse:collapse; width:100%; margin:10px 0 4px; }
+  th, td { font-size:13.5px; color:#334155; text-align:left; vertical-align:top;
+           padding:8px 10px; border:1px solid var(--border); }
+  th { width:180px; background:#fff; font-weight:700; color:#0f172a; }
+  td { background:#fff; }
+  @media (max-width:520px) {
+    th, td { display:block; width:auto; border-bottom:none; }
+    tr { display:block; border-bottom:1px solid var(--border); margin-bottom:8px; }
+    th { border-bottom:none; padding-bottom:0; }
+  }
 </style>
 </head>
 <body>
@@ -30,7 +45,7 @@
 </header>
 <main>
   <h1>Terms of Service</h1>
-  <p class="updated">Last updated: 11 August 2026</p>
+  <p class="updated">Last updated: 17 August 2026</p>
 
   <h2>1. What Trey is</h2>
   <p>Trey provides physical NFC/QR "Tappy Stand" review points paired with automated Google review management: AI-drafted reply suggestions and WhatsApp notifications, delivered as a subscription service (the "Service").</p>
@@ -56,6 +71,7 @@
     <li>Keeping the Service running and your data secure</li>
     <li>Never posting to your Google Business Profile without your approval</li>
     <li>Giving reasonable notice of pricing or Service changes</li>
+    <li>Handling your customers' review data only as your processor, on your instructions &mdash; set out in full in section 11</li>
   </ul>
 
   <h2>7. Service availability</h2>
@@ -70,8 +86,65 @@
   <h2>10. Governing law</h2>
   <p>These terms are governed by the laws of England and Wales.</p>
 
+  <h2>11. Data protection &mdash; Trey as your processor</h2>
+  <p>This section is the written contract required by Article 28(3) of the UK GDPR. It applies whenever Trey handles personal data on your behalf, and it forms part of these terms.</p>
+
+  <h3>11.1 Who is who</h3>
+  <p><strong>You are the controller</strong> of your customers' review data. You decide that reviews should be collected and replied to, and it is your Google Business Profile the replies appear on. <strong>Trey is your processor</strong> for that data.</p>
+  <p>Trey is a separate <strong>controller</strong> for a small amount of data it holds for its own purposes &mdash; your account and billing details, and the sales-prospect records it keeps before you become a client. Those are covered by the <a href="/privacy.html">Privacy Policy</a>, not by this section.</p>
+
+  <h3>11.2 What Trey processes for you</h3>
+  <table>
+    <tr><th>Subject matter</th><td>Providing the Trey review-management Service to you.</td></tr>
+    <tr><th>Duration</th><td>For as long as your subscription runs, plus the deletion period in 11.9.</td></tr>
+    <tr><th>Nature and purpose</th><td>Collecting reviews left on your Google Business Profile; drafting suggested replies using AI; sending you notifications so you can approve them; publishing an approved reply to your Profile; counting taps of your stand or key fob; and producing your weekly and monthly reports.</td></tr>
+    <tr><th>Types of personal data</th><td>Reviewer display names, review text, star ratings and review dates; the reply text you approve; and the contact details of the people at your business who use Trey.</td></tr>
+    <tr><th>Categories of data subject</th><td>Your customers who leave reviews, and your own staff or owners who use the Service.</td></tr>
+  </table>
+
+  <h3>11.3 Trey acts only on your instructions</h3>
+  <p>Trey processes this personal data only on your documented instructions, including on any transfer outside the UK. These terms, together with the settings you choose in your account, are those instructions. If Trey is ever required by law to process it otherwise, Trey will tell you before doing so unless that law forbids it.</p>
+
+  <h3>11.4 Confidentiality</h3>
+  <p>Everyone Trey authorises to access this data is bound by a duty of confidentiality. Trey is currently operated by one person, Matthew Kazan, and that duty applies to him and to anyone he engages later.</p>
+
+  <h3>11.5 Security</h3>
+  <p>Trey applies appropriate technical and organisational measures under Article 32: encryption in transit for every connection; access to your data through signed, per-purpose links rather than shared passwords; secrets held in the hosting platform's encrypted environment rather than in code; and automated tests covering the access-control paths, run before every release.</p>
+
+  <h3>11.6 Sub-processors</h3>
+  <p>You give Trey general authorisation to use the sub-processors below. Each is bound by written terms no less protective than this section.</p>
+  <table>
+    <tr><th>Google</th><td>Source of the reviews, destination of approved replies, and the AI that drafts them. Trey uses a paid tier, under which Google does not use the content to train its models.</td></tr>
+    <tr><th>Twilio</th><td>Delivers your WhatsApp notifications.</td></tr>
+    <tr><th>Resend</th><td>Delivers Trey's emails to you.</td></tr>
+    <tr><th>Netlify</th><td>Hosting and data storage.</td></tr>
+  </table>
+  <p>Trey will give you at least <strong>30 days' notice</strong> before adding or replacing a sub-processor. If you object on reasonable data-protection grounds, you may cancel without penalty and receive a pro-rata refund of any unused prepaid period.</p>
+
+  <h3>11.7 International transfers</h3>
+  <p>Some of these providers process data outside the UK. Where they do, transfers are covered by the UK Addendum to the EU Standard Contractual Clauses, or by the provider's UK Data Privacy Framework certification.</p>
+
+  <h3>11.8 Helping you meet your own obligations</h3>
+  <p>Trey will assist you, so far as is reasonable and taking into account the nature of the processing:</p>
+  <ul>
+    <li>in responding to requests from individuals exercising their rights &mdash; access, erasure, objection and the rest;</li>
+    <li>in keeping the processing secure, notifying breaches, and carrying out a data protection impact assessment or prior consultation if you need one.</li>
+  </ul>
+  <p>If Trey becomes aware of a personal data breach affecting your data, Trey will notify you <strong>without undue delay and within 48 hours</strong>, with what is known at the time, so you can meet your own 72-hour duty to the ICO.</p>
+
+  <h3>11.9 Deletion and return</h3>
+  <p>When your subscription ends, you may ask for a copy of your data in a machine-readable format. Trey will delete your customers' review data, and all copies of it, <strong>within 90 days</strong> of the end of your subscription, unless UK law requires it to be kept for longer. Say the word and Trey will delete it sooner.</p>
+
+  <h3>11.10 Records and audit</h3>
+  <p>Trey will make available the information reasonably needed to show it is meeting these obligations, and will allow and contribute to audits or inspections you or an auditor you appoint carry out, on reasonable notice and no more than once a year unless a breach or a regulator requires otherwise.</p>
+
+  <h3>11.11 If this section and the rest of these terms disagree</h3>
+  <p>On anything to do with personal data, this section wins.</p>
+
   <h2>Contact</h2>
-  <p><a href="mailto:info@trey.today">info@trey.today</a></p>
+  <p>Trey is operated by Matthew Kazan, a sole trader trading as Trey.<br>
+  52 Ravenscroft Drive, Derby, DE21 6NX, United Kingdom<br>
+  <a href="mailto:info@trey.today">info@trey.today</a></p>
 </main>
 </body>
 </html>

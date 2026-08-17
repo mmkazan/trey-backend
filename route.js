@@ -220,9 +220,74 @@
     };
   }
 
+  /**
+   * Recompute a plan's totals for a sequence you already have.
+   *
+   * WHY THIS EXISTS. The planner solves an orienteering problem: maximise score
+   * inside the time budget. That is the right objective, and it has one visible
+   * side effect — with twenty spare minutes it will happily add one more door a
+   * long way from the others, because one more door scores more than none. On
+   * the map that reads as a random outlier.
+   *
+   * Rather than bend the objective, the desk lets you drop a stop. But a plan
+   * whose numbers still describe the route you deleted a leg from is worse than
+   * no numbers, so the arithmetic lives HERE, next to the planner that produced
+   * it, instead of being re-derived in the page. Same walking-speed and dwell
+   * assumptions, same detour factor, same shape of answer.
+   *
+   * Deliberately does NOT re-plan or re-order: you removed a specific door, and
+   * silently reshuffling the rest — or quietly adding a replacement from the
+   * dropped pile — is not what you asked for.
+   *
+   * @param start  {lat,lng} the route starts from
+   * @param stops  the remaining stops, IN ORDER: [{lat,lng,lead,score}]
+   * @param options same overrides planWalk takes
+   * @returns the same totals planWalk returns, minus the planning-only fields
+   */
+  function recompute(start, stops, options) {
+    var opt = {};
+    for (var k in DEFAULTS) opt[k] = DEFAULTS[k];
+    if (options) for (var k2 in options) if (options[k2] != null) opt[k2] = options[k2];
+
+    var list = (stops || []).filter(function (s) {
+      return s && isFinite(Number(s.lat)) && isFinite(Number(s.lng));
+    });
+
+    var walkSecs = 0, dist = 0, totalScore = 0, prev = start;
+    for (var i = 0; i < list.length; i++) {
+      var d = haversine(prev, list[i]);
+      // detourFactor, exactly as planWalk applies it. Straight-line metres are
+      // not street metres, and reporting the raw haversine here made a plan
+      // shrink by 25% the moment you touched it — the numbers disagreeing with
+      // the planner that produced them is the one thing this must not do.
+      // walkSeconds() applies the factor internally, so only distance needs it.
+      dist += d * opt.detourFactor;
+      walkSecs += walkSeconds(d, opt);
+      totalScore += Number(list[i].score) || 0;
+      prev = list[i];
+    }
+    var dwellSecs = list.length * opt.dwellSeconds;
+
+    return {
+      stops: list.map(function (s) { return s.lead; }),
+      // Renumbered from 1. A plan that still says "stop 4" after stop 3 has gone
+      // is the kind of small lie that costs you a doorway.
+      order: list.map(function (s, idx) {
+        return { n: idx + 1, lead: s.lead, lat: s.lat, lng: s.lng };
+      }),
+      totalMinutes: Math.round((walkSecs + dwellSecs) / 60),
+      walkMinutes: Math.round(walkSecs / 60),
+      dwellMinutes: Math.round(dwellSecs / 60),
+      distanceMetres: Math.round(dist),
+      totalScore: Math.round(totalScore),
+      options: opt,
+    };
+  }
+
   var api = {
     haversine: haversine,
     planWalk: planWalk,
+    recompute: recompute,
     tourSeconds: tourSeconds,
     twoOpt: twoOpt,
     DEFAULTS: DEFAULTS,

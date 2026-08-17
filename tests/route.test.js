@@ -133,4 +133,72 @@ exports.run = function (t) {
   const ms = Date.now() - t0;
   t.ok(ms < 3000, `120 leads planned in ${ms}ms — fast enough to run on a phone`);
   t.ok(p9.totalMinutes <= 180, "…and still inside the budget at that size");
+
+  // === recompute() — removing a stop by hand ==============================
+  //
+  // The planner solves an ORIENTEERING problem: maximise score inside the time
+  // budget. Correct, and it has one visible side effect — with twenty spare
+  // minutes it adds one more door a long way from the rest, because one door
+  // scores more than none. On the map that reads as a random outlier, so the
+  // desk lets you drop it.
+  //
+  // The property that matters is that the numbers still describe the route.
+  // The first version of recompute() reported the RAW haversine while planWalk
+  // multiplies by detourFactor, so a plan shrank 25% the instant you touched
+  // it — the totals silently disagreeing with the planner that produced them.
+  {
+    const start = { lat: 52.9225, lng: -1.4746 };
+    const cands = [
+      { lat: 52.9226, lng: -1.4740, score: 80, lead: { businessName: "A" } },
+      { lat: 52.9230, lng: -1.4750, score: 70, lead: { businessName: "B" } },
+      { lat: 52.9231, lng: -1.4762, score: 65, lead: { businessName: "C" } },
+    ];
+    const plan = R.planWalk(start, cands, 240);
+    t.ok(plan.order.length >= 2, "the fixture actually plans a multi-stop walk");
+
+    const asStops = plan.order.map((o) => ({ lat: o.lat, lng: o.lng, lead: o.lead, score: o.lead.score }));
+    const same = R.recompute(start, asStops, {});
+
+    // IDENTITY: recompute over the untouched plan must reproduce it exactly.
+    // This is the assertion that catches a units or factor drift between the
+    // two functions, whichever of them changes.
+    t.eq(same.distanceMetres, plan.distanceMetres, "recompute reproduces planWalk's distance exactly");
+    t.eq(same.totalMinutes, plan.totalMinutes, "…its total minutes");
+    t.eq(same.walkMinutes, plan.walkMinutes, "…its walking minutes");
+    t.eq(same.dwellMinutes, plan.dwellMinutes, "…its talking minutes");
+    t.eq(same.totalScore, plan.totalScore, "…and its total score");
+
+    // Removing a stop shortens the walk and drops its score.
+    const fewer = R.recompute(start, asStops.slice(0, -1), {});
+    t.eq(fewer.order.length, asStops.length - 1, "one stop comes off");
+    t.ok(fewer.distanceMetres < same.distanceMetres, "the route gets shorter");
+    t.ok(fewer.totalScore < same.totalScore, "and the total score drops with it");
+    // Written first as `same.dwellMinutes - (same.dwellMinutes - fewer.dwellMinutes)`,
+    // which reduces to `fewer.dwellMinutes === fewer.dwellMinutes` and can never
+    // fail. Third tautology-shaped guard caught today; state the expected number.
+    t.eq(same.dwellMinutes - fewer.dwellMinutes, Math.round(R.DEFAULTS.dwellSeconds / 60),
+      "talking time falls by exactly one door's worth");
+
+    // Renumbered from 1 — a plan that still says "stop 4" after 3 has gone is
+    // the kind of small lie that costs you a doorway.
+    t.eq(fewer.order.map((o) => o.n), fewer.order.map((_, i) => i + 1),
+      "the remaining stops renumber from 1 with no gap");
+
+    // Order is PRESERVED, not re-planned. You removed a specific door; silently
+    // reshuffling the rest is not what was asked for.
+    const names = (r) => r.order.map((o) => o.lead.lead.businessName);
+    t.eq(names(fewer), names(same).slice(0, -1), "the remaining stops keep their order");
+
+    // Degenerate input must not throw or invent a walk.
+    const empty = R.recompute(start, [], {});
+    t.eq(empty.order.length, 0, "an empty plan has no stops");
+    t.eq(empty.distanceMetres, 0, "…no distance");
+    t.eq(empty.totalMinutes, 0, "…and no time");
+    t.eq(R.recompute(start, null, {}).order.length, 0, "null stops is survivable");
+    // A stop with unusable coordinates is dropped rather than poisoning the maths.
+    const withJunk = R.recompute(start,
+      asStops.concat([{ lat: null, lng: undefined, lead: { businessName: "X" }, score: 99 }]), {});
+    t.eq(withJunk.order.length, asStops.length, "a stop with no coordinates is excluded");
+    t.eq(withJunk.totalScore, same.totalScore, "…and does not inflate the score");
+  }
 };

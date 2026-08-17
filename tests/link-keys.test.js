@@ -195,4 +195,45 @@ exports.run = function (t) {
     t.ok(/inbox: inboxUrl\(locationId\)/.test(tap),
       "…while the email keeps the long URL, which has no button constraint");
   }
+
+  // === safeEqual — the multibyte 500 ======================================
+  //
+  // Three functions hand-rolled the admin-token compare as
+  //   provided.length === expected.length && crypto.timingSafeEqual(...)
+  // String.length counts UTF-16 code units; Buffer.from counts BYTES. A token
+  // with any non-ASCII character passed that guard and then threw INSIDE
+  // timingSafeEqual, turning an unauthenticated request into a 500 on demand.
+  // It failed closed, so never a bypass — but a stranger could make the function
+  // throw at will, and this file has documented the correct pattern all along.
+  {
+    const TOKEN = "correct-horse-battery-staple";
+    t.ok(lk.safeEqual(TOKEN, TOKEN) === true, "safeEqual matches an identical token");
+    t.ok(lk.safeEqual(TOKEN, TOKEN + "x") === false, "…and rejects a longer one");
+    t.ok(lk.safeEqual("", "") === false, "an EMPTY expected token never matches, even against empty");
+    t.ok(lk.safeEqual(TOKEN, "") === false, "an unset token never matches anything");
+    t.ok(lk.safeEqual("", TOKEN) === false, "an empty attempt never matches a real token");
+
+    // The actual bug: 32 characters, more than 32 bytes.
+    const multibyte = "é".repeat(TOKEN.length);
+    t.eq(multibyte.length, TOKEN.length, "the probe really is the same STRING length…");
+    t.ok(Buffer.byteLength(multibyte, "utf8") !== Buffer.byteLength(TOKEN, "utf8"),
+      "…and a different BYTE length, which is what used to throw");
+    t.ok(lk.safeEqual(multibyte, TOKEN) === false,
+      "REGRESSION: a multibyte token of equal string length returns false instead of throwing");
+
+    // Every junk shape fails closed rather than exploding.
+    for (const junk of [null, undefined, 0, 1, {}, [], true, Buffer.from("x")]) {
+      t.ok(lk.safeEqual(junk, TOKEN) === false, `safeEqual(${typeof junk}) fails closed`);
+      t.ok(lk.safeEqual(TOKEN, junk) === false, `safeEqual(_, ${typeof junk}) fails closed`);
+    }
+
+    // And the call sites actually use it — the point of centralising.
+    const fs = require("fs");
+    for (const f of ["inbox.js", "report.js", "refer.js"]) {
+      const s = fs.readFileSync(path.join(FN, f), "utf8");
+      t.ok(/safeEqual\(provided, expected\)/.test(s), `${f} compares the admin token with safeEqual`);
+      t.ok(!/provided\.length === expected\.length/.test(s),
+        `${f} no longer compares String.length before timingSafeEqual`);
+    }
+  }
 };

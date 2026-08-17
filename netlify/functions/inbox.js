@@ -67,7 +67,7 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
-const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+const { linkKey, linkValid, secretConfigured, safeEqual } = require("./link-keys");
 
 // This page's own purpose. Its key opens THIS page and nothing else — see
 // link-keys.js for why. A key minted for another page will not validate here.
@@ -344,7 +344,9 @@ exports.handler = async (event) => {
     const h = event.headers || {};
     const provided = (h.authorization || h.Authorization || "").replace(/^Bearer\s+/i, "").trim() || params.token || "";
     const expected = process.env.CLIENT_ADMIN_TOKEN || "";
-    const ok = !!expected && provided.length === expected.length && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    // safeEqual compares BYTES. The hand-rolled String.length guard that was
+    // here let a multibyte token through to timingSafeEqual, which throws.
+    const ok = safeEqual(provided, expected);
     if (!ok) return { statusCode: 403, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Unauthorized" }) };
     if (!process.env.TREY_REPORT_SECRET) return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "TREY_REPORT_SECRET not set" }) };
     const key = linkKey("inbox", loc);
