@@ -212,6 +212,30 @@
     cursor: pointer;
   }
   .needs-banner:hover { background: #ffe4e6; }
+  /* Unmatched Stripe payments. Rose, like "needs review" — same severity, and
+     worse consequence: these people have already paid us. */
+  .unmatched-banner {
+    display: none;
+    background: #fff1f2;
+    border: 1px solid #fecdd3;
+    color: #9f1239;
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+  .unmatched-banner.show { display: block; }
+  .unmatched-banner .head { font-weight: 700; }
+  .unmatched-banner .why { font-weight: 400; color: #9f1239; opacity: .85; margin-top: 3px; }
+  .unmatched-banner table { margin-top: 9px; width: auto; }
+  .unmatched-banner td {
+    padding: 3px 16px 3px 0; font-size: 12.5px; border: 0; color: #881337; vertical-align: top;
+  }
+  /* Nothing in here is clickable, so don't let the global row hover imply it is. */
+  .unmatched-banner tr:hover { background: transparent; cursor: default; }
+  .unmatched-banner td.amt { font-weight: 700; white-space: nowrap; }
+  .unmatched-banner td.when { white-space: nowrap; opacity: .8; }
   /* Backup nag. Amber, not red — this is a chore, not a fault. */
   .backup-banner {
     display: none;
@@ -445,6 +469,7 @@
       </div>
       <div id="backupBanner" class="backup-banner"></div>
       <div id="restorePanel" style="display:none;border:1px solid #c7d2fe;background:#f8faff;border-radius:9px;padding:13px;margin-bottom:14px;font-size:13px;line-height:1.55;"></div>
+      <div id="unmatchedBanner" class="unmatched-banner"></div>
       <div id="needsBanner" class="needs-banner" onclick="showNeedsReview()"></div>
       <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
         <input id="clientSearch" placeholder="Search name, location, phone, contact…" oninput="filterClients()" style="flex:1;min-width:220px;" />
@@ -1158,6 +1183,61 @@
     }
   }
 
+  // --- Unmatched Stripe payments ---------------------------------------------
+  // A checkout that reaches Stripe without ?client_reference_id= — which is what
+  // a founding-member link sent by hand does — can't be tied to a client, so the
+  // webhook parks it instead of dropping it. Until this panel existed nothing
+  // ever read those records: the customer paid, their record stayed on "trial",
+  // and 14 days later tap.js switched the stand off and asked them to subscribe.
+  // Paying customers going dark, silently. So it shows here, loudly, until
+  // Matthew matches each one by hand and sets the status himself. Nothing is
+  // auto-matched — an email is a guess, not a fact.
+  async function loadUnmatchedPayments() {
+    const el = document.getElementById("unmatchedBanner");
+    if (!el) return;
+    try {
+      const res = await fetch(API + "?unmatched=1", { headers: { Authorization: "Bearer " + token } });
+      if (res.status === 403) { logout(); return; }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      renderUnmatchedPayments(Array.isArray(data.payments) ? data.payments : []);
+    } catch (err) {
+      // Don't fail silently. This is the one check whose whole job is to stop
+      // something being invisible, so a broken check has to say so.
+      el.className = "unmatched-banner show";
+      el.innerHTML = '<div class="head">Couldn\'t check for unmatched Stripe payments.</div>' +
+        '<div class="why">' + esc(err.message) + "</div>";
+    }
+  }
+
+  // Amounts arrive from Stripe in minor units (pence), with a currency code.
+  function unmatchedAmount(p) {
+    if (typeof p.amountTotal !== "number" || !isFinite(p.amountTotal)) return "Amount unknown";
+    const cur = String(p.currency || "gbp").toUpperCase();
+    const sym = cur === "GBP" ? "£" : cur === "USD" ? "$" : cur === "EUR" ? "€" : cur + " ";
+    return sym + (p.amountTotal / 100).toFixed(2);
+  }
+
+  function renderUnmatchedPayments(list) {
+    const el = document.getElementById("unmatchedBanner");
+    if (!list.length) { el.className = "unmatched-banner"; el.innerHTML = ""; return; }
+    const rows = list.map((p) => {
+      const when = p.at ? new Date(p.at).toLocaleDateString() : "date unknown";
+      const who = p.email ? esc(p.email) : '<span style="opacity:.7;">no email on the payment</span>';
+      return "<tr><td>" + who + "</td>" +
+        '<td class="amt">' + esc(unmatchedAmount(p)) + "</td>" +
+        '<td class="when">' + esc(when) + "</td></tr>";
+    }).join("");
+    el.className = "unmatched-banner show";
+    el.innerHTML =
+      '<div class="head">' + list.length + " payment" + (list.length === 1 ? "" : "s") +
+        " received that " + (list.length === 1 ? "isn't" : "aren't") +
+        " matched to a client — " + (list.length === 1 ? "this customer has" : "these customers have") + " paid.</div>" +
+      '<div class="why">Find each one in the list below by email and set their status to Active. ' +
+        "Until you do, their stand switches off 14 days after go-live.</div>" +
+      "<table><tbody>" + rows + "</tbody></table>";
+  }
+
   function showNeedsReview() {
     document.getElementById("clientSearch").value = "";
     document.getElementById("clientStatusFilter").value = "needsreview";
@@ -1301,6 +1381,10 @@
     document.getElementById("tokenGate").style.display = "none";
     document.getElementById("app").style.display = "block";
     loadClients();
+    // Separate call, deliberately: a paid-but-unmatched customer is time-critical
+    // (their stand switches off), so it must not wait on the client list, and a
+    // failure in either must not hide the other.
+    loadUnmatchedPayments();
   }
 
   if (token) {

@@ -51,6 +51,43 @@ function blobsStore(name) {
 }
 const clean = (v, max = 600) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
+// WHY THIS ISN'T A PLAIN for-LOOP ANY MORE.
+//
+// It used to walk every client strictly one at a time. When the run hit the
+// platform's time limit part-way down the list, the clients already done had
+// their `photo:<loc>:<qKey>` marker written and the rest had nothing — and
+// because that marker key embeds the QUARTER, the next run looks for a different
+// key entirely. The tail of the client list never got that quarter's nudge at
+// all. Not delayed: skipped, permanently, and silently. On a quarterly send that
+// is a client who hears nothing for six months.
+//
+// So: a worker pool so the list actually finishes, a deadline so we stop
+// STARTING work before the platform kills us mid-send, and a run log plus a
+// summary that always prints, so a short run is loud instead of invisible.
+
+// Six at a time, deliberately modest — every unit of work here is a Twilio send
+// and Twilio rate-limits an account that fires them too fast.
+const SEND_CONCURRENCY = 6;
+
+// Netlify gives a scheduled function 15 minutes. Don't rely on that: stop
+// dispatching new clients at ten, leaving room for in-flight sends to land and
+// for the run log to be written.
+const TIME_BUDGET_MS = 600_000;
+
+// The run record has to stay small however badly a run goes, so cap the list of
+// failures it carries.
+const MAX_FAILED_IDS = 50;
+
+// Every run leaves a record — including a truncated one — so "who didn't get it"
+// is answerable after the fact instead of being a guess.
+async function writeRunLog(record) {
+  try {
+    await blobsStore("runlog").setJSON(`photo-refresh-send:${record.finishedAt}`, record);
+  } catch (e) {
+    console.error("[photo-refresh-send] run log write failed:", e.message);
+  }
+}
+
 function quarterKey(now) {
   return `${now.getUTCFullYear()}-Q${Math.floor(now.getUTCMonth() / 3) + 1}`;
 }
@@ -109,6 +146,9 @@ export default async () => {
   // Phase 2: only open the reply-with-photos window if uploads are actually on.
   const uploadsOn = process.env.TREY_PHOTO_UPLOAD === "true" && process.env.TREY_LIVE_POSTING === "true";
 
+  const START = Date.now();
+  const DEADLINE = START + TIME_BUDGET_MS;
+
   const now = new Date();
   const qKey = quarterKey(now);
   const clientsStore = blobsStore("clients");
@@ -118,22 +158,41 @@ export default async () => {
   const from = process.env.TWILIO_WHATSAPP_FROM;
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
   const summary = { quarter: qKey, sent: 0, skipped: 0, failed: 0, uploadsOn };
+  const failedLocationIds = [];
+  const noteFailure = (loc) => { if (failedLocationIds.length < MAX_FAILED_IDS) failedLocationIds.push(loc); };
 
   let blobs = [];
   try { ({ blobs } = await clientsStore.list()); }
-  catch (err) { console.error("[photo-refresh-send] list clients failed:", err.message); return new Response("no clients"); }
+  catch (err) {
+    console.error("[photo-refresh-send] list clients failed:", err.message);
+    // A failed list means EVERY client goes without this quarter's nudge. That is
+    // the loudest version of the silent-skip this run log exists to catch, so
+    // record it rather than leaving one console line behind.
+    await writeRunLog({
+      fn: "photo-refresh-send", quarter: qKey,
+      startedAt: new Date(START).toISOString(), finishedAt: new Date().toISOString(),
+      processed: 0, sent: 0, failed: 0, skipped: 0, remaining: 0,
+      timedOut: false, listFailed: true, failedLocationIds: [],
+    });
+    return new Response("no clients");
+  }
 
-  for (const b of blobs) {
+  // One client, start to finish. This is the old loop body verbatim; the only
+  // change is that "continue" is now "return".
+  async function handleOne(b) {
     let client;
-    try { client = await clientsStore.get(b.key, { type: "json" }); } catch { continue; }
-    if (!isSendable(client)) { summary.skipped++; continue; }
+    try { client = await clientsStore.get(b.key, { type: "json" }); } catch { summary.skipped++; return; }
+    if (!isSendable(client)) { summary.skipped++; return; }
 
     const loc = client.locationId || b.key;
-    if (await sentStore.get(`photo:${loc}:${qKey}`)) { summary.skipped++; continue; }
+    if (await sentStore.get(`photo:${loc}:${qKey}`)) { summary.skipped++; return; }
 
     const params = messagingServiceSid
       ? { To: `whatsapp:${toE164(client.phone)}`, MessagingServiceSid: messagingServiceSid }
       : { To: `whatsapp:${toE164(client.phone)}`, From: from };
+    // Twilio returns 201 on ACCEPT, not on delivery. StatusCallback is how we
+    // find out what actually happened to it — see twilio-status.js.
+    params.StatusCallback = `${process.env.URL || "https://trey.today"}/.netlify/functions/twilio-status`;
     params.ContentSid = contentSid;
     params.ContentVariables = JSON.stringify({
       1: clean(client.businessName, 60),
@@ -159,10 +218,61 @@ export default async () => {
       summary.sent++;
     } catch (err) {
       summary.failed++;
+      noteFailure(loc);
       console.error(`[photo-refresh-send] ${loc} failed:`, err.message);
     }
   }
 
-  console.log("[photo-refresh-send] done:", JSON.stringify(summary));
+  let cursor = 0;
+  let attempted = 0;
+  let timedOut = false;
+
+  async function worker() {
+    while (true) {
+      // Stop STARTING work at the deadline. Anything already in flight is left
+      // to finish — an abandoned send is a client who may or may not have been
+      // messaged, which is worse than one who definitely wasn't.
+      if (Date.now() > DEADLINE) { timedOut = true; return; }
+      const i = cursor++;
+      if (i >= blobs.length) return;
+      attempted++;
+      try {
+        await handleOne(blobs[i]);
+      } catch (err) {
+        // A blob read or the photo-request write blowing up used to take the
+        // whole run down with it and strand every client after this one. Now it
+        // costs one client.
+        summary.failed++;
+        noteFailure(blobs[i].key);
+        console.error(`[photo-refresh-send] ${blobs[i].key} errored:`, err.message);
+      }
+    }
+  }
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(SEND_CONCURRENCY, blobs.length) }, worker));
+  } finally {
+    // In a finally so a run that stopped short still says what it did. The old
+    // summary line sat after the loop, which meant the runs worth knowing about
+    // were exactly the ones that never printed one.
+    const remaining = Math.max(0, blobs.length - attempted);
+    const record = {
+      fn: "photo-refresh-send", quarter: qKey,
+      startedAt: new Date(START).toISOString(),
+      finishedAt: new Date().toISOString(),
+      processed: attempted,
+      sent: summary.sent,
+      failed: summary.failed,
+      skipped: summary.skipped,
+      remaining,
+      timedOut,
+      failedLocationIds: failedLocationIds.slice(0, MAX_FAILED_IDS),
+    };
+    await writeRunLog(record);
+    const line = JSON.stringify({ ...summary, processed: attempted, remaining, timedOut });
+    // A client who never got their nudge is an error, not a statistic.
+    if (timedOut || remaining > 0) console.error("[photo-refresh-send] done:", line);
+    else console.log("[photo-refresh-send] done:", line);
+  }
   return new Response("ok");
 };

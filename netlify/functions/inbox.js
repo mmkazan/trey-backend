@@ -67,16 +67,17 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
-function reportKey(locationId) {
-  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
-}
+const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+
+// This page's own purpose. Its key opens THIS page and nothing else — see
+// link-keys.js for why. A key minted for another page will not validate here.
+const LINK_PURPOSE = "inbox";
+
+// Kept as a thin wrapper so existing call sites read the same. All the real
+// work (constant-time compare, fail-closed on an unset secret, byte-length
+// check before timingSafeEqual) lives in link-keys.js.
 function keyValid(locationId, provided) {
-  if (!provided || provided.length !== KEY_LEN) return false;
-  try {
-    const a = Buffer.from(reportKey(locationId)), b = Buffer.from(provided);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  } catch (e) { return false; }
+  return linkValid(LINK_PURPOSE, locationId, provided);
 }
 function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -195,8 +196,7 @@ function windingDownBanner(client, locationId) {
   if (!isFinite(endMs)) return "";
   const daysLeft = Math.ceil((endMs - Date.now()) / 86400000);
   if (daysLeft <= 0) return "";   // already ended — the paused banner takes over
-  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, 32);
+  const k = linkKey("billing", locationId);
   const base = process.env.URL || "https://trey.today";
   const url = `${base}/.netlify/functions/billing?loc=${encodeURIComponent(locationId)}&k=${k}`;
   const days = daysLeft === 1 ? "1 day" : `${daysLeft} days`;
@@ -318,7 +318,7 @@ exports.handler = async (event) => {
     const ok = !!expected && provided.length === expected.length && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
     if (!ok) return { statusCode: 403, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Unauthorized" }) };
     if (!process.env.TREY_REPORT_SECRET) return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "TREY_REPORT_SECRET not set" }) };
-    const key = reportKey(loc);
+    const key = linkKey("inbox", loc);
     const base = process.env.URL || "https://treyv1.netlify.app";
     return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ loc, key, url: `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(loc)}&k=${key}` }) };
   }
@@ -407,11 +407,11 @@ exports.handler = async (event) => {
     <div class="main">
       ${pendingBlock}
       ${repliedBlock}
-      <a class="xlink" href="${base}/.netlify/functions/report?loc=${encodeURIComponent(loc)}&k=${params.k}">View your monthly report &rarr;</a>
-      <a class="xlink" href="${base}/.netlify/functions/account?loc=${encodeURIComponent(loc)}&k=${params.k}">Update your account details &rarr;</a>
-      ${planOf(client) === "free" ? "" : `<a class="xlink" href="${base}/.netlify/functions/billing?loc=${encodeURIComponent(loc)}&k=${params.k}">Manage or cancel your subscription &rarr;</a>`}
-      <a class="xlink" href="${base}/.netlify/functions/profile-check?loc=${encodeURIComponent(loc)}&k=${params.k}">Tune your Google profile &rarr;</a>
-      <a class="xlink" href="${base}/.netlify/functions/refer?loc=${encodeURIComponent(loc)}&k=${params.k}">Refer a business, get a month free &rarr;</a>
+      <a class="xlink" href="${base}/.netlify/functions/report?loc=${encodeURIComponent(loc)}&k=${linkKey("report", loc)}">View your monthly report &rarr;</a>
+      <a class="xlink" href="${base}/.netlify/functions/account?loc=${encodeURIComponent(loc)}&k=${linkKey("account", loc)}">Update your account details &rarr;</a>
+      ${planOf(client) === "free" ? "" : `<a class="xlink" href="${base}/.netlify/functions/billing?loc=${encodeURIComponent(loc)}&k=${linkKey("billing", loc)}">Manage or cancel your subscription &rarr;</a>`}
+      <a class="xlink" href="${base}/.netlify/functions/profile-check?loc=${encodeURIComponent(loc)}&k=${linkKey("profile", loc)}">Tune your Google profile &rarr;</a>
+      <a class="xlink" href="${base}/.netlify/functions/refer?loc=${encodeURIComponent(loc)}&k=${linkKey("refer", loc)}">Refer a business, get a month free &rarr;</a>
       <div class="foot">Powered by Trey</div>
     </div>`;
 

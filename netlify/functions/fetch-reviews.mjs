@@ -36,6 +36,46 @@ function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// WHY THIS ISN'T A PLAIN for-LOOP ANY MORE.
+//
+// It used to poll every client strictly one at a time, and each client can be
+// several paged Google calls. When the run ran out of time part-way down the
+// list it simply died — no summary, no record — and the clients it never
+// reached had their reviews go undetected. Worse than the report senders,
+// because list() hands back the SAME ORDER every run: the same tail was starved
+// every 15 minutes, indefinitely. Their reviews were never replied to at all.
+//
+// So: a worker pool, a deadline, a rotating start offset so the tail moves, and
+// a run log plus a summary that always prints.
+
+// Eight at a time. These are Google reads, not messages to a customer, so this
+// can run wider than the Twilio senders — but not so wide that a hundred clients
+// hit the Business Profile API at once.
+const POLL_CONCURRENCY = 8;
+
+// This reruns every 15 minutes, so it does NOT need the platform's full 15
+// minute allowance — one minute of work, then stop dispatching and let the next
+// run (starting from where this one stopped) take the rest.
+const TIME_BUDGET_MS = 60_000;
+
+// The run record has to stay small however badly a run goes, so cap the list of
+// failures it carries.
+const MAX_FAILED_IDS = 50;
+
+// Where the next run starts. Kept alongside the run records because it is the
+// same question — what did this run actually get to.
+const CURSOR_KEY = "fetch-reviews:cursor";
+
+// Every run leaves a record — including a truncated one — so "whose reviews
+// aren't being polled" is answerable after the fact instead of being a guess.
+async function writeRunLog(record) {
+  try {
+    await blobsStore("runlog").setJSON(`fetch-reviews:${record.finishedAt}`, record);
+  } catch (e) {
+    console.error("[fetch-reviews] run log write failed:", e.message);
+  }
+}
+
 // Exchange the long-lived refresh token for a short-lived access token — same
 // call approve.js makes.
 async function googleAccessToken() {
@@ -74,6 +114,9 @@ async function listReviews(accessToken, accountId, locationId) {
 }
 
 export default async () => {
+  const START = Date.now();
+  const DEADLINE = START + TIME_BUDGET_MS;
+
   for (const v of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"]) {
     if (!process.env[v]) {
       console.error(`[fetch-reviews] ${v} is not set — cannot poll Google.`);
@@ -93,20 +136,48 @@ export default async () => {
 
   const clientsStore = blobsStore("clients");
   const seenStore = blobsStore("reviewsseen");
-  const summary = { clients: 0, newReviews: 0, sent: 0, failed: 0, baselined: 0 };
+  const runlogStore = blobsStore("runlog");
+  const summary = { clients: 0, newReviews: 0, sent: 0, failed: 0, baselined: 0, skipped: 0 };
+  const failedLocationIds = [];
+  const noteFailure = (loc) => { if (failedLocationIds.length < MAX_FAILED_IDS) failedLocationIds.push(loc); };
 
   let blobs = [];
   try {
     ({ blobs } = await clientsStore.list());
   } catch (e) {
     console.error("[fetch-reviews] could not list clients:", e.message);
+    // A failed list means nobody was polled at all this run. Record it — a
+    // string of these is the difference between "quiet" and "broken".
+    await writeRunLog({
+      fn: "fetch-reviews",
+      startedAt: new Date(START).toISOString(), finishedAt: new Date().toISOString(),
+      processed: 0, sent: 0, failed: 0, skipped: 0, remaining: 0,
+      timedOut: false, listFailed: true, failedLocationIds: [],
+    });
     return new Response("no clients");
   }
 
-  for (const b of blobs) {
+  // FAIRNESS. list() returns the same order every time, so a run that always
+  // runs out of time at the same point starves the same tail of clients every
+  // 15 minutes — forever. Start each run where the last one stopped and wrap
+  // around, so every client is reached eventually even if no single run gets
+  // all the way through the list.
+  let offset = 0;
+  try {
+    const saved = await runlogStore.get(CURSOR_KEY, { type: "json" });
+    const n = Number(saved && saved.offset);
+    if (Number.isFinite(n) && n >= 0 && blobs.length) offset = Math.floor(n) % blobs.length;
+  } catch {
+    // No cursor yet, or the store hiccuped. Starting at 0 is only ever as unfair
+    // as the old behaviour, never worse.
+  }
+
+  // One client, start to finish. This is the old loop body verbatim; the only
+  // change is that "continue" is now "return".
+  async function handleOne(b) {
     let client;
-    try { client = await clientsStore.get(b.key, { type: "json" }); } catch { continue; }
-    if (!client || !client.googleAccountId || !client.locationId) continue; // not GBP-connected
+    try { client = await clientsStore.get(b.key, { type: "json" }); } catch { summary.skipped++; return; }
+    if (!client || !client.googleAccountId || !client.locationId) { summary.skipped++; return; } // not GBP-connected
     summary.clients++;
 
     // Wrapped per-client so one flaky Google call or blob write can't starve
@@ -170,10 +241,73 @@ export default async () => {
       }
     } catch (e) {
       summary.failed++;
+      noteFailure(client.locationId);
       console.error(`[fetch-reviews] ${client.locationId} failed:`, e.message);
     }
   }
 
-  console.log("[fetch-reviews] done:", JSON.stringify(summary));
+  let cursor = 0;
+  let attempted = 0;
+  let timedOut = false;
+
+  async function worker() {
+    while (true) {
+      // Stop STARTING work at the deadline. Anything already in flight is left
+      // to finish — half a client's reviews handled and the rest abandoned is a
+      // worse state than not having started.
+      if (Date.now() > DEADLINE) { timedOut = true; return; }
+      const i = cursor++;
+      if (i >= blobs.length) return;
+      // Rotated, not absolute — see the cursor above.
+      const b = blobs[(offset + i) % blobs.length];
+      attempted++;
+      try {
+        await handleOne(b);
+      } catch (e) {
+        // A blob read blowing up used to take the whole run down with it and
+        // strand every client after this one. Now it costs one client.
+        summary.failed++;
+        noteFailure(b.key);
+        console.error(`[fetch-reviews] ${b.key} errored:`, e.message);
+      }
+    }
+  }
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(POLL_CONCURRENCY, blobs.length) }, worker));
+  } finally {
+    // In a finally so a run that stopped short still says what it did. The old
+    // summary line sat after the loop, which meant the runs worth knowing about
+    // were exactly the ones that never printed one.
+    const remaining = Math.max(0, blobs.length - attempted);
+    const record = {
+      fn: "fetch-reviews",
+      startedAt: new Date(START).toISOString(),
+      finishedAt: new Date().toISOString(),
+      processed: attempted,
+      sent: summary.sent,
+      failed: summary.failed,
+      skipped: summary.skipped,
+      remaining,
+      timedOut,
+      newReviews: summary.newReviews,
+      baselined: summary.baselined,
+      startedFrom: offset,
+      failedLocationIds: failedLocationIds.slice(0, MAX_FAILED_IDS),
+    };
+    // Move the start of the NEXT run past everything this one dispatched. If the
+    // run got all the way round, this lands back where it began.
+    if (blobs.length) {
+      const next = (offset + attempted) % blobs.length;
+      try { await runlogStore.setJSON(CURSOR_KEY, { offset: next, at: record.finishedAt }); }
+      catch (e) { console.error("[fetch-reviews] cursor write failed:", e.message); }
+      record.nextOffset = next;
+    }
+    await writeRunLog(record);
+    const line = JSON.stringify({ ...summary, processed: attempted, remaining, timedOut, startedFrom: offset });
+    // A client whose reviews were never polled is an error, not a statistic.
+    if (timedOut || remaining > 0) console.error("[fetch-reviews] done:", line);
+    else console.log("[fetch-reviews] done:", line);
+  }
   return new Response("ok");
 };

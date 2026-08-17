@@ -83,7 +83,6 @@ const SLATE = "#0f172a";
 // The Trey WhatsApp avatar mark (docs/trey_whatsapp_avatar.png), downscaled to
 // 64px and inlined as a data URI so it needs no external fetch. Used as the
 // little badge on the "brought you … reviews" line.
-const TREY_MARK = "data:image/png;base64,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";
 
 // Truncated HMAC length (hex chars). 32 hex = 128 bits — non-guessable, still
 // short enough to sit comfortably in a WhatsApp URL.
@@ -95,24 +94,19 @@ function blobsStore(name) {
 
 // Per-client link key. Deterministic, so the monthly send and this function
 // derive the same value from the same secret.
-function reportKey(locationId) {
-  return crypto
-    .createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId))
-    .digest("hex")
-    .slice(0, KEY_LEN);
-}
 
 // Constant-time compare so a bad key can't be brute-forced by timing.
+const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+
+// This page's own purpose. Its key opens THIS page and nothing else — see
+// link-keys.js for why. A key minted for another page will not validate here.
+const LINK_PURPOSE = "report";
+
+// Kept as a thin wrapper so existing call sites read the same. All the real
+// work (constant-time compare, fail-closed on an unset secret, byte-length
+// check before timingSafeEqual) lives in link-keys.js.
 function keyValid(locationId, provided) {
-  const expected = reportKey(locationId);
-  const got = String(provided || "");
-  if (got.length !== expected.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
-  } catch (e) {
-    return false;
-  }
+  return linkValid(LINK_PURPOSE, locationId, provided);
 }
 
 function escapeHtml(str) {
@@ -144,8 +138,7 @@ function windingDownBanner(client, locationId) {
   if (!isFinite(endMs)) return "";
   const daysLeft = Math.ceil((endMs - Date.now()) / 86400000);
   if (daysLeft <= 0) return "";   // already ended — the paused banner takes over
-  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, 32);
+  const k = linkKey("billing", locationId);
   const base = process.env.URL || "https://trey.today";
   const url = `${base}/.netlify/functions/billing?loc=${encodeURIComponent(locationId)}&k=${k}`;
   const days = daysLeft === 1 ? "1 day" : `${daysLeft} days`;
@@ -548,7 +541,7 @@ function renderReport(locationId, month, data, theme) {
 
   // Link into the review Inbox (same signed key, so still no login).
   const inboxBase = process.env.URL || "https://treyv1.netlify.app";
-  const inboxLink = `<a class="glink" href="${inboxBase}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}">See &amp; reply to your reviews →</a>`;
+  const inboxLink = `<a class="glink" href="${inboxBase}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${linkKey("inbox", locationId)}">See &amp; reply to your reviews →</a>`;
 
   // --- Referral line ---------------------------------------------------------
   // Deliberately restrained: we only ask on a month that actually went well, so
@@ -557,7 +550,7 @@ function renderReport(locationId, month, data, theme) {
   // sees nothing at all. It's one quiet line under the footer, never a banner.
   const goodMonth = newReviews >= 3 || ratingImproved;
   const referLine = goodMonth
-    ? `<div class="refer"><a class="glink" href="${inboxBase}/.netlify/functions/refer?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}">Know another business who'd want a month like this? Send them your link →</a></div>`
+    ? `<div class="refer"><a class="glink" href="${inboxBase}/.netlify/functions/refer?loc=${encodeURIComponent(locationId)}&k=${linkKey("refer", locationId)}">Know another business who'd want a month like this? Send them your link →</a></div>`
     : "";
 
   const title = `${businessName} — Your month with Trey`;
@@ -708,7 +701,7 @@ exports.handler = async (event) => {
     if (!process.env.TREY_REPORT_SECRET) {
       return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "TREY_REPORT_SECRET is not set on Netlify" }) };
     }
-    const key = reportKey(locationId);
+    const key = linkKey("report", locationId);
     const base = process.env.URL || "https://treyv1.netlify.app";
     const url = `${base}/.netlify/functions/report?loc=${encodeURIComponent(locationId)}&m=${encodeURIComponent(month)}&k=${key}`;
     return {

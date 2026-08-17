@@ -175,7 +175,6 @@ function scoreBusiness(inp) {
     // A business can be excellent AND score mid-band, because this measures the
     // Google presence, not the business. Callers use this to say "your reputation
     // is excellent — it's the profile holding you back" instead of just "56".
-    reputationStrong: repPts >= 44,
     pillars: { reputation: { pts: repPts, max: 55 }, activity: { pts: actPts, max: 15 }, completeness: { pts: compPts, max: 30 } },
   };
 }

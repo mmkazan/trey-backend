@@ -229,7 +229,12 @@
 <script src="/map-pins.js"></script>
 <script>
 var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads", WALK_API="/.netlify/functions/walk";
-var token=localStorage.getItem("treyAdminToken")||"";
+// sessionStorage, NOT localStorage (fixed 17 Aug 2026). This is the phone
+// carried on a walk — the device most likely to be lost or handed over — and
+// it holds the same shared admin token that can delete clients and export the
+// whole database. admin.html and leads.html both use sessionStorage on purpose
+// so closing the browser logs you out; the field tool was the odd one out.
+var token=sessionStorage.getItem("treyAdminToken")||"";
 var POOL=[], HERE=null, RADIUS=250, LABEL="";
 var MAP=null;          // {img, centre:{lat,lng}, zoom, width, height} from nearby.js
 var MAPERR=null;       // why the last attempt produced no picture, in the server's words
@@ -255,7 +260,7 @@ function stars(r){ if(r==null) return "—"; var n=Math.round(r); return "★".r
 function saveTok(){
   var v=document.getElementById("tok").value.trim();
   if(!v){document.getElementById("gateMsg").textContent="Paste your admin token.";return;}
-  token=v; localStorage.setItem("treyAdminToken",v); showApp();
+  token=v; sessionStorage.setItem("treyAdminToken",v); showApp();
 }
 function showApp(){
   loadWalk(); document.getElementById("gate").style.display="none"; document.getElementById("app").style.display="block"; }
@@ -263,7 +268,7 @@ if(token) showApp();
 
 async function api(payload){
   var r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify(payload)});
-  if(r.status===403){ localStorage.removeItem("treyAdminToken"); location.reload(); return null; }
+  if(r.status===403){ sessionStorage.removeItem("treyAdminToken"); location.reload(); return null; }
   var d=await r.json().catch(function(){return {};});
   if(!r.ok) throw Object.assign(new Error(d.error||("HTTP "+r.status)),{config:d.config});
   return d;

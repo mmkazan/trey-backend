@@ -69,15 +69,17 @@ const INDIGO = "#4338ca", ACCENT = "#4f46e5", SLATE = "#0f172a";
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
-function reportKey(locationId) {
-  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "").update(String(locationId)).digest("hex").slice(0, KEY_LEN);
-}
+const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+
+// This page's own purpose. Its key opens THIS page and nothing else — see
+// link-keys.js for why. A key minted for another page will not validate here.
+const LINK_PURPOSE = "profile";
+
+// Kept as a thin wrapper so existing call sites read the same. All the real
+// work (constant-time compare, fail-closed on an unset secret, byte-length
+// check before timingSafeEqual) lives in link-keys.js.
 function keyValid(locationId, provided) {
-  if (!locationId || !process.env.TREY_REPORT_SECRET) return false;
-  const expected = reportKey(locationId);
-  const got = String(provided || "");
-  if (got.length !== expected.length) return false;
-  try { return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected)); } catch (e) { return false; }
+  return linkValid(LINK_PURPOSE, locationId, provided);
 }
 function escapeHtml(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

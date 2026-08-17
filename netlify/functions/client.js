@@ -5,6 +5,8 @@ const { getStore } = require("@netlify/blobs");
 //
 // GET  /.netlify/functions/client?token=...&locationId=... -> one client
 // GET  /.netlify/functions/client?token=...                 -> all clients
+// GET  /.netlify/functions/client?unmatched=1                -> Stripe payments
+//      that arrived without a client_reference_id (header auth only)
 // POST /.netlify/functions/client                            -> add/update
 //      body: { token, locationId, businessName, businessType, phone,
 //               email, googleAccountId, voicePerspective, publicSignOffName,
@@ -62,6 +64,9 @@ const DELETE_PREFIXES = [
   // silently swallowed, never drafted, never alerted. It is deleted as an EXACT
   // key in DELETE_EXACT_PREFIXED instead.
   ["reviewsseen",  (l) => [`${l}:`]],
+  // ADDED 17 Aug 2026. Walk-log day records carry business names and what was
+  // said at the door, so they are personal data and must be erasable too.
+  ["walks",        (l) => [`${l}:`]],
 ];
 const DELETE_EXACT = ["clients", "taps", "stats"];
 // Exact keys that are prefixed by something, so they cannot be swept safely.
@@ -259,7 +264,43 @@ exports.handler = async (event) => {
   }
 
   if (event.httpMethod === "GET") {
-    const locationId = (event.queryStringParameters || {}).locationId;
+    const params = event.queryStringParameters || {};
+
+    // --- Unmatched Stripe payments -----------------------------------------
+    // stripe-webhook.js parks any checkout.session.completed that arrives with
+    // no client_reference_id in the `stripeunmatched` store. That is exactly
+    // what a founding-member payment link sent by hand produces. Nothing read
+    // that store, so those customers paid, stayed on subscriptionStatus
+    // "trial", and 14 days later tap.js switched their stand off and showed
+    // them a page asking them to subscribe. This is the read side, so admin can
+    // see them. It only reports — matching a payment to a client is a human
+    // decision and stays one.
+    //
+    // Note the auth: adminIdentity is called above with (event, requestBody)
+    // and NO params, so the token can only come from the Authorization header
+    // or a POST body — never the query string. Don't add params here.
+    if (params.unmatched) {
+      // Real customer emails and amounts. Billing data, so owner-only.
+      if (!can(who, "billing")) return forbidden("billing");
+      const store = blobsStore("stripeunmatched");
+      let payments = [];
+      try {
+        const { blobs } = await store.list();
+        payments = await Promise.all(blobs.map(async (b) => {
+          const rec = (await store.get(b.key, { type: "json" }).catch(() => null)) || {};
+          return { eventId: b.key, ...rec };
+        }));
+        // Newest first — the most recent unpaid-looking customer is the one
+        // most likely to be about to go dark.
+        payments.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+      } catch (e) {
+        console.error("[client] unmatched payment list failed:", e.message);
+        return { statusCode: 500, body: JSON.stringify({ error: "Couldn't read unmatched payments" }) };
+      }
+      return { statusCode: 200, body: JSON.stringify({ payments }) };
+    }
+
+    const locationId = params.locationId;
     if (locationId) {
       const client = await clientsStore.get(locationId, { type: "json" });
       if (!client) return { statusCode: 404, body: JSON.stringify({ error: "Not found" }) };

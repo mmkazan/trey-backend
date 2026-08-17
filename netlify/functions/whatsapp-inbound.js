@@ -20,6 +20,7 @@
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
 const googleApi = require("./google-api.js");
+const { linkKey, secretConfigured } = require("./link-keys");
 
 const SUPPORT_REPLY =
   "Thanks for messaging Trey. This number sends your review-approval alerts and isn't monitored for replies. " +
@@ -31,8 +32,7 @@ const SUPPORT_REPLY =
 // separate Netlify functions and a require() across them is another cold start.
 const KEY_LEN = 32;
 function reportKey(locationId) {
-  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+  return linkKey("inbox", locationId);
 }
 function inboxUrl(locationId) {
   const base = process.env.URL || "https://trey.today";
@@ -209,14 +209,115 @@ function twiml(message) {
   };
 }
 
+// Netlify may hand us the body base64-encoded. The signature below has to be
+// computed over the SAME parameters Twilio signed, so decoding happens once,
+// here, before both parsing and verification.
+function rawBody(event) {
+  if (!event || !event.body) return "";
+  return event.isBase64Encoded ? Buffer.from(event.body, "base64").toString("utf8") : event.body;
+}
+
 // Parse the Twilio form-encoded webhook body into a flat map.
 function parseBody(event) {
   const out = {};
-  try { for (const [k, v] of new URLSearchParams(event && event.body || "").entries()) out[k] = v; } catch (e) {}
+  try { for (const [k, v] of new URLSearchParams(rawBody(event)).entries()) out[k] = v; } catch (e) {}
   return out;
 }
 
+// --- Twilio request signature ------------------------------------------------
+//
+// ADDED 17 Aug 2026 after an audit. This endpoint previously trusted any
+// anonymous POST. Because the reply for a recognised number contains that
+// client's signed inbox link, anyone could POST
+//
+//     From=whatsapp:+44<the business's own public phone number>&Body=hi
+//
+// and be handed a working capability link for that business — and a business's
+// phone number is on its own website and its Google listing. Second hole on the
+// same endpoint: POST Body=STOP silently suppressed every alert for any number,
+// indistinguishable in the record from a genuine opt-out.
+//
+// Twilio's scheme: HMAC-SHA1 keyed with the account auth token, over the full
+// request URL with every POST parameter appended, sorted by key, as key+value
+// with no separators. Base64. Compared constant-time.
+//
+// Several candidate URLs are tried because the string Twilio signed must match
+// byte-for-byte and proxies can rewrite scheme or host. Trying candidates
+// weakens nothing — an attacker still needs the auth token. Set
+// TWILIO_WEBHOOK_URL to pin it exactly if this ever proves fiddly.
+function candidateUrls(event) {
+  const out = [];
+  const pinned = process.env.TWILIO_WEBHOOK_URL;
+  if (pinned) out.push(pinned);
+  if (event && event.rawUrl) out.push(event.rawUrl);
+  const h = (event && event.headers) || {};
+  const host = h["x-forwarded-host"] || h.host || h.Host;
+  const path = (event && event.path) || "";
+  if (host && path) {
+    const qs = event.rawQuery ? `?${event.rawQuery}` : "";
+    out.push(`https://${host}${path}${qs}`);
+  }
+  return out.filter(Boolean);
+}
+
+// Hosts Twilio actually serves message media from. Anything else is refused
+// before the Authorization header is attached — see the call site for why.
+const TWILIO_MEDIA_HOSTS = ["api.twilio.com", "media.twiliocdn.com", "mcs.us1.twilio.com"];
+
+function twilioMediaHost(url) {
+  try {
+    const u = new URL(String(url));
+    if (u.protocol !== "https:") return false;
+    return TWILIO_MEDIA_HOSTS.includes(u.hostname.toLowerCase());
+  } catch (e) { return false; }
+}
+
+// Host only, for logging — never log the full media URL, it carries a token.
+function safeHost(url) {
+  try { return new URL(String(url)).hostname; } catch (e) { return "(unparseable)"; }
+}
+
+function twilioSignatureValid(event) {
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!token) return { ok: false, reason: "TWILIO_AUTH_TOKEN is not set" };
+
+  const h = (event && event.headers) || {};
+  const provided = h["x-twilio-signature"] || h["X-Twilio-Signature"] || "";
+  if (!provided) return { ok: false, reason: "no X-Twilio-Signature header" };
+
+  const params = parseBody(event);
+  const suffix = Object.keys(params).sort().map((k) => k + params[k]).join("");
+
+  for (const url of candidateUrls(event)) {
+    let expected;
+    try {
+      expected = crypto.createHmac("sha1", token).update(Buffer.from(url + suffix, "utf8")).digest("base64");
+    } catch (e) { continue; }
+    try {
+      const a = Buffer.from(expected, "utf8");
+      const b = Buffer.from(provided, "utf8");
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) return { ok: true };
+    } catch (e) { /* length mismatch — try the next candidate */ }
+  }
+  return { ok: false, reason: "signature did not match any candidate URL" };
+}
+
 exports.handler = async (event) => {
+  // Fail CLOSED. A missing auth token, a missing header or a bad signature all
+  // refuse the request. 403 rather than 500 so Twilio stops retrying a forgery.
+  //
+  // If genuine inbound messages start being rejected after a deploy, the cause
+  // is almost always the URL string: compare the logged candidates against the
+  // webhook URL configured in the Twilio console, then pin TWILIO_WEBHOOK_URL.
+  const sig = twilioSignatureValid(event);
+  if (!sig.ok) {
+    console.error(
+      `[whatsapp-inbound] REJECTED unsigned/invalid request — ${sig.reason}. ` +
+      `Candidate URLs tried: ${JSON.stringify(candidateUrls(event))}`
+    );
+    return { statusCode: 403, headers: { "Content-Type": "text/plain" }, body: "Forbidden" };
+  }
+
   const p = parseBody(event);
   const fromDigits = String(p.From || "").replace(/\D/g, "");
 
@@ -294,6 +395,16 @@ exports.handler = async (event) => {
     const url = p[`MediaUrl${i}`];
     const ctype = p[`MediaContentType${i}`] || "image/jpeg";
     if (!url || !/^image\//i.test(ctype)) { continue; }
+    // The Twilio account SID and auth token are attached to this fetch, so the
+    // host MUST be pinned. Without this, a caller supplying their own MediaUrl
+    // would have our Twilio credentials posted straight to their server — full
+    // account compromise. (Dormant today behind TREY_PHOTO_UPLOAD, which is
+    // exactly why it is worth closing before that flag is ever flipped.)
+    if (!twilioMediaHost(url)) {
+      console.error(`[whatsapp-inbound] refused media fetch to non-Twilio host: ${safeHost(url)}`);
+      failed++;
+      continue;
+    }
     try {
       const media = await fetch(url, { headers: { Authorization: authHeader } });
       if (!media.ok) throw new Error("media fetch " + media.status);

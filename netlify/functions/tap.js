@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
+const { linkKey, secretConfigured } = require("./link-keys");
 
 // --- Which plan is this client on? -------------------------------------------
 //   "standard" -> £35/mo (the default for everyone else)
@@ -121,46 +122,6 @@ function weekKey(d) {
 
 // A quick branded "thank you" screen shown for ~1.6s before we send the
 // customer on to Google. Uses the client's saved logoUrl when present.
-function thankYouPage(client, target) {
-  const name = escapeHtml((client && client.businessName) || displayName(client) || "");
-  const logoUrl = client && client.logoUrl ? escapeHtml(client.logoUrl) : "";
-  const safeTarget = escapeHtml(target);
-  const greeting = name ? `Thanks for visiting ${name}!` : "Thanks for visiting!";
-  const logoImg = logoUrl
-    ? `<img src="${logoUrl}" alt="${name}" style="max-height:88px;max-width:220px;margin:0 auto 22px;display:block;object-fit:contain;">`
-    : "";
-  const body = `<!DOCTYPE html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="2;url=${safeTarget}">
-<title>Thank you</title>
-<style>
-  *{box-sizing:border-box}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
-  .card{max-width:420px;width:100%;text-align:center}
-  h1{font-size:24px;margin:0 0 10px;letter-spacing:-0.4px}
-  p{font-size:16px;color:#475569;margin:0 0 24px;line-height:1.55}
-  .spinner{width:32px;height:32px;border:4px solid #d1fae5;border-top-color:#059669;border-radius:50%;margin:0 auto 20px;animation:spin .8s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  a.go{color:#059669;font-size:14px;text-decoration:none}
-  .foot{margin-top:32px;font-size:12px;color:#94a3b8}
-</style></head>
-<body>
-  <div class="card">
-    ${logoImg}
-    <h1>${greeting}</h1>
-    <p>Taking you to Google to leave a quick review &mdash; it only takes a moment and really helps other customers find us.</p>
-    <div class="spinner"></div>
-    <a class="go" id="go" href="${safeTarget}">Not redirected? Tap here</a>
-    <div class="foot">Powered by Trey</div>
-  </div>
-  <script>setTimeout(function(){var g=document.getElementById('go');if(g){window.location.replace(g.href);}},1600);</script>
-</body></html>`;
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-    body,
-  };
-}
 
 function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -184,8 +145,7 @@ const KEY_LEN = 32;
 // Same derivation as inbox.js / signup.js / approve.js. Trey has no login, so
 // this signed URL *is* the account.
 function reportKey(locationId) {
-  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+  return linkKey("inbox", locationId);
 }
 function inboxUrl(locationId) {
   const base = process.env.URL || "https://trey.today";
@@ -236,6 +196,9 @@ async function whatsAppActivated(client, locationId) {
   const params = messagingServiceSid
     ? { To: `whatsapp:${toE164(client.phone)}`, MessagingServiceSid: messagingServiceSid }
     : { To: `whatsapp:${toE164(client.phone)}`, From: process.env.TWILIO_WHATSAPP_FROM };
+  // Twilio returns 201 on ACCEPT, not on delivery. StatusCallback is how we
+  // find out what actually happened to it — see twilio-status.js.
+  params.StatusCallback = `${process.env.URL || "https://trey.today"}/.netlify/functions/twilio-status`;
 
   const contentSid = process.env.TWILIO_ACTIVATED_CONTENT_SID;
   if (contentSid) {

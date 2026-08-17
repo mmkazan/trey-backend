@@ -38,6 +38,12 @@ const ALL_STORES = [
   "reportssent", "approvalpending",
   "refcodes", "stripecustomers", "stripeevents", "stripeunmatched",
   "suppressed",                                          // the STOP list — legally load-bearing
+  // ADDED 17 Aug 2026. "walks" was missing, and walk.js's own header says the
+  // door-knock log "is recorded as it happens or not at all" — nothing else in
+  // the product can reconstruct it. It was in no backup, and because restore.js
+  // iterates this same list, a hand-edited backup containing it was discarded
+  // as an "unrecognised store". "config" and "runlog" were missing too.
+  "walks", "config", "runlog", "messagestatus",
 ];
 
 // A per-store ceiling so one enormous store can't blow the function's time limit

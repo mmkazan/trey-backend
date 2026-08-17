@@ -37,16 +37,17 @@ const STRIPE_TIMEOUT_MS = 8000;
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
-function reportKey(locationId) {
-  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
-}
+const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+
+// This page's own purpose. Its key opens THIS page and nothing else — see
+// link-keys.js for why. A key minted for another page will not validate here.
+const LINK_PURPOSE = "billing";
+
+// Kept as a thin wrapper so existing call sites read the same. All the real
+// work (constant-time compare, fail-closed on an unset secret, byte-length
+// check before timingSafeEqual) lives in link-keys.js.
 function keyValid(locationId, provided) {
-  if (!provided || provided.length !== KEY_LEN) return false;
-  try {
-    const a = Buffer.from(reportKey(locationId)), b = Buffer.from(provided);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  } catch (e) { return false; }
+  return linkValid(LINK_PURPOSE, locationId, provided);
 }
 function escapeHtml(str) {
   return String(str == null ? "" : str)
@@ -145,8 +146,7 @@ async function sendGoodbyeEmail(client, locationId, untilLabel) {
   const first = ((client.contactFirstName) || "").trim();
   const hello = first ? `Hi ${first}` : "Hello";
   const biz = client.businessName || "your business";
-  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+  const k = linkKey("billing", locationId);
   const base = process.env.URL || "https://trey.today";
   const backUrl = `${base}/.netlify/functions/billing?loc=${encodeURIComponent(locationId)}&k=${k}`;
 

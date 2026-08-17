@@ -1,5 +1,6 @@
 const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
+const { linkKey, secretConfigured } = require("./link-keys");
 
 // --- Which plan is this client on? -------------------------------------------
 //   "standard" -> £35/mo (the default for everyone else)
@@ -56,7 +57,7 @@ function blobsStore(name) {
 // inbox.js / report.js) so the owner can jump back to their review list.
 function inboxUrl(locationId) {
   if (!locationId || !process.env.TREY_REPORT_SECRET) return "";
-  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET).update(String(locationId)).digest("hex").slice(0, 32);
+  const k = linkKey("inbox", locationId);
   const base = process.env.URL || "https://treyv1.netlify.app";
   return `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${k}`;
 }
@@ -130,8 +131,7 @@ function windingDownBanner(client, locationId) {
   if (!isFinite(endMs)) return "";
   const daysLeft = Math.ceil((endMs - Date.now()) / 86400000);
   if (daysLeft <= 0) return "";   // already ended — the paused banner takes over
-  const k = crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, 32);
+  const k = linkKey("billing", locationId);
   const base = process.env.URL || "https://trey.today";
   const url = `${base}/.netlify/functions/billing?loc=${encodeURIComponent(locationId)}&k=${k}`;
   const days = daysLeft === 1 ? "1 day" : `${daysLeft} days`;

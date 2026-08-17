@@ -241,7 +241,13 @@
   // ---------- helpers ----------
   const fne=(row,keys)=>{ for(const k of keys){ const v=(row[k]||"").toString().trim(); if(v)return v; } return ""; };
   const toNum=v=>{ const n=parseFloat(v); return isNaN(n)?null:n; };
-  const clsStatus=s=>"s-"+(s||"New").replace(/\s/g,"");
+  // FIXED 17 Aug 2026 (stored XSS). This built a CLASS ATTRIBUTE and only
+  // stripped whitespace — it escaped nothing. outreachStatus comes from an
+  // imported CSV with no allow-list, so a crafted "Outreach Status" cell could
+  // break out of the attribute and run script on render, with no click needed.
+  // The admin token lives in sessionStorage, so that was the whole customer,
+  // lead and consent database via export.js. Allow only class-safe characters.
+  const clsStatus=s=>"s-"+String(s==null?"New":s).replace(/[^A-Za-z0-9_-]/g,"");
   function fmtDate(d){ if(!d||isNaN(d))return""; const p=n=>String(n).padStart(2,"0"); return p(d.getDate())+"/"+p(d.getMonth()+1)+"/"+d.getFullYear(); }
   // Escape for HTML — including quotes, so it's safe inside attribute values
   // (textContent alone escapes <>& but leaves " and ', which breaks out of an

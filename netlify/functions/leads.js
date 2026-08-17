@@ -159,6 +159,10 @@ function inferLegalStatus(lead) {
  * (written by whatsapp-inbound.js). Suppression beats everything, including
  * consent — someone who opted out has withdrawn it.
  */
+// The only legal values for a lead's pipeline status. Must stay in step with
+// STATUSES in leads.html and go.html.
+const OUTREACH_STATUSES = ["New", "Come back", "Contacted", "On trial", "Converted", "Lost"];
+
 function outreachPermissions(lead, suppressedTails) {
   const tail = String((lead && lead.phone) || "").replace(/\D/g, "").slice(-9);
   const suppressed = tail.length === 9 && suppressedTails && suppressedTails.has(tail);
@@ -171,6 +175,14 @@ function outreachPermissions(lead, suppressedTails) {
   if (suppressed) {
     return { electronicMail: false, phone: false, post: true, legalStatus: status,
       reason: "Opted out — replied STOP. Do not contact by phone or message. Post only." };
+  }
+  // Belt and braces alongside the `suppressed` list (17 Aug 2026). A verbal
+  // withdrawal at the door now writes to both, but a lead with no phone number
+  // has no suppression-list key at all, and the flag is what covers that case.
+  // Checked BEFORE the `ltd` branch, which is what used to override it.
+  if (lead && lead.optedOut === true) {
+    return { electronicMail: false, phone: false, post: true, legalStatus: status,
+      reason: "Opted out — withdrawn in person. Do not contact by phone or message. Post only." };
   }
   if (consented) {
     return { electronicMail: true, phone: tps !== "registered", post: true, legalStatus: status,
@@ -294,11 +306,37 @@ exports.handler = async (event) => {
         // Withdrawal must be at least as easy as giving it, and must never erase
         // the evidence — the history is the audit trail.
         const record = { ...existing, id: key, marketingConsent: false,
-          consentSource: "", updatedAt: now,
+          consentSource: "", optedOut: true, optedOutAt: now, updatedAt: now,
           consentHistory: [...(existing.consentHistory || []),
             { action: "withdrawn", at: now, takenBy: clean(c.takenBy, 60) || "unknown" }] };
         await leadsStore.setJSON(key, record);
-        return { statusCode: 200, body: JSON.stringify({ success: true, id: key, marketingConsent: false }) };
+
+        // FIXED 17 Aug 2026. Setting marketingConsent:false was not enough.
+        // outreachPermissions() falls through to the `status === "ltd"` branch
+        // for any limited company, which reports "cold email/WhatsApp allowed" —
+        // so a verbal "stop emailing me" at the door was recorded as evidence and
+        // then contradicted by the very screen that decides whether to make
+        // contact. Only a WhatsApp STOP actually suppressed anything.
+        //
+        // The suppression list is keyed on the last 9 digits of the phone, the
+        // same key whatsapp-inbound.js writes, so both routes land in one place.
+        // Failing to honour an opt-out is the classic PECR enforcement trigger,
+        // so a failed write is logged loudly rather than swallowed.
+        try {
+          const tail = String(record.phone || existing.phone || "").replace(/\D/g, "").slice(-9);
+          if (tail.length === 9) {
+            await blobsStore("suppressed").setJSON(tail, {
+              at: now,
+              source: "verbal-withdrawal",
+              takenBy: clean(c.takenBy, 60) || "unknown",
+              leadId: key,
+            });
+          }
+        } catch (e) {
+          console.error("[leads] SUPPRESSION WRITE FAILED on consent withdrawal — this number may keep being contacted:", e.message);
+        }
+
+        return { statusCode: 200, body: JSON.stringify({ success: true, id: key, marketingConsent: false, optedOut: true }) };
       }
 
       const channels = (Array.isArray(c.channels) ? c.channels : [])
@@ -385,6 +423,16 @@ exports.handler = async (event) => {
       for (const [k, v] of Object.entries(raw)) {
         if (v === "" || v === null || v === undefined) continue;
         incomingClean[k] = v;
+      }
+      // ADDED 17 Aug 2026. outreachStatus arrives from an imported CSV and was
+      // stored verbatim, then rendered into a class attribute by leads.html —
+      // which is how a crafted spreadsheet cell became stored XSS with the admin
+      // token as the prize. leads.html is fixed too, but a free-text value that
+      // only ever has six legal states has no business being stored unvalidated.
+      // Anything unrecognised falls back rather than being persisted.
+      if (incomingClean.outreachStatus !== undefined
+          && !OUTREACH_STATUSES.includes(String(incomingClean.outreachStatus))) {
+        delete incomingClean.outreachStatus;
       }
       const record = {
         ...existing, ...incomingClean, id: key,

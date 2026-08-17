@@ -133,10 +133,31 @@ exports.handler = async (event) => {
   // 2. Idempotency: if this reviewId was already processed, don't double-count
   //    or re-alert. (Only possible when the caller sends a stable reviewId; an
   //    auto-generated rev_<timestamp> id is unique per call.)
+  //
+  //    FIXED 17 Aug 2026 — this guard and the retry guard used to cancel each
+  //    other out, and the review alert was the thing that got lost.
+  //
+  //    The pending record was written BEFORE the Twilio send. So: run 1 wrote
+  //    the record, the send failed, we returned 502, and fetch-reviews.mjs
+  //    correctly declined to mark the review seen. Fifteen minutes later the
+  //    poller retried — and this guard found the record run 1 had written,
+  //    returned `deduped: true`, and fetch-reviews marked the review seen and
+  //    counted it as sent. The owner never got the alert, the log said it was
+  //    sent, and the review was excluded from every future poll.
+  //
+  //    A record only means "handled" once the alert actually went out, which is
+  //    what alertSentAt records. A record without it means the side effects were
+  //    committed but the message never left — so resend, and ONLY resend: the
+  //    tap, the counters and the draft must not be redone.
+  let priorRecord = null;
   if (body.reviewId) {
     const already = await reviewsStore.get(`pending:${reviewId}`, { type: "json" });
-    if (already) {
+    if (already && already.alertSentAt) {
       return { statusCode: 200, body: JSON.stringify({ success: true, deduped: true, reviewId }) };
+    }
+    if (already) {
+      priorRecord = already;
+      console.warn(`[review-webhook] ${reviewId} was committed but never alerted — resending only.`);
     }
   }
 
@@ -184,7 +205,13 @@ exports.handler = async (event) => {
   // 4. Generate the AI reply draft (internal call \u2014 send the shared secret).
   const siteUrl = process.env.URL || "https://treyv1.netlify.app";
   let replyDraft;
-  try {
+  if (priorRecord) {
+    // Resend path: keep the draft already saved. Regenerating would spend
+    // another Gemini call and could hand the owner a different reply than the
+    // one sitting in their inbox — and if generation failed here we would 502
+    // again and the alert would never be resent at all.
+    replyDraft = priorRecord.replyDraft;
+  } else try {
     const replyResponse = await fetch(`${siteUrl}/.netlify/functions/generate-reply`, {
       method: "POST",
       headers: {
@@ -219,21 +246,27 @@ exports.handler = async (event) => {
   }
 
   // 5. Commit side effects together, now that the reply exists.
+  //
+  // Every mutation below is guarded by `!priorRecord`. On a resend these have
+  // already happened, and repeating them would consume the tap twice and count
+  // the same review twice in the stats the customer's report is built from.
   const isTap = source.startsWith("Trey Tappy");
-  if (tapToConsume) {
+  if (!priorRecord && tapToConsume) {
     await tapsStore.setJSON(locationId, { ...tapToConsume, processed: true });
   }
 
-  const stats = (await statsStore.get(locationId, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
-  if (isTap) stats.tapReviews += 1;
-  else stats.organicReviews += 1;
-  await statsStore.setJSON(locationId, stats);
+  if (!priorRecord) {
+    const stats = (await statsStore.get(locationId, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
+    if (isTap) stats.tapReviews += 1;
+    else stats.organicReviews += 1;
+    await statsStore.setJSON(locationId, stats);
+  }
 
   // Period buckets (this week Mon-Sun + this month) for the reports. Wrapped so
   // a tally hiccup never blocks the reply + WhatsApp alert below.
   const now = new Date();
   const monthKey = now.toISOString().slice(0, 7); // YYYY-MM
-  try {
+  if (!priorRecord) try {
     const reviewTallyStore = blobsStore("reviewtally");
     const periodKeys = [`${locationId}:week:${weekKey(now)}`, `${locationId}:${monthKey}`];
     for (const pKey of periodKeys) {
@@ -250,8 +283,8 @@ exports.handler = async (event) => {
   // review record (used by the monthly report page). The record key is stored
   // on the pending record so approve.js can write finalReply to the SAME month
   // bucket even if approval happens after a month boundary.
-  const recordKey = `review:${locationId}:${monthKey}:${reviewId}`;
-  const reviewRecord = {
+  const recordKey = priorRecord ? priorRecord.recordKey : `review:${locationId}:${monthKey}:${reviewId}`;
+  const reviewRecord = priorRecord ? { ...priorRecord } : {
     reviewId,
     locationId,
     accountId: client.googleAccountId || "",
@@ -264,10 +297,15 @@ exports.handler = async (event) => {
     status: "pending",
     recordKey,
     createdAt: now.toISOString(),
+    // Null until the WhatsApp actually leaves. The idempotency guard at the top
+    // keys off this, so it is the difference between "handled" and "half done".
+    alertSentAt: null,
   };
 
-  await reviewsStore.setJSON(`pending:${reviewId}`, reviewRecord);
-  await reviewsStore.setJSON(recordKey, reviewRecord);
+  if (!priorRecord) {
+    await reviewsStore.setJSON(`pending:${reviewId}`, reviewRecord);
+    await reviewsStore.setJSON(recordKey, reviewRecord);
+  }
 
   // 6. Send the WhatsApp alert via Twilio — short message, link only.
   // Per-review signature — the approve link only works for this one review
@@ -306,6 +344,15 @@ exports.handler = async (event) => {
     ? { To: `whatsapp:${toE164(client.phone)}`, MessagingServiceSid: messagingServiceSid }
     : { To: `whatsapp:${toE164(client.phone)}`, From: twilioFrom };
 
+  // ADDED 17 Aug 2026. Twilio returns 201 on ACCEPT, not on delivery — and the
+  // two most common WhatsApp failures (error 63016, outside Meta's 24-hour
+  // window; and ordinary undeliverable) both happen asynchronously, AFTER that
+  // 201. Nothing anywhere recorded them, so "sent" in our logs and "arrived on
+  // the owner's phone" were completely different claims. This callback closes
+  // that gap: twilio-status.js writes the real outcome to the `messagestatus`
+  // store, keyed by message SID.
+  twilioParams.StatusCallback = `${siteUrl}/.netlify/functions/twilio-status`;
+
   if (contentSid) {
     // Approved template path — delivers reliably outside the 24h session
     // window and renders the "View & approve" CTA button. Variable order must
@@ -342,10 +389,29 @@ exports.handler = async (event) => {
 
     if (!twilioResp.ok) {
       const errText = await twilioResp.text();
-      throw new Error(`Twilio returned ${twilioResp.status}: ${errText}`);
+      // Truncated: the request Body we sent contains the signed approve link,
+      // and Twilio's error payload can echo request fields back.
+      throw new Error(`Twilio returned ${twilioResp.status}: ${String(errText).slice(0, 200)}`);
     }
+
+    // The alert is away — NOW the record counts as handled. Until this stamp
+    // exists, the guard at the top of this function treats the review as
+    // half-done and resends rather than deduping it into silence.
+    //
+    // Note this is a 202-from-Twilio, not a delivery confirmation: Twilio
+    // returns 201 and can still fail asynchronously (error 63016, outside
+    // Meta's 24-hour window, is the common one). That is what the StatusCallback
+    // above is for — twilio-status.js records the real outcome.
+    let twilioSid_ = "";
+    try { twilioSid_ = ((await twilioResp.clone().json()) || {}).sid || ""; } catch (e) {}
+    const sentRecord = { ...reviewRecord, alertSentAt: new Date().toISOString(), alertSid: twilioSid_ };
+    await reviewsStore.setJSON(`pending:${reviewId}`, sentRecord);
+    await reviewsStore.setJSON(recordKey, sentRecord);
   } catch (err) {
-    console.error("Error sending WhatsApp message:", err);
+    console.error(
+      `Error sending WhatsApp message for ${reviewId} — the record stays unstamped so the next poll resends it:`,
+      err.message
+    );
     return { statusCode: 502, body: JSON.stringify({ error: "Failed to send WhatsApp message" }) };
   }
 

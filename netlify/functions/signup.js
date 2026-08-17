@@ -12,6 +12,7 @@
 
 const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
+const { linkKey, secretConfigured } = require("./link-keys");
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
@@ -110,8 +111,7 @@ const KEY_LEN = 32;
 // WhatsApp route only exists if they message us first, which not everyone will.
 // (Found the hard way — a real signup had no way into their inbox at all.)
 function reportKey(locationId) {
-  return crypto.createHmac("sha256", process.env.TREY_REPORT_SECRET || "")
-    .update(String(locationId)).digest("hex").slice(0, KEY_LEN);
+  return linkKey("inbox", locationId);
 }
 function inboxUrl(locationId) {
   const base = process.env.URL || "https://trey.today";
