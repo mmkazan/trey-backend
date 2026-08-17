@@ -307,6 +307,12 @@ var statusCls=function(s){ return "p-"+String(s||"New").replace(/\s/g,""); };
 // a new town, these carry the one thing Places CANNOT give you: whether the owner
 // replies to reviews. See loadMyLeads().
 var MINE={}, MINE_LOADED=false;
+
+// PLAN MODE. When following a saved walk, the ORDER IS THE PRODUCT — it is the
+// route route.js worked out. Re-sorting it by score or distance, which is right
+// for browsing, silently throws that away and renumbers every pin. So in plan
+// mode the sort is the plan, and the pin numbers are the plan's own numbers.
+var PLAN_MODE=false;
 var CENTRE_IS_ME=true; // false when the centre came from a typed postcode/town
 var SORT="score";      // "score" = best door first, "distance" = nearest first
 var FILTER="all";      // "all" | "look" (Knock now + Worth a look) | "knock"
@@ -346,7 +352,7 @@ async function findWhere(){
     if(!d) return;
     HERE=d.centre||null; POOL=d.leads||[]; CENTRE_IS_ME=false;
     await loadMyLeads();
-    POOL_IS_LIVE=true;
+    PLAN_MODE=false; POOL_IS_LIVE=true;
     render(POOL,d.radius,d.placeLabel);
   }catch(e){
     out.innerHTML = e.config ? setupMsg() : '<div class="msg"><b>Couldn\'t search.</b><br>'+esc(e.message)+'</div>';
@@ -369,7 +375,7 @@ function find(){
       if(!d) return;
       POOL=d.leads||[]; CENTRE_IS_ME=true;
       await loadMyLeads();
-      POOL_IS_LIVE=true;
+      PLAN_MODE=false; POOL_IS_LIVE=true;
       render(POOL,d.radius);
       startWatching();
     }catch(e){
@@ -569,7 +575,7 @@ function myLeadsByPostcode(){
     // nothing to pay for, so both mirror paths get one without asking. Under
     // the old Static Maps version these two screens (the ones the field tool is
     // actually used from) had no map at all unless you happened to press +.
-    POOL_IS_LIVE=false;
+    PLAN_MODE=false; POOL_IS_LIVE=false;
     render(POOL,0,want);
   })();
 }
@@ -614,7 +620,7 @@ async function todaysPlan(){
       return c;
     });
 
-    POOL=cards; POOL_IS_LIVE=false; RADIUS=0;
+    POOL=cards; POOL_IS_LIVE=false; PLAN_MODE=true; RADIUS=0;
     var when=new Date(d.plan.savedAt);
     LABEL="your plan \u2014 "+d.plan.stops.length+" doors, about "+d.plan.totalMinutes+" min";
     render(POOL,0,LABEL);
@@ -657,7 +663,7 @@ function myLeadsNearMe(){
       return;
     }
     POOL=near;
-    POOL_IS_LIVE=false;
+    PLAN_MODE=false; POOL_IS_LIVE=false;
     render(POOL,radius,"your saved leads");
     startWatching();
   }, function(err){
@@ -695,6 +701,15 @@ function signThemUp(i){
 }
 
 function setSort(v){
+  // In plan mode the order is the route, so re-sorting would be a no-op. Leaving
+  // the button looking pressed while nothing moved is the silent-failure pattern
+  // this codebase keeps producing — so it drops out of plan mode and says so.
+  if(PLAN_MODE){
+    PLAN_MODE=false;
+    document.getElementById("out").insertAdjacentHTML("afterbegin",
+      '<div class="msg" style="margin-bottom:10px">Sorted out of plan order \u2014 '+
+      'the route line is off. Press <b>Today\u2019s plan</b> to get it back.</div>');
+  }
   SORT=v;
   document.getElementById("sortScore").className = v==="score"?"on":"";
   document.getElementById("sortDist").className  = v==="distance"?"on":"";
@@ -893,10 +908,24 @@ function drawMap(view,list){
     var idx=POOL.indexOf(l); on[idx]=1;
     if(l.lat==null||l.lng==null) return;
     L.marker([l.lat,l.lng],{
-      icon:discIcon(COLOUR_BY==="status"?statusColour(l):bandColour(l.field.band), i+1),
+      icon:discIcon(COLOUR_BY==="status"?statusColour(l):bandColour(l.field.band),
+                    PLAN_MODE?(l.planN||i+1):i+1),
       title:l.businessName+" — "+l.field.band,
     }).bindPopup(pinPopup(l,idx)).addTo(GPINS);
   });
+  // The route itself. The desk map draws this and the phone did not, which made
+  // a carefully ordered walk look like scattered pins.
+  if(PLAN_MODE){
+    var legs=view.slice()
+      .filter(function(l){ return l.lat!=null&&l.lng!=null; })
+      .sort(function(a,b){ return (a.planN||0)-(b.planN||0); })
+      .map(function(l){ return [l.lat,l.lng]; });
+    if(HERE) legs.unshift([HERE.lat,HERE.lng]);
+    if(legs.length>1){
+      L.polyline(legs,{color:"#4338ca",weight:3,opacity:.65,dashArray:"6,6"}).addTo(GPINS);
+    }
+  }
+
   // Deliberately subordinate: keeps the street recognisable without competing
   // with the doors you're actually going to.
   list.forEach(function(l){
@@ -1076,6 +1105,9 @@ function render(list,radius,label){
     if(FILTER==="look")  return l.field.band==="Knock now"||l.field.band==="Worth a look";
     return true;
   }).slice().sort(function(a,b){
+    // The plan's order wins over both sorts. Without this the list and the map
+    // renumber themselves and the route reads as random.
+    if(PLAN_MODE) return (a.planN||0)-(b.planN||0);
     if(SORT==="distance"){
       var da=a.metresAway==null?1e9:a.metresAway, db=b.metresAway==null?1e9:b.metresAway;
       return da-db || b.field.total-a.field.total;

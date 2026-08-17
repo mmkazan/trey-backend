@@ -135,6 +135,17 @@
   .walkbox{background:#eef2ff;border:1px solid #e0e7ff;border-radius:10px;padding:10px 12px;
        font-size:13px;color:#3730a3;line-height:1.5;margin:0 0 12px;}
   .walkbox b{color:#312e81;}
+  /* Send to phone is the point of the panel — make it look like it. */
+  .walkctl button{font-size:13px;font-weight:700;padding:7px 13px;}
+  .walksend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 4px;}
+  .walksend .btn-primary{font-size:14px;font-weight:700;padding:9px 16px;}
+  /* Numbered full cards, so the map pin, the route and the pitch all line up. */
+  .walkstops{margin-top:10px;}
+  .walkstop{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;}
+  .walkstop .card{flex:1;min-width:0;margin:0;}
+  .walkn{flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;
+         font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;
+         margin-top:10px;}
   .walkbox ol{margin:8px 0 0;padding-left:20px;font-size:12.5px;color:#334155;}
   .mapctl button{font-size:13px;font-weight:800;width:32px;height:32px;padding:0;border-radius:8px;
     border:1px solid #cfe0f6;background:#fff;color:#334155;cursor:pointer;}
@@ -965,11 +976,23 @@
           : '') +
         '. Planned from <b>' + plan.considered + '</b> of ' + ROWS.length + ' filtered leads.' +
       '</div>' +
+      // The whole point of planning at a desk is walking it somewhere else, so
+      // this is a primary action ABOVE the stops, not a footnote below them.
       (plan.order.length
-        ? '<ol>' + plan.order.map(s => '<li>' + esc(s.lead.lead.businessName || "—") + "</li>").join("") + "</ol>" +
-          // The whole point of planning at a desk is walking it somewhere else.
-          '<button class="btn-secondary" onclick="sendWalkToPhone()">Send to phone</button> ' +
-          '<span class="muted" id="walkSent">Opens under “Today’s plan” in Trey Go.</span>'
+        ? '<div class="walksend">' +
+            '<button class="btn-primary" onclick="sendWalkToPhone()">\u2192 Send to phone</button>' +
+            '<span class="muted" id="walkSent">Opens under \u201cToday\u2019s plan\u201d in Trey Go.</span>' +
+          '</div>' +
+          // Full cards, not a list of names. The hook is the thing you actually
+          // need per door, and a bare name made you open the list above to find
+          // it — so that duplication goes and this becomes the one place to prep.
+          '<div class="walkstops">' +
+            plan.order.map(function (o) {
+              const l = o.lead.lead || o.lead;
+              return '<div class="walkstop"><span class="walkn">' + o.n + '</span>' +
+                     leadCard(l, o.lead.i != null ? o.lead.i : 0) + '</div>';
+            }).join("") +
+          '</div>'
         : "") +
       '</div>';
   }
