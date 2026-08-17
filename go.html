@@ -75,7 +75,9 @@
   .score span{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;}
   .knock b,.knock span{color:#047857;}
   .look b,.look span{color:#b45309;}
-  .skip b,.skip span{color:#94a3b8;}
+  /* #94a3b8 was 2.56:1 on the white card — unreadable outdoors. Same grey as
+     the tier-3 pin, so the score text and its dot agree. */
+  .skip b,.skip span{color:#64748b;}
   .gap{font-size:12.5px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;border-radius:9px;padding:7px 9px;margin-top:8px;line-height:1.45;}
   /* Compact PECR marker. The full verdict lives in the leads list, where the
      messaging actually happens — out here you're walking in, so it only needs to
@@ -778,10 +780,15 @@ var OSM_ATTRIB='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStr
 // it out of both files and compares them. Two maps using one palette to mean
 // two different things was asking to be misread, and was. If you change a
 // colour here, change it there.
-var TIER_COLOURS={"1":"#047857","2":"#b45309","3":"#94a3b8"};
+// These carry WHITE text on the map pins, so each has to clear WCAG AA (4.5:1)
+// against white. Tier 3 was #94a3b8 — 2.56:1, i.e. the plan number on a "Skip"
+// pin was barely there in daylight, which is the only light this screen is ever
+// used in. Must stay byte-identical to leads.html; map.test.js asserts it and
+// recomputes the contrast rather than trusting the hex.
+var TIER_COLOURS={"1":"#047857","2":"#b45309","3":"#64748b"};
 // Pipeline colours, matched to the .p-* pills so a marker and its card agree.
-var STATUS_COLOURS={"New":"#94a3b8","Come back":"#ea580c","Contacted":"#2563eb",
-  "On trial":"#ca8a04","Converted":"#16a34a","Lost":"#dc2626"};
+var STATUS_COLOURS={"New":"#64748b","Come back":"#c2410c","Contacted":"#2563eb",
+  "On trial":"#a16207","Converted":"#15803d","Lost":"#dc2626"};
 var ME_COLOUR="#4338ca";
 
 // Derby city centre. Only ever seen for the half-second before the first
@@ -806,6 +813,19 @@ function statusColour(l){
   return STATUS_COLOURS[st]||STATUS_COLOURS["New"];
 }
 
+// White or near-black, whichever is readable ON `hex`. WCAG relative luminance
+// then the standard contrast ratio against each candidate. Kept identical to
+// leads.html's copy so one door is drawn the same on the desk and in the street.
+function textOn(hex){
+  var h=String(hex||"").replace("#","");
+  if(!/^[0-9a-fA-F]{6}$/.test(h)) return "#fff";
+  var lin=function(c){ c/=255; return c<=0.03928?c/12.92:Math.pow((c+0.055)/1.055,2.4); };
+  var L=0.2126*lin(parseInt(h.slice(0,2),16))
+       +0.7152*lin(parseInt(h.slice(2,4),16))
+       +0.0722*lin(parseInt(h.slice(4,6),16));
+  return (1.05/(L+0.05))>=((L+0.05)/0.0643) ? "#fff" : "#0f172a";
+}
+
 // A marker is a coloured disc we draw ourselves rather than Leaflet's default
 // teardrop, so the tier palette is the only thing deciding what it looks like.
 // `colour` is always one of our own constants; `label` is escaped.
@@ -813,7 +833,8 @@ function discIcon(colour,label,cls){
   var n=cls==="you"?19:25;
   return L.divIcon({
     className:"",   // "" drops Leaflet's default white-box .leaflet-div-icon
-    html:'<span class="leafpin'+(cls?" "+cls:"")+'" style="background:'+colour+'">'+
+    html:'<span class="leafpin'+(cls?" "+cls:"")+'" style="background:'+colour+
+         ';color:'+textOn(colour)+'">'+
          esc(label==null?"":label)+'</span>',
     iconSize:[n,n], iconAnchor:[n/2,n/2],
   });

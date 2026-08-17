@@ -135,8 +135,12 @@ exports.run = function (t) {
   const tiersLeads = eval("(" + (leads.match(/TIER_COLOURS\s*=\s*(\{[^}]*\})/) || [])[1] + ")");
   const tiersGo = eval("(" + (go.match(/TIER_COLOURS\s*=\s*(\{[^}]*\})/) || [])[1] + ")");
   t.eq(tiersLeads, tiersGo, "the tier colours are byte-identical in leads.html and go.html");
-  t.eq(tiersLeads, { "1": "#047857", "2": "#b45309", "3": "#94a3b8" },
+  t.eq(tiersLeads, { "1": "#047857", "2": "#b45309", "3": "#64748b" },
     "tier 1 is green, tier 2 amber, tier 3 grey");
+
+  const statusLeads = eval("(" + (leads.match(/STATUS_COLOURS\s*=\s*(\{[^}]*\})/) || [])[1] + ")");
+  const statusGo = eval("(" + (go.match(/STATUS_COLOURS\s*=\s*(\{[^}]*\})/) || [])[1] + ")");
+  t.eq(statusLeads, statusGo, "the status colours are byte-identical in leads.html and go.html");
 
   // Behavioural, not textual: run each page's own colour function.
   const pinColour = build(
@@ -160,6 +164,154 @@ exports.run = function (t) {
     "green means the same thing on the desk map and the field map");
   t.eq(bandColourGo("Skip"), pinColour({ tier: 3 }),
     "grey means the same thing on the desk map and the field map");
+
+  // === Every colour that carries text is readable ==========================
+  // Tier 3 was #94a3b8 and the number sitting on it scored 2.56:1 — below the
+  // 4.5:1 floor and, on a phone in daylight, simply not there. Recomputed here
+  // rather than asserted as a hex, so the next person to reach for a nicer
+  // grey is stopped by the actual rule and not by a magic number.
+  function contrast(hex, other) {
+    const lum = (h) => {
+      h = h.replace("#", "");
+      const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      return 0.2126 * lin(parseInt(h.slice(0, 2), 16))
+           + 0.7152 * lin(parseInt(h.slice(2, 4), 16))
+           + 0.0722 * lin(parseInt(h.slice(4, 6), 16));
+    };
+    const a = lum(hex), b = lum(other);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  }
+  // Sanity-check the maths itself against two known pairs before trusting it.
+  t.ok(Math.abs(contrast("#ffffff", "#000000") - 21) < 0.01, "contrast() gives 21:1 for black on white");
+  t.ok(Math.abs(contrast("#ffffff", "#ffffff") - 1) < 0.01, "contrast() gives 1:1 for white on white");
+
+  const WHITE = "#ffffff";
+  for (const [k, v] of Object.entries(tiersLeads)) {
+    t.ok(contrast(v, WHITE) >= 4.5,
+      `tier ${k} (${v}) carries white text at AA — got ${contrast(v, WHITE).toFixed(2)}:1`);
+  }
+  for (const [k, v] of Object.entries(statusLeads)) {
+    t.ok(contrast(v, WHITE) >= 4.5,
+      `status "${k}" (${v}) carries white text at AA — got ${contrast(v, WHITE).toFixed(2)}:1`);
+  }
+  const mine = grabDecl(leads, "MINE_COLOUR").match(/#[0-9a-f]{6}/i)[0];
+  t.ok(contrast(mine, WHITE) >= 4.5, `MINE_COLOUR (${mine}) carries white text at AA`);
+
+  // The Opportunity pill and the Trey Score badge are white text on a computed
+  // background, so their band colours are held to the same floor.
+  for (const [fn, label] of [["prospectScore", "Opportunity pill"],
+                             ["treyScore", "Trey Score badge"],
+                             ["opportunityScore", "Opportunity fallback"]]) {
+    // Comments get stripped first. These functions carry a note about the
+    // colours they REPLACED, and a check that reads prose finds the old value
+    // and fails on a file that is actually correct.
+    const body = grabFn(leads, fn)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    const hexes = (body.match(/#[0-9a-f]{6}/gi) || []);
+    t.ok(hexes.length > 0, `${label}: found band colours to check`);
+    for (const h of hexes) {
+      t.ok(contrast(h, WHITE) >= 4.5,
+        `${label} colour ${h} carries white text at AA — got ${contrast(h, WHITE).toFixed(2)}:1`);
+    }
+  }
+
+  // === textOn() — no disc can render an unreadable number ==================
+  // The numbered stop discs take the LEAD's colour now, and one of those is
+  // LOST_COLOUR, a faded grey that renders white text at 1.35:1. Rather than
+  // hand-pick a text colour per palette entry, the disc works it out.
+  for (const [name, src] of Object.entries(pages)) {
+    const textOn = build([], grabFn(src, "textOn"), "textOn");
+    t.ok(!!textOn, `${name} has textOn()`);
+    t.eq(textOn("#0f172a"), "#fff", `${name}: textOn picks white on near-black`);
+    t.eq(textOn("#ffffff"), "#0f172a", `${name}: textOn picks dark on white`);
+    t.eq(textOn("#cbd5e1"), "#0f172a", `${name}: textOn picks dark on the faded Lost grey`);
+    t.eq(textOn("#047857"), "#fff", `${name}: textOn picks white on the tier-1 green`);
+    t.eq(textOn(undefined), "#fff", `${name}: textOn falls back to white on junk input`);
+    t.eq(textOn("nonsense"), "#fff", `${name}: textOn falls back to white on a non-hex string`);
+    // The property that matters: whatever it picks must actually be readable.
+    for (const c of [].concat(Object.values(tiersLeads), Object.values(statusLeads),
+                              [mine, "#cbd5e1", "#0f172a", "#ffffff"])) {
+      t.ok(contrast(c, textOn(c) === "#fff" ? "#ffffff" : "#0f172a") >= 4.5,
+        `${name}: textOn(${c}) is readable on it`);
+    }
+    // …and it is actually wired into the marker, not just defined.
+    t.ok(/textOn\(colour\)/.test(src), `${name}: discIcon applies textOn to the disc`);
+  }
+
+  // === The desk and the phone draw a planned walk the same way =============
+  // The desk used to paint every route stop MINE_COLOUR — the legend's "already
+  // yours" — so a planned walk looked like a list of existing customers, and
+  // the two screens disagreed about the same walk.
+  t.ok(!/discIcon\(MINE_COLOUR,\s*s\.n/.test(leads),
+    "leads.html no longer paints route stops in the 'already yours' colour");
+  t.ok(/discIcon\(pinColour\(s\.lead\.lead\),\s*s\.n/.test(leads),
+    "leads.html colours a route stop by the lead's own tier/status, like go.html");
+  t.ok(/class="walkn"[^>]*background:'\s*\+\s*esc\(c\)/.test(leads),
+    "the stop-number disc beside each card takes the same colour as its pin");
+  t.ok(!/\.walkn\{[^}]*background:var\(--accent\)[^}]*\}\s*$/m.test(leads) || /pinColour\(l\)/.test(leads),
+    "the stop-number disc is no longer hardcoded indigo");
+
+  // === The stop cards are not inside the summary panel =====================
+  // The .walkstops list used to be nested inside .walkbox. .walkbox sets
+  // color:#3730a3 for its own summary text and `.walkbox b{color:#312e81}` for
+  // its own numbers, and both inherited into the lead cards rendered inside it:
+  // every business name went indigo, and because `.walkbox b` and `.opp b` have
+  // EQUAL specificity — so source order decides, and .walkbox b is declared
+  // later — the Opportunity score rendered dark navy on the green pill while
+  // the band label beside it stayed white. It read as a badge bug for two
+  // sessions. It was a containment bug. Assert the structure, because the
+  // symptom is three inheritance hops away from the cause.
+  //
+  // Reconstruct the markup this code EMITS — every single-quoted literal in the
+  // walkOut assignment, in order, comments stripped — then walk the tags and
+  // ask how deep .walkstops sits relative to .walkbox. An earlier version of
+  // this check looked for the next "'</div>' +" after the summary text and
+  // "passed" on the broken file too: it had found the .mapnote's closing tag,
+  // not the walkbox's. A guard that cannot fail is not a guard.
+  {
+    const fnStart = leads.indexOf('walkOut").innerHTML');
+    const fnEnd = leads.indexOf("\n  }", fnStart);
+    const src = leads.slice(fnStart, fnEnd)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    // Single-quoted literals only; \' escapes are not used for tags here.
+    const emitted = (src.match(/'(?:[^'\\]|\\.)*'/g) || [])
+      .map((s) => s.slice(1, -1)).join("");
+    const tags = emitted.match(/<\/?div\b[^>]*>/g) || [];
+    let depth = 0, boxDepth = null, stopsDepth = null;
+    for (const tag of tags) {
+      if (tag.startsWith("</")) { depth--; continue; }
+      if (/class="walkbox"/.test(tag) && boxDepth === null) boxDepth = depth;
+      if (/class="walkstops"/.test(tag) && stopsDepth === null) stopsDepth = depth;
+      depth++;
+    }
+    t.ok(boxDepth !== null, "the walk output still renders a .walkbox summary panel");
+    t.ok(stopsDepth !== null, "the walk output still renders a .walkstops list");
+    t.ok(stopsDepth !== null && boxDepth !== null && stopsDepth <= boxDepth,
+      `.walkstops is a SIBLING of .walkbox, not nested inside it ` +
+      `(walkbox depth ${boxDepth}, walkstops depth ${stopsDepth}) — nested, .walkbox's ` +
+      `colour and its 'b' rule inherit into every lead card`);
+    t.eq(depth, 0, "the walk output's div tags balance");
+  }
+  // Belt and braces: whatever the markup does, .walkbox must not be styling
+  // bold text that lead cards also use.
+  t.ok(/\.walkbox b\{/.test(leads), "the .walkbox b rule still exists (it styles the summary)");
+  t.ok(/\.opp b\{/.test(leads), "…and .opp b still exists, which is the rule it used to beat");
+
+  // === The planning map stays on screen while you read the stops ===========
+  // Planning a walk used to insert the stop cards ABOVE the map and push it out
+  // of view: you could read the plan or see the route, never both.
+  t.ok(/\.mapstick\{[^}]*position:sticky/.test(leads),
+    "leads.html has a sticky container for the planning map");
+  t.ok(leads.indexOf('class="mapstick"') < leads.indexOf('id="walkOut"'),
+    "the map is rendered before the walk stops, so sticky has somewhere to stick");
+  t.ok(/\.mapstick \.leafmap\{height:min\(/.test(leads),
+    "the sticky map is capped in vh as well as px, leaving room for a stop card");
+  // A container whose height depends on the viewport must tell Leaflet when the
+  // viewport changes, or you get a grey band that looks like a tile failure.
+  t.ok(/addEventListener\("resize"[\s\S]{0,220}invalidateSize\(\)/.test(leads),
+    "leads.html re-measures the map on window resize");
 
   // === go.html stays usable with no signal =================================
   t.ok(go.includes("No map — you're offline. Your leads and the list still work."),

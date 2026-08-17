@@ -117,6 +117,21 @@
      modal (z-index 60), which is a fixed overlay on the same page. */
   .leafmap{height:420px;border-radius:10px;border:1px solid #cfe0f6;position:relative;z-index:0;}
   .leafmap.sm{height:260px;}
+  /* STICKY MAP. Planning a walk renders the stops below the map and that list is
+     long, so the map scrolled away exactly when you started reading the doors it
+     had just planned. The map and the stop you are reading have to be on screen
+     together — that is the whole point of a planning screen.
+     - top:0 with the padding INSIDE the sticky element, so the gap above the map
+       is painted with the page background instead of showing cards sliding
+       underneath it.
+     - z-index:5 sits above the scrolling cards and below the draft modal (60).
+       .leafmap's own z-index:0 keeps Leaflet's 400-1000 panes contained inside.
+     - the height is capped in vh as well as px: at a fixed 420 a laptop viewport
+       has no room left for the stop you are supposed to be reading. Leaflet has
+       to be told when that resolves to a new number — see the resize handler. */
+  .mapstick{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 4px;}
+  .mapstick .leafmap{height:min(420px,46vh);}
+  .mapstick .maplegend{margin:8px 0 4px;}
   /* A marker is a plain coloured disc. Nothing here may set position or
      transform — Leaflet places the icon itself, and a second opinion about
      where it goes is how dots end up in the wrong street. */
@@ -143,9 +158,15 @@
   .walkstops{margin-top:10px;}
   .walkstop{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;}
   .walkstop .card{flex:1;min-width:0;margin:0;}
+  /* The stop-number disc beside each walk card. Background and text colour are
+     set INLINE from pinColour()/textOn() so this disc, the numbered pin on the
+     desk map and the numbered pin in Trey Go are the same colour for the same
+     door. It used to be hardcoded indigo, which is MINE_COLOUR — the legend's
+     "already yours" — so every stop on a planned walk read as an existing
+     customer. These values are the fallback for a disc drawn without a lead. */
   .walkn{flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;
          font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;
-         margin-top:10px;}
+         margin-top:10px;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.35);}
   .walkbox ol{margin:8px 0 0;padding-left:20px;font-size:12.5px;color:#334155;}
   .mapctl button{font-size:13px;font-weight:800;width:32px;height:32px;padding:0;border-radius:8px;
     border:1px solid #cfe0f6;background:#fff;color:#334155;cursor:pointer;}
@@ -279,10 +300,17 @@
         <button class="btn-secondary" id="walkClear" onclick="clearWalk()" style="display:none;">Clear route</button>
       </div>
       <div id="mapNote"></div>
-      <div id="walkOut"></div>
-      <div class="mapwrap"><div id="leadMapCanvas" class="leafmap"></div></div>
-      <div class="maplegend" id="mapLegend"></div>
+      <!-- The map comes BEFORE the walk output and sticks to the top of the
+           viewport. Previously #walkOut sat above the map, so pressing "Plan
+           walk" inserted a tall stack of stop cards between the controls and
+           the map and pushed the map off screen — you could read the plan or
+           see the route, never both. -->
+      <div class="mapstick">
+        <div class="mapwrap"><div id="leadMapCanvas" class="leafmap"></div></div>
+        <div class="maplegend" id="mapLegend"></div>
+      </div>
       <div class="mapnote" id="mapSummary"></div>
+      <div id="walkOut"></div>
     </div>
     <div id="leadList"></div>
   </main>
@@ -341,7 +369,12 @@
     var actPts=(act.postedRecently?8:act.postedWithin3m?4:0)+(act.photosFresh?7:act.photosSome?3:0);
     var compPts=(comp.primaryCategory?6:0)+((comp.secondaryCount||0)>=2?5:0)+(comp.description&&String(comp.description).length>=120?5:0)+((comp.serviceCount||0)>=3?5:0)+(comp.hoursSet?3:0)+(comp.website?3:0)+(comp.phone?2:0)+((comp.attributeCount||0)>=1?1:0);
     var total=cl(Math.round(repPts+actPts+compPts),0,100);
-    var band=total>=90?{label:"Excellent",color:"#16a34a"}:total>=75?{label:"Strong",color:"#16a34a"}:total>=50?{label:"Getting there",color:"#f59e0b"}:{label:"Needs work",color:"#ef4444"};
+    // Badge backgrounds behind WHITE text (.tsbadge), so they are the darker
+    // members of each hue, not the bright ones. #f59e0b was 2.15:1 against
+    // white — the worst contrast on the page — and #16a34a 3.29:1. These are
+    // the same three colours the tier palette uses, so a green badge and a
+    // green pin now mean green in the same voice.
+    var band=total>=90?{label:"Excellent",color:"#047857"}:total>=75?{label:"Strong",color:"#047857"}:total>=50?{label:"Getting there",color:"#b45309"}:{label:"Needs work",color:"#b91c1c"};
     return {total:total,band:band.label,color:band.color};
   }
   function estTreyFromLead(l){
@@ -389,14 +422,14 @@
       const tier = Number(l.tier) || (stored >= 72 ? 1 : stored >= 52 ? 2 : 3);
       return { total: Math.round(stored), tier,
                band: tier === 1 ? "Best door" : tier === 2 ? "Worth a look" : "Skip",
-               color: tier === 1 ? "#047857" : tier === 2 ? "#b45309" : "#94a3b8",
+               color: tier === 1 ? "#047857" : tier === 2 ? "#b45309" : "#64748b",
                source: "apify" };
     }
     const op = opportunityScore(l);
     const tier = op.total >= 60 ? 1 : op.total >= 33 ? 2 : 3;
     return { total: op.total, tier,
              band: tier === 1 ? "Best door" : tier === 2 ? "Worth a look" : "Skip",
-             color: tier === 1 ? "#047857" : tier === 2 ? "#b45309" : "#94a3b8",
+             color: tier === 1 ? "#047857" : tier === 2 ? "#b45309" : "#64748b",
              source: "live" };
   }
 
@@ -431,7 +464,7 @@
     else win=1.0;
     if(!l.phone&&!l.email)win*=0.7;
     var total=Math.round(cl(raw*win,0,100));
-    var band=total>=60?{label:"Hot",color:"#16a34a"}:total>=33?{label:"Warm",color:"#f59e0b"}:{label:"Cold",color:"#94a3b8"};
+    var band=total>=60?{label:"Hot",color:"#047857"}:total>=33?{label:"Warm",color:"#b45309"}:{label:"Cold",color:"#64748b"};
     return {total:total,band:band.label,color:band.color};
   }
   // Dead end = same bar as the LOW RATING / THIN flags: sub-3.0★ or under 10 reviews.
@@ -664,10 +697,16 @@
   // it out of both files and compares them. Two maps using one palette to mean
   // two different things was asking to be misread, and was — see the note on
   // pinColour() below. If you change a colour here, change it there.
-  const TIER_COLOURS = { "1":"#047857", "2":"#b45309", "3":"#94a3b8" };
+  // These carry WHITE text — on map pins, on the stop-number discs and on the
+  // Opportunity pill — so each one has to clear WCAG AA (4.5:1) against white.
+  // Tier 3 was #94a3b8, which is 2.56:1: the "Skip" number was effectively
+  // invisible. #64748b is 4.81:1 and still reads as grey. Any change here must
+  // keep go.html in step — map.test.js asserts the two files are identical and
+  // recomputes the contrast rather than trusting a hex.
+  const TIER_COLOURS = { "1":"#047857", "2":"#b45309", "3":"#64748b" };
   // Pipeline colours, matched to the .s-* pills so a marker and its row agree.
-  const STATUS_COLOURS = { "New":"#94a3b8", "Come back":"#ea580c", "Contacted":"#2563eb",
-    "On trial":"#ca8a04", "Converted":"#16a34a", "Lost":"#dc2626" };
+  const STATUS_COLOURS = { "New":"#64748b", "Come back":"#c2410c", "Contacted":"#2563eb",
+    "On trial":"#a16207", "Converted":"#15803d", "Lost":"#dc2626" };
   const MINE_COLOUR = "#4338ca";   // already a customer — not a door to knock on
   const LOST_COLOUR = "#cbd5e1";
 
@@ -720,6 +759,26 @@
     return TIER_COLOURS[String(Number(l.tier))] || TIER_COLOURS["3"];
   }
 
+  // White or near-black, whichever is readable ON `hex`. WCAG relative
+  // luminance, then the standard contrast ratio against each candidate.
+  //
+  // This exists because the numbered stop discs take the LEAD's colour now, and
+  // one of those colours is LOST_COLOUR (#cbd5e1) — a deliberately faded grey
+  // that renders white text at 1.35:1, i.e. blank. Hand-picking a text colour
+  // per palette entry is the kind of thing that stays right until someone adds
+  // a tenth colour, so the disc works it out instead.
+  function textOn(hex){
+    const h = String(hex || "").replace("#", "");
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return "#fff";
+    const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    const L = 0.2126 * lin(parseInt(h.slice(0, 2), 16))
+            + 0.7152 * lin(parseInt(h.slice(2, 4), 16))
+            + 0.0722 * lin(parseInt(h.slice(4, 6), 16));
+    // Against white the ratio is 1.05/(L+0.05); against #0f172a it is
+    // (L+0.05)/(0.0143+0.05). Take whichever is higher.
+    return (1.05 / (L + 0.05)) >= ((L + 0.05) / 0.0643) ? "#fff" : "#0f172a";
+  }
+
   // A marker is a coloured disc we draw ourselves rather than Leaflet's default
   // teardrop, so the tier palette is the only thing deciding what it looks like.
   // `colour` is always one of our own constants; `label` is escaped because it
@@ -728,7 +787,8 @@
     const n = big ? 26 : 22;
     return L.divIcon({
       className: "",   // "" drops Leaflet's default white-box .leaflet-div-icon
-      html: '<span class="leafpin' + (big ? " n" : "") + '" style="background:' + colour + '">' +
+      html: '<span class="leafpin' + (big ? " n" : "") + '" style="background:' + colour +
+            ';color:' + textOn(colour) + '">' +
             esc(label == null ? "" : label) + "</span>",
       iconSize: [n, n], iconAnchor: [n / 2, n / 2],
     });
@@ -754,6 +814,16 @@
     L.tileLayer(OSM_TILES, { maxZoom: 19, attribution: OSM_ATTRIB }).addTo(LMAP);
     LPINS  = L.layerGroup().addTo(LMAP);
     LROUTE = L.layerGroup().addTo(LMAP);
+    // The sticky map's height is min(420px,46vh), so the container really does
+    // change size when the window does — and Leaflet caches the size it was
+    // told. Without this you get the classic grey band down one edge after a
+    // resize, which looks exactly like a tile-loading failure and isn't one.
+    // Debounced because resize fires per frame while a window is dragged.
+    let rt = null;
+    window.addEventListener("resize", function () {
+      clearTimeout(rt);
+      rt = setTimeout(function () { if (LMAP) LMAP.invalidateSize(); }, 150);
+    });
     return LMAP;
   }
 
@@ -944,8 +1014,14 @@
       plan.order.forEach(function (s) {
         // zIndexOffset lifts the numbered stops above the plain tier markers,
         // which stay on show so you can see what the plan walked past.
+        // ONE COLOUR VOCABULARY. This used to be MINE_COLOUR, which is the
+        // legend's "already yours" indigo — so every stop on a planned walk was
+        // painted in the colour that means "not a door to knock on", and the
+        // phone and the desk disagreed about the same walk. Colour keeps meaning
+        // tier/status; the NUMBER is what says "on the route". That is what
+        // go.html already did, so the desk follows the phone here.
         L.marker([s.lat, s.lng], {
-          icon: discIcon(MINE_COLOUR, s.n, true), zIndexOffset: 1000,
+          icon: discIcon(pinColour(s.lead.lead), s.n, true), zIndexOffset: 1000,
           title: s.n + ". " + (s.lead.lead.businessName || ""),
         }).bindPopup('<b>Stop ' + s.n + '</b>' + leadPopup(s.lead.lead, s.lead.i)).addTo(LROUTE);
       });
@@ -976,6 +1052,16 @@
           : '') +
         '. Planned from <b>' + plan.considered + '</b> of ' + ROWS.length + ' filtered leads.' +
       '</div>' +
+      // CLOSE THE WALKBOX HERE. The stop cards used to be nested INSIDE it, and
+      // .walkbox sets color:#3730a3 with a `.walkbox b{color:#312e81}` for its
+      // own summary numbers. Both inherited straight into the lead cards: every
+      // business name went indigo, and — because `.walkbox b` and `.opp b` have
+      // equal specificity, so the later rule wins — the Opportunity score inside
+      // the green pill rendered dark navy on green while the band label beside
+      // it stayed white. It looked like a colour bug in the badge; it was a
+      // containment bug in the panel. The summary is a panel. The stops are not
+      // part of it, so they no longer live inside it.
+      '</div>' +
       // The whole point of planning at a desk is walking it somewhere else, so
       // this is a primary action ABOVE the stops, not a footnote below them.
       (plan.order.length
@@ -989,12 +1075,18 @@
           '<div class="walkstops">' +
             plan.order.map(function (o) {
               const l = o.lead.lead || o.lead;
-              return '<div class="walkstop"><span class="walkn">' + o.n + '</span>' +
+              // Same colour as this door's pin on the map above and its pin in
+              // Trey Go, so a number you read on the card and a dot you look for
+              // on the map are the same thing. textOn() keeps the digit readable
+              // whatever colour that turns out to be.
+              const c = pinColour(l);
+              return '<div class="walkstop">' +
+                     '<span class="walkn" style="background:' + esc(c) + ';color:' + textOn(c) + '">' +
+                     o.n + '</span>' +
                      leadCard(l, o.lead.i != null ? o.lead.i : 0) + '</div>';
             }).join("") +
           '</div>'
-        : "") +
-      '</div>';
+        : "");
   }
 
   // Saves the current route so go.html can follow it in the street. Only the
