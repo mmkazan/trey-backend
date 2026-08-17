@@ -200,6 +200,7 @@
        the sweep already paid for this data. -->
   <div class="bar">
     <button class="go" onclick="myLeadsNearMe()">My leads near me</button>
+    <button class="go" onclick="todaysPlan()">Today’s plan</button>
     <select id="radius" aria-label="Search radius">
       <option value="150">150m</option>
       <option value="250" selected>250m</option>
@@ -576,6 +577,63 @@ function myLeadsByPostcode(){
 // Show the leads you already have, nearest first, from stored coordinates.
 // ZERO Google calls: no Places search, no map picture. This is the mode for the
 // morning after an Apify sweep — and the only one that works before the key is set.
+// TODAY'S PLAN — the route worked out at the desk, walked here.
+//
+// route.js plans at a desk on a big screen the night before; this follows it in
+// order on the pavement. The plan holds only ids and coordinates, so each stop is
+// looked up in the LIVE leads — a status you changed this morning is right
+// tonight, and the Apify hook renders on every card exactly as it does elsewhere.
+// That hook is the whole reason to walk the list in order: it is the thing to say
+// when the door opens, and it costs no API call.
+async function todaysPlan(){
+  var out=document.getElementById("out");
+  out.innerHTML='<div class="spin">Loading your plan…</div>';
+  try{
+    var r=await fetch(WALK_API+"?plan=1",{headers:{Authorization:"Bearer "+token}});
+    if(r.status===403){ sessionStorage.removeItem("treyAdminToken"); location.reload(); return; }
+    var d=await r.json();
+    if(!d.plan||!d.plan.stops||!d.plan.stops.length){
+      out.innerHTML='<div class="msg"><b>No plan saved yet.</b><br>'+
+        'Plan a walk on the leads page, then press <b>Send to phone</b>.</div>';
+      return;
+    }
+    await loadMyLeads();
+
+    // Match each stop to its live lead. A stop whose lead has since been deleted
+    // still walks — the plan carries its name and coordinates — but it is marked,
+    // because silently dropping a door you meant to knock on is the failure this
+    // codebase keeps making.
+    var missing=0;
+    var cards=d.plan.stops.map(function(st){
+      var live=null;
+      for(var k in MINE){ if(MINE[k] && MINE[k].id===st.id){ live=MINE[k]; break; } }
+      if(!live){ missing++; live={ placeId:"", businessName:st.businessName, address:st.address,
+                                   lat:st.lat, lng:st.lng, category:"", rating:null, reviewCount:0 }; }
+      var c=asCard(live, HERE?metresBetween(HERE,{lat:st.lat,lng:st.lng}):null);
+      c.planN=st.n;
+      return c;
+    });
+
+    POOL=cards; POOL_IS_LIVE=false; RADIUS=0;
+    var when=new Date(d.plan.savedAt);
+    LABEL="your plan \u2014 "+d.plan.stops.length+" doors, about "+d.plan.totalMinutes+" min";
+    render(POOL,0,LABEL);
+    document.getElementById("out").insertAdjacentHTML("afterbegin",
+      '<div class="msg" style="margin-bottom:10px"><b>Today\u2019s plan</b> \u2014 '+
+      d.plan.stops.length+' doors, about '+d.plan.totalMinutes+' minutes, '+
+      (d.plan.distanceMetres>=1000
+        ? (d.plan.distanceMetres/1000).toFixed(1)+'km'
+        : d.plan.distanceMetres+'m')+' of walking. '+
+      'Planned '+esc(when.toLocaleString())+'.'+
+      (missing?'<br><b>'+missing+'</b> stop'+(missing===1?'':'s')+
+        ' no longer match a saved lead \u2014 shown without their hook.':'')+
+      '</div>');
+  }catch(e){
+    out.innerHTML='<div class="msg">Couldn\u2019t load the plan: '+esc(e.message)+
+      '<br><span class="note">If you\u2019re offline, your saved leads still work.</span></div>';
+  }
+}
+
 function myLeadsNearMe(){
   var out=document.getElementById("out");
   if(!navigator.geolocation){ out.innerHTML='<div class="msg">This phone won\'t share its location.</div>'; return; }

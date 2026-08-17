@@ -29,6 +29,19 @@ function store() {
   return getStore({ name: "walks", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
+// THE PLAN, as opposed to the LOG.
+//
+// The log records what happened. This holds what you INTEND to happen: the route
+// route.js worked out at the desk, so the phone can follow it in the street
+// rather than you re-planning it on a pavement with one bar of signal.
+//
+// One current plan per person, overwritten each time — a plan is a thing you
+// make tonight and walk tomorrow, not an archive. Keyed by ownerId so the day
+// there are runners, each carries their own.
+function planStore() {
+  return getStore({ name: "walkplans", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
+}
+
 const dayKey = (who, d) => `${d}:${who}`;
 const today = () => new Date().toISOString().slice(0, 10);
 const clean = (v, max) => String(v == null ? "" : v)
@@ -56,6 +69,54 @@ exports.handler = async (event) => {
   if (!who) return unauthorized();
 
   const s = store();
+
+  // --- the walk PLAN -------------------------------------------------------
+  // GET  ?plan=1            -> the current plan, or null
+  // POST { plan:{...} }     -> save/replace it
+  // POST { clearPlan:true } -> bin it
+  if (event.httpMethod === "GET" && params.plan) {
+    const p = await planStore().get(who.id, { type: "json" }).catch(() => null);
+    return { statusCode: 200, body: JSON.stringify({ plan: p || null }) };
+  }
+
+  if (event.httpMethod === "POST" && body.clearPlan) {
+    await planStore().delete(who.id).catch(() => {});
+    return { statusCode: 200, body: JSON.stringify({ success: true, plan: null }) };
+  }
+
+  if (event.httpMethod === "POST" && body.plan) {
+    const inPlan = body.plan || {};
+    // Store only what the phone needs to walk it. Deliberately NOT the whole
+    // lead record: leads change between planning and walking, and go.html
+    // already holds the live ones — it looks each stop up by id, so a status
+    // changed this morning shows correctly tonight. Coordinates are kept so a
+    // stop still draws if the lead has since been filtered out or purged.
+    const stops = (Array.isArray(inPlan.stops) ? inPlan.stops : []).slice(0, 60).map((x, i) => ({
+      n: i + 1,
+      id: clean(x && x.id, 200),
+      businessName: clean(x && x.businessName, 120),
+      address: clean(x && x.address, 300),
+      lat: Number(x && x.lat), lng: Number(x && x.lng),
+    })).filter((x) => x.id && isFinite(x.lat) && isFinite(x.lng));
+
+    if (!stops.length) {
+      return { statusCode: 400, body: JSON.stringify({ error: "A plan needs at least one stop" }) };
+    }
+
+    const record = {
+      ownerId: who.id,
+      savedAt: new Date().toISOString(),
+      savedBy: who.name || who.id,
+      minutes: Math.max(0, Math.min(600, Number(inPlan.minutes) || 0)),
+      totalMinutes: Math.max(0, Math.min(600, Number(inPlan.totalMinutes) || 0)),
+      distanceMetres: Math.max(0, Number(inPlan.distanceMetres) || 0),
+      totalScore: Math.max(0, Number(inPlan.totalScore) || 0),
+      note: clean(inPlan.note, 200),
+      stops,
+    };
+    await planStore().setJSON(who.id, record);
+    return { statusCode: 200, body: JSON.stringify({ success: true, plan: record }) };
+  }
 
   if (event.httpMethod === "POST") {
     const kind = String(body.event || "").toLowerCase();

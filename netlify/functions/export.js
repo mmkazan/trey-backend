@@ -43,7 +43,7 @@ const ALL_STORES = [
   // the product can reconstruct it. It was in no backup, and because restore.js
   // iterates this same list, a hand-edited backup containing it was discarded
   // as an "unrecognised store". "config" and "runlog" were missing too.
-  "walks", "config", "runlog", "messagestatus",
+  "walks", "walkplans", "config", "runlog", "messagestatus",
 ];
 
 // A per-store ceiling so one enormous store can't blow the function's time limit

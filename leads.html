@@ -282,6 +282,7 @@
 <script>
   const API = "/.netlify/functions/leads";
   const NEARBY_API = "/.netlify/functions/nearby";
+  const WALK_API = "/.netlify/functions/walk";
   // "Come back" is the most common outcome of a cold knock — the owner wasn't in.
   // Without it that door is either wrongly marked Contacted or left as New and
   // forgotten, and it's the one you most need to find again tomorrow.
@@ -920,6 +921,7 @@
     });
 
     const plan = TreyRoute.planWalk(start, cands, mins);
+    plan.minutes = mins;   // what it was planned FOR, for the phone
     WALK = plan;
     document.getElementById("walkClear").style.display = "";
 
@@ -955,16 +957,50 @@
           ' · total score <b>' + plan.totalScore + '</b>'
         : '<b>No walk fits ' + mins + ' minutes from here.</b> Pan closer to your leads, or give it longer.') +
       '<div class="mapnote" style="margin:7px 0 0;">' +
-        'Left out: <b>' + plan.dropped.length + '</b> that wouldn\'t fit the budget (or were too far to walk to)' +
+        // "Budget" meant TIME, and read as money in a sales tool. Say minutes.
+        'Left out: <b>' + plan.dropped.length + '</b> that wouldn\'t fit in ' + mins +
+        ' minutes, or sat too far apart to walk between' +
         (plan.skipped.length
-          ? ', <b>' + plan.skipped.length + '</b> that couldn\'t be planned at all — ' + esc(reasons)
+          ? '; <b>' + plan.skipped.length + '</b> that couldn\'t be placed on the map at all — ' + esc(reasons)
           : '') +
-        '. <b>' + plan.considered + '</b> of ' + ROWS.length + ' filtered leads were considered.' +
+        '. Planned from <b>' + plan.considered + '</b> of ' + ROWS.length + ' filtered leads.' +
       '</div>' +
       (plan.order.length
-        ? '<ol>' + plan.order.map(s => '<li>' + esc(s.lead.lead.businessName || "—") + "</li>").join("") + "</ol>"
+        ? '<ol>' + plan.order.map(s => '<li>' + esc(s.lead.lead.businessName || "—") + "</li>").join("") + "</ol>" +
+          // The whole point of planning at a desk is walking it somewhere else.
+          '<button class="btn-secondary" onclick="sendWalkToPhone()">Send to phone</button> ' +
+          '<span class="muted" id="walkSent">Opens under “Today’s plan” in Trey Go.</span>'
         : "") +
       '</div>';
+  }
+
+  // Saves the current route so go.html can follow it in the street. Only the
+  // ids, names, addresses and coordinates travel — go.html looks each stop up
+  // in its own live leads, so a status changed tomorrow morning is still right.
+  async function sendWalkToPhone(){
+    if (!WALK || !WALK.order || !WALK.order.length) return;
+    const note = document.getElementById("walkSent");
+    note.textContent = "Sending…";
+    try {
+      const res = await fetch(WALK_API, { method:"POST",
+        headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
+        body: JSON.stringify({ plan: {
+          minutes: WALK.minutes,
+          totalMinutes: WALK.totalMinutes,
+          distanceMetres: WALK.distanceMetres,
+          totalScore: WALK.totalScore,
+          stops: WALK.order.map(function(o){
+            const l = o.lead.lead || o.lead;
+            return { id: l.id, businessName: l.businessName, address: l.address,
+                     lat: o.lat, lng: o.lng };
+          })
+        }})});
+      if (res.status === 403) { logout(); return; }
+      const d = await res.json();
+      note.textContent = d && d.success
+        ? "Sent \u2014 open Trey Go and choose “Today’s plan”."
+        : "Couldn't send: " + esc((d && d.error) || "unknown error");
+    } catch(e){ note.textContent = "Couldn't send: " + esc(e.message); }
   }
 
   function clearWalk(why){
