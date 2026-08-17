@@ -1,6 +1,14 @@
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
-const { linkKey, secretConfigured } = require("./link-keys");
+const { linkKey, linkValid, secretConfigured } = require("./link-keys");
+// Normalise a stored phone number to E.164 for Twilio at SEND time as well as
+// on write, so records already saved with a display space are fixed with no
+// data migration. 15 Aug: Raven Holistics' first review alert died on Twilio
+// 21211, "The 'To' number whatsapp:+44 7933189216 is not a valid phone number."
+//
+// This was a LOCAL copy until 17 Aug. Eight copies existed and four had drifted
+// — see phone.js, which is now the only one.
+const { toE164 } = require("./phone");
 
 // --- Which plan is this client on? -------------------------------------------
 //   "standard" -> £35/mo (the default for everyone else)
@@ -46,44 +54,6 @@ function payLinkFor(client) {
     return standard;
   }
   return standard;
-}
-
-
-// Normalise a stored phone number to E.164 for Twilio.
-//
-// WHY — 15 Aug, Raven Holistics' first real review alert died on Twilio 21211,
-// "The 'To' number whatsapp:+44 7933189216 is not a valid phone number." The
-// self-serve signup form formats numbers for READING ("+44 7933189216"), and
-// that single space is enough for Twilio to reject the send. Every outbound
-// WhatsApp to a self-serve signup was affected; it only surfaced now because
-// Naomi is the first. Admin-created clients had numbers typed without a space.
-//
-// Normalising at SEND time as well as on write means records already saved with
-// a space are fixed too, with no data migration.
-function toE164(phone) {
-  const raw = String(phone || "").trim();
-  if (!raw) return "";
-  // "(0)" is the international convention for an OPTIONAL trunk digit — it is
-  // never part of an E.164 number. "+44 (0)7933 189216" is how a large share of
-  // UK businesses write their number; stripping non-digits naively yields
-  // "+4407933189216", which Twilio rejects with 21211 and the owner never finds
-  // out, because their review alerts simply stop arriving. Same trap for
-  // "+353 (0)86…". Remove it before anything else.
-  const cleaned = raw.replace(/\(\s*0\s*\)/g, "");
-  const d = cleaned.replace(/[^\d]/g, "");
-  if (!d) return "";
-  // A trunk 0 written straight after the country code ("+44 07933…") is the
-  // same mistake without the brackets. No UK subscriber number begins with 0,
-  // so "440…" is always a trunk zero, never a real number.
-  if (cleaned.startsWith("+")) return d.startsWith("440") ? "+44" + d.slice(3) : "+" + d;
-  if (d.startsWith("00")) {
-    const rest = d.slice(2);
-    return rest.startsWith("440") ? "+44" + rest.slice(3) : "+" + rest;
-  }
-  if (d.startsWith("0")) return "+44" + d.slice(1);   // UK national
-  if (d.startsWith("440")) return "+44" + d.slice(3);
-  if (d.startsWith("44")) return "+" + d;
-  return "+" + d;
 }
 
 
@@ -343,24 +313,71 @@ function locationFromPath(event) {
 // Returns the normalised href if this is a safe Google review destination,
 // otherwise null. Split out so the tag's own parameter and the link stored on
 // the client record cannot drift apart in what they accept.
+//
+// WHY THIS IS HOST-AND-PATH, NOT "*.google.com" (17 Aug 2026)
+// The allow-list used to accept every google.com subdomain. google.com is not
+// one site — it is a hosting provider. Two of its subdomains serve arbitrary
+// third-party content on a google.com origin:
+//
+//   sites.google.com/view/<anything>          — a page anyone can publish
+//   script.google.com/macros/s/<id>/exec      — an Apps Script anyone can deploy
+//
+// and googleReviewUrl is accepted from the PUBLIC signup form. So a crafted
+// signup could point a real shop's stand at a phishing page whose address bar
+// says google.com — the most convincing possible place to ask a customer for
+// their Google password, reached by tapping a stand that shop trusts.
+//
+// The fix is to name the handful of host+path pairs that actually serve a review
+// or a map, and refuse everything else. Anything not on this list — including a
+// google.com subdomain Google adds next year — falls through to the constructed
+// writereview URL, which is safe.
+const GOOGLE_TARGETS = [
+  // host                  // is this path a review/map destination?
+  ["search.google.com", (p) => p === "/local/writereview" || p.startsWith("/local/writereview/")],
+  ["www.google.com", (p) => p === "/maps" || p.startsWith("/maps/")],
+  ["maps.google.com", (p) => p === "/maps" || p.startsWith("/maps/")],
+  ["google.com", (p) => p === "/maps" || p.startsWith("/maps/")],
+  // The Google Business Profile short link ("g.page/r/<id>/review") and the
+  // Maps share link. Both resolve only to Google-owned destinations, unlike the
+  // general goo.gl shortener, which stays excluded because it can be pointed
+  // anywhere.
+  ["g.page", () => true],
+  ["maps.app.goo.gl", () => true],
+];
+
+// Named explicitly so the reason is written down at the point of refusal, not
+// merely implied by absence. If someone widens the list above in a hurry, these
+// still say no.
+const GOOGLE_CONTENT_HOSTS = ["sites.", "script.", "docs.", "drive.", "groups."];
+
 function allowedGoogleUrl(candidate) {
   if (!candidate) return null;
   try {
     const u = new URL(String(candidate).trim());
     const host = u.hostname.toLowerCase();
-    // Google review/maps hosts only. Note: goo.gl (a link shortener) is
-    // deliberately excluded, and Google's own /url?q= open-redirector is
-    // rejected below — both could otherwise bounce a visitor to any site.
-    const okHost =
-      host === "google.com" || host.endsWith(".google.com") ||
-      host === "g.page" || host.endsWith(".g.page");
+
+    // https only. A javascript: or data: "URL" parses perfectly happily.
+    if (u.protocol !== "https:") return null;
+
+    // User-content subdomains, refused by name whatever else changes here.
+    if (GOOGLE_CONTENT_HOSTS.some((p) => host.startsWith(p))) return null;
+
     // Google hosts several ways to bounce onward. An exact "/url" match is not
     // enough: "//url", "/url/" and the AMP viewer "/amp/s/<anything>" all reach
     // the same place. Normalise duplicate slashes before testing, and reject the
-    // AMP path outright.
+    // AMP path outright. Kept even though no host below permits those paths —
+    // it is the check that stops a future widening reopening the open redirect.
     const path = u.pathname.replace(/\/{2,}/g, "/");
     const isRedirector = /^\/url\/?$/.test(path) || /^\/amp(\/|$)/.test(path);
-    if (u.protocol === "https:" && okHost && !isRedirector) return u.href;
+    if (isRedirector) return null;
+
+    // Exact host match, then the path test for that host. `.endsWith(".g.page")`
+    // is the one wildcard, because the Business Profile short links are issued
+    // under it and every one of them is Google's own.
+    for (const [okHost, pathOk] of GOOGLE_TARGETS) {
+      const hostMatches = host === okHost || (okHost === "g.page" && host.endsWith(".g.page"));
+      if (hostMatches && pathOk(path)) return u.href;
+    }
   } catch (e) { /* not a valid absolute URL — fall through */ }
   return null;
 }
@@ -420,12 +437,45 @@ function treyMarkSvg(size) {
 // (in the customer's hands, or in transit). Reassures a delivery driver, shows
 // who the package is for, and lets the OWNER start their trial. The button POSTs
 // (never a GET link) so a scanner/bot pre-fetch cannot trigger activation.
+//
+// THE POST ALSO CARRIES A SIGNED KEY (added 17 Aug 2026). POST-only stopped a
+// GET pre-fetch; it did not stop `curl -X POST`. The locationId is printed on
+// the stand and encoded in the QR, so anyone who has seen either could start a
+// stranger's trial while the stand was still in the courier's van — and the
+// clock would run out before it was ever plugged in, which is precisely the
+// failure trialStartsOnTap exists to prevent.
+//
+// WHAT THE KEY DOES AND DOES NOT STOP — worth being honest about, because the
+// key is minted into this page and anyone served this page therefore holds it:
+//   STOPS  a blind POST from someone who knows only the locationId (a photo of
+//          a stand, a QR decoded off a listing, an id copied from a screenshot),
+//          and any drive-by/automated POST against enumerated ids.
+//   DOES NOT STOP  someone who can already fetch this page for that location.
+// That residual is bounded: this page is only ever served BEFORE activation, so
+// the window is manufacture-to-first-tap and the audience is Trey, the courier
+// and the owner. Once activated it is never served again.
+//
+// It reuses the "inbox" purpose rather than minting a new one. That is a
+// deliberate reuse of the capability the owner legitimately holds anyway (their
+// welcome email contains it) — and it means link-keys.js needs no change.
 function activationPage(client, locationId) {
   const name = escapeHtml((client && client.businessName) || "your business");
+  // The noun, not a guess. A key-fob customer used to read "Activate my stand"
+  // here and then get a WhatsApp saying "Your Trey key fob is live".
+  const hw = escapeHtml(activationCopy(client, locationId).hw);
   const logoUrl = client && client.logoUrl ? escapeHtml(client.logoUrl) : "";
   const logoChip = logoUrl ? `<div class="lchip"><img src="${logoUrl}" alt="${name}"></div>` : "";
   const action = `/.netlify/functions/tap?locationId=${encodeURIComponent(locationId)}&activate=1`;
-  const body = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Activate your Trey stand</title>
+  // linkKey THROWS when TREY_REPORT_SECRET is unset, by design. Catch it here so
+  // a missing secret shows the page with an unusable key (and the POST refuses)
+  // rather than 500-ing the courier's screen. Fails CLOSED, and shouts.
+  let activationKey = "";
+  try {
+    activationKey = linkKey("inbox", locationId);
+  } catch (e) {
+    console.error("[tap] cannot mint an activation key — activation will refuse:", e && e.message);
+  }
+  const body = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Activate your Trey ${hw}</title>
 <style>
  *{box-sizing:border-box}
  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#eef3fc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:22px}
@@ -456,9 +506,9 @@ function activationPage(client, locationId) {
    <div class="recipient">${logoChip}<div class="bizname">${name}</div></div>
    <div class="card">
      <h1>Is this you, ${name}? &#128075;</h1>
-     <p>Your Trey stand is ready. Press the button below to start your <b>${trialDaysFor(client)}-day free trial</b> &mdash; the countdown only begins now, not while it was in the post.</p>
-     <form method="POST" action="${action}"><button class="btn" type="submit">Activate my stand &rarr;</button></form>
-     <div class="fine">Only press this once your stand is set up and ready for customers.</div>
+     <p>Your Trey ${hw} is ready. Press the button below to start your <b>${trialDaysFor(client)}-day free trial</b> &mdash; the countdown only begins now, not while it was in the post.</p>
+     <form method="POST" action="${action}"><input type="hidden" name="k" value="${escapeHtml(activationKey)}"><button class="btn" type="submit">Activate my ${hw} &rarr;</button></form>
+     <div class="fine">Only press this once your ${hw} is set up and ready for customers.</div>
    </div>
    <!-- DELIBERATE ORDER: the dismiss button is the LOWEST control on the page.
         On a phone the bottom of the screen is where the system back/gesture bar
@@ -485,6 +535,33 @@ function activationPage(client, locationId) {
  <\/script>
 </body></html>`;
   return { statusCode: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }, body };
+}
+
+// Read a form-encoded POST body. Same shape as twilio-status.js and
+// whatsapp-inbound.js: Netlify base64-encodes some bodies, and a body that
+// isn't form-encoded must yield {} rather than throw on an unauthenticated
+// request.
+function formBody(event) {
+  const raw = event && event.isBase64Encoded && event.body
+    ? Buffer.from(event.body, "base64").toString("utf8")
+    : (event && event.body) || "";
+  const out = {};
+  try { for (const [k, v] of new URLSearchParams(raw).entries()) out[k] = v; } catch (e) { /* not form-encoded */ }
+  return out;
+}
+
+// Shown when an activate POST arrives without a valid key — i.e. someone POSTed
+// straight at the endpoint rather than pressing the button on the page. Uses the
+// same shape as the "That didn't go through" page below so a genuine owner who
+// hits it (an expired tab after a secret rotation) gets a next step, not a dead
+// end. Deliberately vague about WHY: a precise error is a hint to whoever is
+// probing.
+function activationRefusedPage() {
+  return {
+    statusCode: 403,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+    body: `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Try again</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#eef3fc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;text-align:center;"><div style="max-width:400px;"><div style="font-size:38px;">&#9888;&#65039;</div><h1 style="font-size:20px;margin:10px 0 8px;">We couldn't switch this stand on</h1><p style="color:#475569;font-size:15px;line-height:1.55;">Please tap your stand again and press Activate on the page it opens. If it keeps happening, email <a href="mailto:info@trey.today" style="color:#4338ca;">info@trey.today</a>.</p></div></body></html>`,
+  };
 }
 
 // Shown right after the owner presses Activate — trial has started, stand is live.
@@ -652,6 +729,18 @@ exports.handler = async (event) => {
   // link-preview bot or NFC scanner pre-fetch — always a GET — can never trigger
   // it). The first activation stamps the trial start and switches the stand live.
   if (event.httpMethod === "POST" && params.activate === "1") {
+    // …and it must carry the signed key minted into the activation form. Without
+    // this, `curl -X POST '/t/<loc>?activate=1'` starts a stranger's trial while
+    // their stand is still in the post — see the note above activationPage().
+    // The key normally arrives in the form body; the query string is accepted
+    // too so an owner-held signed link keeps working. Checked BEFORE the
+    // notStarted branch so the already-live redirect can't be used as an oracle
+    // for whether a locationId is real.
+    const providedKey = formBody(event).k || params.k || "";
+    if (!linkValid("inbox", locationId, providedKey)) {
+      console.warn(`[tap] activation REFUSED for "${locationId}" — missing or invalid key.`);
+      return activationRefusedPage();
+    }
     if (notStarted && client) {
       try {
         await clientsStore.setJSON(locationId, { ...client, trialStartedAt: new Date().toISOString() });

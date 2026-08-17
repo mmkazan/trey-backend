@@ -48,7 +48,11 @@ exports.handler = async (event) => {
   let body = {};
   if (event.body) { try { body = JSON.parse(event.body); } catch (e) { /* ignore */ } }
   const params = (event && event.queryStringParameters) || {};
-  const who = adminIdentity(event, body, params);
+  // No `params` argument: the admin token must come from the Authorization
+  // header or the POST body, NEVER the query string. A token in a URL lands in
+  // Netlify's request logs, browser history and any Referer — and this endpoint
+  // returns the walk log.
+  const who = adminIdentity(event, body);
   if (!who) return unauthorized();
 
   const s = store();

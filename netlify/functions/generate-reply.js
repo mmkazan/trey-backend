@@ -9,8 +9,19 @@ exports.handler = async (event, context) => {
   // Internal-only endpoint: called server-to-server by review-webhook. Require
   // the shared secret (sent as the X-Trey-Internal header) so this isn't an
   // open Gemini proxy anyone can call to burn the API key.
+  // FAILS CLOSED, changed 17 Aug 2026. This was the third copy of the pattern
+  // review-webhook.js and stripe-webhook.js were both fixed to remove on 15 Aug:
+  //     if (secret) { enforce } else { warn and carry on }
+  // With the var unset, the "else" is the branch that runs — and this endpoint
+  // is a Gemini proxy, so that is a free public LLM endpoint with no rate limit
+  // whose only signal would be the API bill. The var is set today; the guard
+  // was one Netlify deletion away from being worthless.
   const internalSecret = process.env.TREY_TAPPY_SECRET_TOKEN;
-  if (internalSecret) {
+  if (!internalSecret) {
+    console.error("[generate-reply] TREY_TAPPY_SECRET_TOKEN is not set — refusing all requests.");
+    return { statusCode: 500, body: JSON.stringify({ error: "Not configured" }) };
+  }
+  {
     const h = event.headers || {};
     const provided = h["x-trey-internal"] || h["X-Trey-Internal"] || "";
     const a = Buffer.from(String(provided)), b = Buffer.from(String(internalSecret));
@@ -18,8 +29,6 @@ exports.handler = async (event, context) => {
     if (!ok) {
       return { statusCode: 403, body: JSON.stringify({ error: "Unauthorized" }) };
     }
-  } else {
-    console.warn("[generate-reply] TREY_TAPPY_SECRET_TOKEN not set — endpoint is unauthenticated.");
   }
 
   try {

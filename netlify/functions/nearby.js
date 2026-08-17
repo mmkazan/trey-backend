@@ -483,58 +483,124 @@ exports.handler = async (event) => {
   // for 30 days (see leads.js), so this is roughly a monthly cost per lead, not
   // a per-page-view one.
   if (body.action === "locate") {
-    const ids = (Array.isArray(body.placeIds) ? body.placeIds : [])
-      .map((x) => String(x || "").trim()).filter(Boolean).slice(0, 60);
-    if (!ids.length) return { statusCode: 400, body: JSON.stringify({ error: "No placeIds given" }) };
-    const key = process.env.GOOGLE_PLACES_API_KEY;
-    if (!key) return { statusCode: 200, body: JSON.stringify({ error: "GOOGLE_PLACES_API_KEY is not set", config: true }) };
+    // GEOCODING WITHOUT GOOGLE (rewritten 17 Aug 2026).
+    //
+    // This used to resolve coordinates from a place_id via the Places API. That
+    // made every coordinate GOOGLE MAPS CONTENT, and the Maps Platform Service
+    // Specific Terms §10.2 say plainly:
+    //
+    //   "Customer must not use Google Maps Content from the Places API in
+    //    conjunction with a non-Google map."
+    //
+    // The maps are Leaflet + OpenStreetMap now, so Places-derived coordinates
+    // could not lawfully be drawn on them. Rather than give up the interactive
+    // map, the coordinates changed source.
+    //
+    // The leads' ADDRESSES came from the Apify sweep, not from Google's APIs, so
+    // they are ours to geocode however we like. Geocoding them with open data
+    // produces coordinates that are not Google Maps Content at all — which fixes
+    // the terms problem AND means the 30-day deletion rule stops applying (see
+    // geoExpired in leads.js). It is also free, where Places charged per lead per
+    // month.
+    //
+    //   1. Nominatim (OpenStreetMap) on the full address -> building-level.
+    //   2. postcodes.io (ONS/OS open data) on the postcode -> centroid, ~100m.
+    //
+    // Provenance is recorded on every result as geoSource so the page can show
+    // which pins are precise and which are a postcode blob. Drawing a centroid
+    // as though it were a shopfront would be the same dishonesty as the map
+    // error that cost an evening.
+    const items = (Array.isArray(body.items) ? body.items : [])
+      .map((x) => ({
+        id: String((x && x.id) || "").trim(),
+        address: String((x && x.address) || "").trim().slice(0, 300),
+        postcode: String((x && x.postcode) || "").trim().slice(0, 12),
+      }))
+      .filter((x) => x.id && (x.address || x.postcode))
+      .slice(0, 40);
+
+    if (!items.length) {
+      return { statusCode: 400, body: JSON.stringify({ error: "No addresses given" }) };
+    }
 
     const found = {};
     const failed = [];
-    let cursor = 0;
 
-    // A Netlify synchronous function is killed at 10 seconds. The first version
-    // of this ran the lookups STRICTLY SEQUENTIALLY, which meant 60 places at
-    // even 200ms each blew the budget and the whole call died — returning
-    // nothing, having spent the money anyway. Found the moment it met a real
-    // list of 286 leads.
-    //
-    // So: a few at a time, and a hard deadline. Whatever is done by then comes
-    // back; the rest is reported as not attempted so the page can ask again.
-    // Partial and honest beats complete and dead.
+    // NOMINATIM'S USAGE POLICY IS A HARD 1 REQUEST PER SECOND, and it asks for a
+    // real identifying User-Agent. Both are conditions of the free service, not
+    // suggestions — parallelising this would get Trey blocked, which is why the
+    // worker-pool pattern used elsewhere in this file is deliberately NOT used
+    // here. One at a time, a second apart.
+    const UA = "Trey/1.0 (https://trey.today; info@trey.today)";
+    const RATE_MS = 1100;
     const DEADLINE = Date.now() + 7000;
-    const CONCURRENCY = 6;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    async function worker() {
-      while (true) {
-        if (Date.now() > DEADLINE) return;
-        const i = cursor++;
-        if (i >= ids.length) return;
-        const id = ids[i];
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 4000);
-          const r = await fetch(`${PLACES_BASE}/places/${encodeURIComponent(id)}`, {
-            headers: { "X-Goog-Api-Key": key, "X-Goog-FieldMask": "id,location" },
-            signal: ctrl.signal,
-          });
-          clearTimeout(timer);
-          const d = await r.json().catch(() => ({}));
-          if (r.ok && d && d.location) found[id] = { lat: d.location.latitude, lng: d.location.longitude };
-          else failed.push(id);
-        } catch (e) { failed.push(id); }
-      }
+    async function viaAddress(addr) {
+      const u = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=gb&q=" +
+        encodeURIComponent(addr);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const r = await fetch(u, { headers: { "User-Agent": UA, "Accept-Language": "en-GB" }, signal: ctrl.signal });
+        if (!r.ok) return null;
+        const d = await r.json().catch(() => null);
+        if (!Array.isArray(d) || !d.length) return null;
+        const lat = Number(d[0].lat), lng = Number(d[0].lon);
+        if (!isFinite(lat) || !isFinite(lng)) return null;
+        return { lat, lng, geoSource: "address" };
+      } catch (e) { return null; } finally { clearTimeout(timer); }
     }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
 
-    const attempted = Object.keys(found).length + failed.length;
-    // Never quietly return fewer pins than were asked for.
-    return { statusCode: 200, body: JSON.stringify({
-      found, foundCount: Object.keys(found).length, failed,
-      requested: ids.length,
-      notAttempted: Math.max(0, ids.length - attempted),
-      capped: (body.placeIds || []).length > 60,
-    }) };
+    // Pulls a UK postcode out of whatever it's given — a bare postcode, or a full
+    // address with one on the end. Anchored to the END so "The Limited Edition,
+    // 12 Sadler Gate, Derby DE1 3NQ" yields DE13NQ and not something from the
+    // street name.
+    function extractPostcode(text) {
+      const m = String(text || "").toUpperCase()
+        .match(/([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\s*$/);
+      return m ? (m[1] + m[2]) : "";
+    }
+
+    async function viaPostcode(pc) {
+      const clean = extractPostcode(pc);
+      if (clean.length < 5) return null;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3000);
+      try {
+        const r = await fetch("https://api.postcodes.io/postcodes/" + encodeURIComponent(clean),
+          { headers: { "User-Agent": UA }, signal: ctrl.signal });
+        if (!r.ok) return null;
+        const d = await r.json().catch(() => null);
+        const res = d && d.result;
+        if (!res || !isFinite(Number(res.latitude)) || !isFinite(Number(res.longitude))) return null;
+        return { lat: Number(res.latitude), lng: Number(res.longitude), geoSource: "postcode" };
+      } catch (e) { return null; } finally { clearTimeout(timer); }
+    }
+
+    let attempted = 0;
+    for (const it of items) {
+      // Stop starting new work rather than getting killed mid-flight. Whatever
+      // is done comes back; the rest is reported so the page can ask again.
+      if (Date.now() > DEADLINE) break;
+      attempted++;
+      let hit = it.address ? await viaAddress(it.address) : null;
+      if (!hit) hit = await viaPostcode(it.postcode || it.address);
+      if (hit) found[it.id] = hit;
+      else failed.push({ id: it.id, reason: "no match for the address or postcode" });
+      await sleep(RATE_MS);
+    }
+
+    const notAttempted = items.length - attempted;
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        found,
+        failed,
+        notAttempted,
+        attribution: "Geocoding \u00a9 OpenStreetMap contributors (Nominatim) and postcodes.io (ONS/OS, Open Government Licence)",
+      }),
+    };
   }
 
   // --- A picture for a set of points already in hand ---------------------------

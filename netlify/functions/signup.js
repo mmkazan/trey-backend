@@ -13,41 +13,20 @@
 const { getStore } = require("@netlify/blobs");
 const crypto = require("crypto");
 const { linkKey, secretConfigured } = require("./link-keys");
+// Store phone numbers in E.164, never the pretty display format. signup.html
+// formats as you type ("+44 7933189216") because that reads better in the box —
+// but that space is a hard failure at Twilio (21211, "not a valid phone
+// number"). It killed Raven Holistics' first review alert on 15 Aug. Format for
+// humans on screen; store the machine form.
+//
+// This was a LOCAL copy until 17 Aug. There were eight copies of toE164() and
+// four had drifted — see phone.js. A normaliser that differs between the write
+// path (here) and the send path is a silent delivery failure, so there is now
+// exactly one.
+const { toE164 } = require("./phone");
 
 function blobsStore(name) {
   return getStore({ name, siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
-}
-
-// Store phone numbers in E.164, never the pretty display format.
-//
-// signup.html formats as you type ("+44 7933189216") because that reads better
-// in the box — but that space is a hard failure at Twilio (21211, "not a valid
-// phone number"). It killed Raven Holistics' first review alert on 15 Aug.
-// Format for humans on screen; store the machine form.
-function toE164(phone) {
-  const raw = String(phone || "").trim();
-  if (!raw) return "";
-  // "(0)" is the international convention for an OPTIONAL trunk digit — it is
-  // never part of an E.164 number. "+44 (0)7933 189216" is how a large share of
-  // UK businesses write their number; stripping non-digits naively yields
-  // "+4407933189216", which Twilio rejects with 21211 and the owner never finds
-  // out, because their review alerts simply stop arriving. Same trap for
-  // "+353 (0)86…". Remove it before anything else.
-  const cleaned = raw.replace(/\(\s*0\s*\)/g, "");
-  const d = cleaned.replace(/[^\d]/g, "");
-  if (!d) return "";
-  // A trunk 0 written straight after the country code ("+44 07933…") is the
-  // same mistake without the brackets. No UK subscriber number begins with 0,
-  // so "440…" is always a trunk zero, never a real number.
-  if (cleaned.startsWith("+")) return d.startsWith("440") ? "+44" + d.slice(3) : "+" + d;
-  if (d.startsWith("00")) {
-    const rest = d.slice(2);
-    return rest.startsWith("440") ? "+44" + rest.slice(3) : "+" + rest;
-  }
-  if (d.startsWith("0")) return "+44" + d.slice(1);   // UK national
-  if (d.startsWith("440")) return "+44" + d.slice(3);
-  if (d.startsWith("44")) return "+" + d;
-  return "+" + d;
 }
 
 // Replace ASCII control characters with spaces, collapse whitespace, trim, cap.
@@ -63,6 +42,148 @@ function clean(v, max) {
 }
 function slugify(s) {
   return (String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28) || "business");
+}
+
+// ---- Abuse limits ----------------------------------------------------------
+//
+// WHY THIS EXISTS (17 Aug 2026)
+// This is a fully public, unauthenticated endpoint and its ONLY defence was the
+// honeypot below — which stops a naive form-filler and nothing else. Every
+// accepted request does two things an attacker wants:
+//
+//   1. Sends a Resend email to an ATTACKER-SUPPLIED address, with an
+//      attacker-influenced subject ("You're all set, <their first name>"), FROM
+//      a domain carrying real DKIM and a strict DMARC alignment. That is a
+//      mail-bomb aimed at a third party and a phishing template — both burnt
+//      out of TREY'S OWN sending reputation. Losing hello@trey.today to a
+//      blocklist takes every welcome email, review alert and report with it.
+//   2. Writes a permanent client record flagged needsReview:true, so the admin
+//      review queue fills with rubbish and a real signup is lost inside it.
+//
+// A token bucket per IP plus a global daily ceiling. The bucket is the right
+// shape here rather than a fixed window: a genuine person who mistypes and
+// resubmits twice is unaffected, while a script gets a hard ceiling.
+const RATE_STORE = "signuprate";
+const IP_BUCKET_CAPACITY = 5;              // burst, and the hourly allowance
+const IP_BUCKET_REFILL_MS = 60 * 60 * 1000; // time to refill the bucket from empty
+// The global ceiling is the Resend-quota backstop: 5/IP stops one attacker, it
+// does not stop a botnet with a thousand of them. 100/day is roughly an order of
+// magnitude above any real day Trey has ever had, so it can only ever bite
+// during an attack — and if it ever bites legitimately, that is a very good
+// problem and the constant is one deploy away.
+const GLOBAL_DAILY_CAP = 100;
+// Same address signing up twice in a day gets ONE welcome email. Stops the
+// endpoint being used to bomb a single inbox even from rotating IPs.
+const EMAIL_DEDUPE_MS = 24 * 60 * 60 * 1000;
+
+// Netlify sets x-nf-client-connection-ip from the actual TCP peer, so it cannot
+// be spoofed by a header. x-forwarded-for CAN be, and is only a fallback for
+// local/dev invocation — first entry, because the left-most hop is the client.
+function clientIp(event) {
+  const h = (event && event.headers) || {};
+  const direct = h["x-nf-client-connection-ip"] || h["X-NF-Client-Connection-IP"];
+  if (direct) return String(direct).trim();
+  const xff = h["x-forwarded-for"] || h["X-Forwarded-For"] || "";
+  return String(xff).split(",")[0].trim();
+}
+
+// Hash before it becomes a blob key. Two reasons: an IPv6 address and an email
+// address are both awkward as key literals, and both are personal data under
+// GDPR — an abuse counter has no business being a readable log of who visited.
+// The digest is all the limiter ever needs.
+function rateKey(prefix, value) {
+  return prefix + ":" + crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 32);
+}
+
+/**
+ * Consume one token for this IP and one from today's global allowance.
+ *
+ * FAILS OPEN, deliberately, and ONLY when the rate store itself is unreadable.
+ * A Netlify Blobs outage must not take the signup form down with it — refusing
+ * real businesses to prevent a hypothetical attacker is the wrong trade for a
+ * product whose entire funnel is this one form. It shouts into the log when that
+ * happens so a silent unlimited window is at least a visible one.
+ *
+ * The read-modify-write is not atomic and Blobs is eventually consistent, so a
+ * burst of simultaneous requests can slip a few over the line. That is fine: the
+ * job is to turn "unbounded" into "bounded", not to be exact.
+ *
+ * @returns {Promise<{allowed:boolean, reason:string}>} reason is "ip" | "global" | ""
+ */
+async function consumeRateToken(event) {
+  const store = blobsStore(RATE_STORE);
+  const now = Date.now();
+  const ip = clientIp(event);
+  const ipKey = rateKey("ip", ip || "unknown");
+  const dayKey = "global:" + new Date(now).toISOString().slice(0, 10);
+
+  let bucket, day;
+  try {
+    bucket = await store.get(ipKey, { type: "json" });
+    day = await store.get(dayKey, { type: "json" });
+  } catch (e) {
+    console.error("[signup] RATE STORE UNREADABLE — failing OPEN, signups are unlimited until this clears:", e && e.message);
+    return { allowed: true, reason: "" };
+  }
+
+  // Refill continuously rather than on a window boundary, so an attacker can't
+  // line up two full buckets either side of the tick.
+  const prevTokens = bucket && Number.isFinite(Number(bucket.tokens)) ? Number(bucket.tokens) : IP_BUCKET_CAPACITY;
+  const prevAt = bucket && Number(bucket.updatedAt) ? Number(bucket.updatedAt) : now;
+  const elapsed = Math.max(0, now - prevAt);
+  const refilled = Math.min(IP_BUCKET_CAPACITY, prevTokens + (elapsed / IP_BUCKET_REFILL_MS) * IP_BUCKET_CAPACITY);
+
+  if (refilled < 1) {
+    console.warn(`[signup] rate limit hit for ip hash ${ipKey}`);
+    return { allowed: false, reason: "ip" };
+  }
+
+  const dayCount = day && Number.isFinite(Number(day.count)) ? Number(day.count) : 0;
+  if (dayCount >= GLOBAL_DAILY_CAP) {
+    console.error(`[signup] GLOBAL daily cap of ${GLOBAL_DAILY_CAP} reached — distributed signup abuse is likely. Check the review queue.`);
+    return { allowed: false, reason: "global" };
+  }
+
+  // A failed WRITE must not block the signup either — the customer has done
+  // nothing wrong, and the worst case is one uncounted request.
+  try {
+    await store.setJSON(ipKey, { tokens: refilled - 1, updatedAt: now });
+    await store.setJSON(dayKey, { count: dayCount + 1, updatedAt: now });
+  } catch (e) {
+    console.error("[signup] rate counter write failed (allowing the signup):", e && e.message);
+  }
+  return { allowed: true, reason: "" };
+}
+
+/**
+ * Has this email address already had a welcome email in the last 24h?
+ *
+ * The RECORD is still written when this returns true — the admin needs to see a
+ * duplicate submission, and swallowing it would hide the abuse. Only the send is
+ * skipped, because the send is the part that reaches a stranger's inbox.
+ *
+ * Fails OPEN (returns false, i.e. "send it") for the same reason as above: a
+ * blob outage must not cost a genuine first customer their welcome email.
+ */
+async function welcomeEmailAlreadySent(email) {
+  const addr = String(email || "").trim().toLowerCase();
+  if (!addr) return false;
+  const store = blobsStore(RATE_STORE);
+  const key = rateKey("email", addr);
+  try {
+    const seen = await store.get(key, { type: "json" });
+    const at = seen && Number(seen.at);
+    if (at && Date.now() - at < EMAIL_DEDUPE_MS) return true;
+  } catch (e) {
+    console.error("[signup] email dedupe read failed — sending anyway:", e && e.message);
+    return false;
+  }
+  try {
+    await store.setJSON(key, { at: Date.now() });
+  } catch (e) {
+    console.error("[signup] email dedupe write failed:", e && e.message);
+  }
+  return false;
 }
 
 // ---- Referrals ------------------------------------------------------------
@@ -230,19 +351,41 @@ function refCode(locationId) {
     .update("ref:" + String(locationId)).digest("hex").slice(0, CODE_LEN);
 }
 
-// code -> referrer locationId. Fast path is the refcodes index written by
-// refer.js; the fallback scan covers a code shared before the index existed.
+// code -> referrer locationId. The refcodes index written by refer.js is the
+// path; the scan below is now a LAST RESORT and no longer the normal miss path.
+//
+// WHY THAT CHANGED (17 Aug 2026)
+// The old code fell through to the scan on ANY miss — including the ordinary
+// "that code isn't real" miss, which is what an attacker sends. One anonymous
+// POST with ?ref=deadbeef therefore cost a FULL listing of the clients store
+// plus one HMAC per client. With no rate limit above that multiplied every
+// attack request by the customer count: the endpoint got more expensive to
+// attack the more successful Trey became, which is exactly backwards.
+//
+// The scan now runs only when the index read genuinely THREW — a real blob
+// error, not an absent key. The trade-off, stated plainly: a referral code
+// minted before refer.js started writing the index will no longer resolve, and
+// that business gets the standard 14-day trial instead of 30. That is a small,
+// recoverable disappointment (the admin can fix the record); an amplified DoS
+// on the only funnel into the product is not.
 async function resolveReferrer(code, clientsStore) {
   const c = String(code || "").trim().toLowerCase();
   if (!/^[a-f0-9]{8}$/.test(c)) return "";           // shape check — cheap reject
   if (!process.env.TREY_REPORT_SECRET) return "";
+  let indexThrew = false;
   try {
     const hit = await blobsStore("refcodes").get(c, { type: "json" });
     if (hit && hit.locationId) {
       // Re-derive rather than trust the stored value.
       if (refCode(hit.locationId) === c) return hit.locationId;
     }
-  } catch (e) { /* fall through to scan */ }
+  } catch (e) {
+    indexThrew = true;
+    console.error("[signup] refcodes index read threw:", e && e.message);
+  }
+  // Absent key = the code is not ours. Answer "no referrer" for the cost of one
+  // blob read and stop.
+  if (!indexThrew) return "";
   try {
     const { blobs } = await clientsStore.list();
     for (const b of blobs) {
@@ -275,6 +418,23 @@ exports.handler = async (event) => {
   }
   if (email && !/^\S+@\S+\.\S+$/.test(email)) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please enter a valid email address." }) };
+  }
+
+  // Rate limit AFTER the cheap validation above and BEFORE anything with a side
+  // effect. Deliberately in that order: a real person who mistypes their email
+  // and resubmits must not burn their allowance on a 400 they never saw the
+  // point of, and an attacker gains nothing by sending invalid payloads because
+  // those write nothing and send nothing anyway.
+  const rate = await consumeRateToken(event);
+  if (!rate.allowed) {
+    const message = rate.reason === "global"
+      ? "We're taking more signups than usual right now. Please try again shortly, or email info@trey.today and we'll set you up by hand."
+      : "That's a few signups from this connection already. Please try again in a little while, or email info@trey.today and we'll set you up by hand.";
+    return {
+      statusCode: 429,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: message }),
+    };
   }
 
   const clientsStore = blobsStore("clients");
@@ -364,7 +524,15 @@ exports.handler = async (event) => {
 
   // Confirmation email. Deliberately AFTER the save, and deliberately incapable
   // of failing the signup — see sendWelcomeEmail().
-  await sendWelcomeEmail(record);
+  //
+  // Skipped when this address already had one in the last 24h. The record above
+  // is written either way, so the admin still sees the duplicate; it is only the
+  // mail to a possibly-unwilling stranger that we decline to send twice.
+  if (await welcomeEmailAlreadySent(record.email)) {
+    console.warn("[signup] welcome email suppressed — this address already had one in the last 24h.");
+  } else {
+    await sendWelcomeEmail(record);
+  }
 
 
   return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ success: true, businessName }) };

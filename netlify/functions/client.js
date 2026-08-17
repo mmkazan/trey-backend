@@ -11,6 +11,9 @@ const { getStore } = require("@netlify/blobs");
 //      body: { token, locationId, businessName, businessType, phone,
 //               email, googleAccountId, voicePerspective, publicSignOffName,
 //               initialGoogleRating, initialReviewCount }
+// POST /.netlify/functions/client  { action: "flags", locationId,
+//               referralCredited?, needsReview? }            -> clear/set just
+//      those two flags. Nothing else on the record is touched.
 //
 // GET responses are enriched with tapReviews / organicReviews counts
 // (tracked by review-webhook.js) so the admin UI can show review
@@ -208,6 +211,74 @@ exports.handler = async (event) => {
     }
     console.warn(`[client] DESTRUCTIVE DELETE of ${requestBody.locationId} by ${who.id}`);
     return await deleteClient(requestBody.locationId, requestBody.confirmName);
+  }
+
+  // --- The two flags that could never be cleared -------------------------------
+  //
+  //   POST { token, action: "flags", locationId, referralCredited?, needsReview? }
+  //
+  // ADDED 17 Aug 2026. Both of these were write-once:
+  //
+  //   referralCredited — signup.js writes `false`, admin.html reads it to build
+  //     the "free months owed" list, and NOTHING has ever written `true`. The
+  //     comment in signup.js says it "flips to true when the admin applies it in
+  //     Stripe", but no save path carried the field, so a credit paid out in
+  //     Stripe stayed on the owed list forever.
+  //   needsReview — signup.js writes `true` for every self-serve signup and
+  //     nothing writes `false`. The general upsert below merges `...existing`
+  //     first, so the flag survived every edit: the "NEW" badge, the filter and
+  //     the banner count only ever grew.
+  //
+  // Both lists grow until nobody reads them, which is the same as not having
+  // them — and the one that matters is a list of people owed money.
+  //
+  // A DEDICATED PATH, not a widened save. It touches exactly two named boolean
+  // fields and nothing else: the UI has only a locationId and an intent, so
+  // pushing this through the full client form would mean sending back a whole
+  // record the page may be holding a stale copy of, and quietly overwriting a
+  // phone number to clear a badge is a worse bug than the one being fixed.
+  if (event.httpMethod === "POST" && requestBody && requestBody.action === "flags") {
+    const { locationId } = requestBody;
+    if (!locationId) {
+      return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
+    }
+    const existing = await clientsStore.get(locationId, { type: "json" });
+    if (!existing) return { statusCode: 404, body: JSON.stringify({ error: "Unknown client" }) };
+
+    const now = new Date().toISOString();
+    const record = { ...existing };
+    const changed = [];
+
+    if ("referralCredited" in requestBody) {
+      // Marking a referral credit as paid out is a statement about money that
+      // has left the business. A runner must not be able to clear the record of
+      // a free month somebody is owed — see admin-auth.js.
+      if (!can(who, "billing")) return forbidden("billing");
+      const v = requestBody.referralCredited === true;
+      record.referralCredited = v;
+      // Who said so and when. The whole failure here was an unfalsifiable list;
+      // an entry that says "credited" with no date and no name would just be a
+      // quieter version of the same problem.
+      record.referralCreditedAt = v ? now : "";
+      record.referralCreditedBy = v ? who.id : "";
+      changed.push("referralCredited");
+    }
+
+    if ("needsReview" in requestBody) {
+      const v = requestBody.needsReview === true;
+      record.needsReview = v;
+      record.reviewedAt = v ? "" : now;
+      record.reviewedBy = v ? "" : who.id;
+      changed.push("needsReview");
+    }
+
+    if (!changed.length) {
+      return { statusCode: 400, body: JSON.stringify({ error: "Nothing to change — send referralCredited and/or needsReview." }) };
+    }
+    record.updatedAt = now;
+    await clientsStore.setJSON(locationId, record);
+    console.log(`[client] ${locationId}: ${changed.join(", ")} set by ${who.id}`);
+    return { statusCode: 200, body: JSON.stringify({ success: true, locationId, changed, client: record }) };
   }
 
   if (event.httpMethod === "POST") {

@@ -6,6 +6,22 @@
 <meta name="theme-color" content="#4338ca" />
 <title>Trey on the go</title>
 <!--
+  Leaflet 1.9.4, pinned exactly — never "latest", because a CDN quietly moving
+  the file under a fixed integrity hash gives you a blank map and no error.
+
+  These are the two files cdnjs mirrors VERBATIM from Leaflet's own npm dist
+  (leaflet.js and leaflet.css), so the integrity values below are Leaflet's own
+  published SRI hashes for that release. Deliberately NOT leaflet.min.css: that
+  one is minified by cdnjs itself, so its bytes are cdnjs's rather than
+  Leaflet's and there is no upstream hash to check them against. A wrong hash
+  fails silently — the browser simply refuses the file — which is precisely the
+  defect class this repo keeps finding, so use the file you can verify.
+-->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<!--
   FIELD PROSPECTING, for a phone, on a high street.
 
   Stand outside a row of shops, tap Find, and see every business around you
@@ -24,9 +40,14 @@
     doorstep whether you may follow up by WhatsApp or only by phone/post.
   - Token is held in localStorage like admin.html/leads.html, sent as a header,
     never in a URL.
-  - The map is a Google Static Maps picture fetched server-side (key never
-    reaches the phone), with the coloured dots drawn over it in HTML so they
-    follow the filter and the sort instantly and cost nothing to redraw.
+  - The map is Leaflet over OpenStreetMap tiles. It was a Google Static Maps
+    picture with dots painted on top in CSS percentages, which meant no pinch,
+    no scroll and no drag, and a billed Static Maps call every time you pressed
+    the zoom button. Markers follow the filter and the sort as they always did.
+  - Tiles need signal and this page is used where there isn't any. When they
+    fail you get a plain message where the map would be, and the list — served
+    from the on-phone cache — carries on working. A map is never allowed to
+    take the leads down with it.
 -->
 <style>
   :root{--bg:#eef3fc;--card:#fff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--accent:#4f46e5;--indigo:#4338ca;}
@@ -88,18 +109,24 @@
   .msg code{background:#f1f5f9;padding:2px 5px;border-radius:5px;font-size:12.5px;word-break:break-all;}
   .gate{max-width:380px;margin:60px auto;padding:0 16px;}
   .gate input{width:100%;padding:13px;border:1px solid var(--border);border-radius:11px;font-size:16px;margin-bottom:10px;}
-  .mapwrap{position:relative;margin-bottom:12px;line-height:0;}
-  .map{width:100%;border-radius:12px;border:1px solid #cfe0f6;display:block;}
-  /* Dots are positioned in PERCENTAGES of the picture, so they stay put at any
-     screen width and through a rotation, with no resize listener. */
-  .pin{position:absolute;transform:translate(-50%,-50%);width:25px;height:25px;padding:0;
-       border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.5);
-       color:#fff;font-size:12px;font-weight:800;line-height:21px;text-align:center;cursor:pointer;}
-  .pin.knock{background:#047857;} .pin.look{background:#b45309;} .pin.skip{background:#94a3b8;}
-  .pin.you{background:var(--indigo);width:19px;height:19px;line-height:15px;font-size:10px;cursor:default;}
-  /* Hidden by the filter: still there, but obviously not a door you're walking to. */
-  .dim{position:absolute;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;
-       background:#94a3b8;border:1.5px solid #fff;opacity:.5;}
+  .mapwrap{position:relative;margin-bottom:12px;}
+  /* z-index:0 makes the map its own stacking context. Leaflet's panes live at
+     z-index 400-1000 and the sticky header is only z-index 5, so without this
+     the map scrolls straight over the header. */
+  .leafmap{height:300px;border-radius:12px;border:1px solid #cfe0f6;position:relative;z-index:0;}
+  /* A marker is a plain coloured disc. Nothing here may set position or
+     transform — Leaflet places the icon itself, and a second opinion about
+     where it goes is how dots end up in the wrong street. */
+  .leafpin{display:block;width:25px;height:25px;border-radius:50%;border:2px solid #fff;
+       box-shadow:0 1px 4px rgba(15,23,42,.5);color:#fff;font-size:12px;font-weight:800;
+       line-height:21px;text-align:center;cursor:pointer;}
+  .leafpin.you{width:19px;height:19px;line-height:15px;font-size:10px;cursor:default;}
+  /* No tiles. Sits ON the map rather than replacing it, so Leaflet stays alive
+     and picks the tiles back up the moment the signal returns. Above every
+     Leaflet pane and control, which top out at z-index 1000. */
+  .mapoff{position:absolute;inset:0;z-index:1200;display:flex;align-items:center;
+       justify-content:center;padding:14px;background:rgba(238,243,252,.94);border-radius:12px;}
+  .mapoff .msg{margin:0;}
   .card{transition:box-shadow .25s;}
   .card.flash{box-shadow:0 0 0 3px #a5b4fc;}
   .maplegend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin:-6px 0 12px;flex-wrap:wrap;}
@@ -130,9 +157,6 @@
   .p-Contacted{background:#dbeafe;color:#1e40af;}
   .p-Ontrial{background:#fef9c3;color:#854d0e;} .p-Converted{background:#dcfce7;color:#166534;}
   .p-Lost{background:#fee2e2;color:#991b1b;}
-  .pin.st-new{background:#94a3b8;} .pin.st-comeback{background:#ea580c;} .pin.st-contacted{background:#2563eb;}
-  .pin.st-trial{background:#ca8a04;} .pin.st-converted{background:#16a34a;}
-  .pin.st-lost{background:#dc2626;}
   /* Doorstep consent. Deliberately plain and a bit serious-looking — this is a
      legal record being created in front of the person it's about, not a form. */
   .cbox{border:1px solid #c7d2fe;background:#f8faff;border-radius:11px;padding:11px;margin-top:10px;}
@@ -222,11 +246,23 @@
     </div>
   </div>
   <div id="tally"></div>
+  <!-- The offline banner, the map and the list are three separate boxes on
+       purpose. render() rewrites the list with innerHTML on every filter, sort
+       and GPS tick — if the map lived in there, the Leaflet instance would be
+       destroyed and every tile re-downloaded several times a minute. -->
+  <div id="offlineBox"></div>
+  <div id="mapBox" style="display:none;">
+    <div class="mapctl" id="mapCtl"></div>
+    <div class="mapwrap">
+      <div id="mapCanvas" class="leafmap"></div>
+      <div id="mapErr" class="mapoff" style="display:none;"></div>
+    </div>
+    <div class="maplegend" id="mapLegend"></div>
+  </div>
   <div id="out"></div>
 </main>
 </div>
 
-<script src="/map-pins.js"></script>
 <script>
 var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads", WALK_API="/.netlify/functions/walk";
 // sessionStorage, NOT localStorage (fixed 17 Aug 2026). This is the phone
@@ -236,9 +272,29 @@ var API="/.netlify/functions/nearby", LEADS_API="/.netlify/functions/leads", WAL
 // so closing the browser logs you out; the field tool was the odd one out.
 var token=sessionStorage.getItem("treyAdminToken")||"";
 var POOL=[], HERE=null, RADIUS=250, LABEL="";
-var MAP=null;          // {img, centre:{lat,lng}, zoom, width, height} from nearby.js
-var MAPERR=null;       // why the last attempt produced no picture, in the server's words
-var MAPZOOM=null;      // null = fitted to the pins; a number = you've zoomed
+var GMAP=null, TILES=null, GPINS=null, MEMARK=null;  // the Leaflet map and its layers
+var MAPERR=null;       // why there is no map right now, in plain words
+var PIN_SIG=null;      // the pin set the map was last framed to — see drawMap()
+
+// WHERE THE CURRENT LIST CAME FROM, and why it decides whether there's a map.
+//
+// Google Maps Platform Service Specific Terms §10.2: "Customer must not use
+// Google Maps Content from the Places API in conjunction with a non-Google map."
+// The map is Leaflet + OpenStreetMap, so live Places results CANNOT be drawn on
+// it. Saved leads can — their name, rating, address and coordinates all come
+// from the Apify sweep and open-data geocoding, never from Google's APIs.
+//
+// DO NOT "fix" the missing map on live results. It is missing on purpose.
+var POOL_IS_LIVE=false;
+
+// The map container's own markup, so the live-results message can replace it and
+// drawMap can put it back byte-for-byte. Kept next to POOL_IS_LIVE rather than
+// read from the DOM at load, because by the time it is needed the DOM has
+// already been overwritten.
+var MAP_MARKUP='<div class="mapctl" id="mapCtl"></div>'+
+  '<div class="mapwrap"><div id="mapCanvas" class="leafmap"></div>'+
+  '<div id="mapErr" class="mapoff" style="display:none;"></div></div>'+
+  '<div class="maplegend" id="mapLegend"></div>';
 var COLOUR_BY="tier";  // "tier" (who to knock on) or "status" (where they've got to)
 // "Come back" — the owner wasn't in. The commonest result of a cold knock, and
 // the one you most need to find again tomorrow.
@@ -281,10 +337,15 @@ async function findWhere(){
   var out=document.getElementById("out");
   out.innerHTML='<div class="spin">Looking up '+esc(q)+'…</div>';
   try{
-    var d=await api({where:q,radius:Number(document.getElementById("radius").value)});
+    // includeMap:false — nearby.js can still build a Static Maps picture
+    // (staticMap() is untouched), we simply never ask for one. Leaflet draws
+    // the map now, so that image would be a billed Google call and a base64
+    // blob roughly doubling the response, on a phone, for nothing.
+    var d=await api({where:q,includeMap:false,radius:Number(document.getElementById("radius").value)});
     if(!d) return;
-    HERE=d.centre||null; POOL=d.leads||[]; MAP=d.map||null; CENTRE_IS_ME=false;
+    HERE=d.centre||null; POOL=d.leads||[]; CENTRE_IS_ME=false;
     await loadMyLeads();
+    POOL_IS_LIVE=true;
     render(POOL,d.radius,d.placeLabel);
   }catch(e){
     out.innerHTML = e.config ? setupMsg() : '<div class="msg"><b>Couldn\'t search.</b><br>'+esc(e.message)+'</div>';
@@ -303,10 +364,11 @@ function find(){
     HERE={lat:pos.coords.latitude,lng:pos.coords.longitude};
     out.innerHTML='<div class="spin">Looking up what\'s around you…</div>';
     try{
-      var d=await api({lat:HERE.lat,lng:HERE.lng,radius:Number(document.getElementById("radius").value)});
+      var d=await api({lat:HERE.lat,lng:HERE.lng,includeMap:false,radius:Number(document.getElementById("radius").value)});
       if(!d) return;
-      POOL=d.leads||[]; MAP=d.map||null; CENTRE_IS_ME=true;
+      POOL=d.leads||[]; CENTRE_IS_ME=true;
       await loadMyLeads();
+      POOL_IS_LIVE=true;
       render(POOL,d.radius);
       startWatching();
     }catch(e){
@@ -500,15 +562,14 @@ function myLeadsByPostcode(){
         (list?'<br><br>You have leads in: '+esc(list)+'.':'')+'</div>';
       return;
     }
-    HERE=null; MAP=null; MAPZOOM=null; CENTRE_IS_ME=false;
+    HERE=null; CENTRE_IS_ME=false;
     POOL=hits;
+    // The map comes free with the render now — there is no picture to fetch and
+    // nothing to pay for, so both mirror paths get one without asking. Under
+    // the old Static Maps version these two screens (the ones the field tool is
+    // actually used from) had no map at all unless you happened to press +.
+    POOL_IS_LIVE=false;
     render(POOL,0,want);
-    // THE MIRROR PATHS NEVER ASKED FOR A PICTURE. Both of them set MAP=null and
-    // rendered, and the only thing that ever fetched a basemap was the zoom
-    // button — so the two screens the field tool is actually used from had no
-    // map at all unless you happened to press +. The list is drawn first so it's
-    // usable straight away; the picture arrives a moment later.
-    refreshPicture();
   })();
 }
 
@@ -537,9 +598,9 @@ function myLeadsNearMe(){
         'Apify import brings them in, or use <b>Look up</b> on the leads map.</span></div>';
       return;
     }
-    POOL=near; MAP=null; MAPZOOM=null;
+    POOL=near;
+    POOL_IS_LIVE=false;
     render(POOL,radius,"your saved leads");
-    refreshPicture();   // see the note in the postcode path — the mirror never fetched one
     startWatching();
   }, function(err){
     out.innerHTML='<div class="msg"><b>Location unavailable.</b><br>'+esc(err.message||"")+'</div>';
@@ -622,73 +683,211 @@ function gapLine(l){
 }
 
 // ---- the map -------------------------------------------------------------
-// The picture from nearby.js is a BARE Google map. Every dot on it is drawn
-// here, in HTML, so filtering and sorting move the pins instantly and for free.
-// Baking them into the image server-side (the first version) meant the map
-// still showed businesses you'd filtered out, and the numbers stopped matching
-// the cards the moment you sorted by distance — which defeats the point of it.
+// Leaflet over OpenStreetMap tiles. This used to be a Google Static Maps
+// picture with the dots painted on top as CSS percentages: no pinch, no
+// scroll, no drag, and one billed Static Maps call every time you pressed the
+// zoom button. Leaflet does the projection and the gestures itself, which is
+// why map-pins.js and its hand-rolled Web Mercator maths are gone.
+//
+// TILES: OSM's public tile servers are free and need no key, and at our volume
+// — one person on one walk — that is well inside their fair use. If it ever
+// gets busy, move to a paid tile host such as MapTiler or Protomaps rather
+// than leaning harder on a free service. Same L.tileLayer call, different URL.
+//
+// The attribution below is a LICENCE CONDITION of ODbL, not decoration.
+// Do not remove it, hide it, or shrink it out of readability.
+var OSM_TILES="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+var OSM_ATTRIB='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
-// The projection and the dot markup live in map-pins.js, shared with leads.html,
-// because the same maths also exists server-side in nearby.js and three copies
-// is how dots quietly end up in the wrong place.
-function pinPos(lat,lng){ return TreyMap.pinPos(MAP,lat,lng); }
+// TIER COLOURS. Green = best door, amber = worth a look, grey = skip.
+//
+// This object is duplicated VERBATIM in leads.html and tests/map.test.js pulls
+// it out of both files and compares them. Two maps using one palette to mean
+// two different things was asking to be misread, and was. If you change a
+// colour here, change it there.
+var TIER_COLOURS={"1":"#047857","2":"#b45309","3":"#94a3b8"};
+// Pipeline colours, matched to the .p-* pills so a marker and its card agree.
+var STATUS_COLOURS={"New":"#94a3b8","Come back":"#ea580c","Contacted":"#2563eb",
+  "On trial":"#ca8a04","Converted":"#16a34a","Lost":"#dc2626"};
+var ME_COLOUR="#4338ca";
 
-function statusPinCls(l){
+// Derby city centre. Only ever seen for the half-second before the first
+// fitBounds, and only if the map opens with nothing on it.
+var HOME=[52.9225,-1.4746];
+
+// NO TILES, AND WHY THAT IS FINE.
+// Tiles need signal. This page is deliberately offline-first — there is a lead
+// cache and a write queue because walks happen where there are no bars — so a
+// dead tile server must cost you the map and nothing else. Same MAPERR channel
+// every other map failure uses, so there is one place a map problem appears.
+var OFFLINE_MAP_MSG="No map — you're offline. Your leads and the list still work.";
+var TILE_FAILS=0;
+
+function bandColour(b){
+  return b==="Knock now"?TIER_COLOURS["1"]:b==="Worth a look"?TIER_COLOURS["2"]:TIER_COLOURS["3"];
+}
+
+function statusColour(l){
   var saved=l.placeId?MINE[l.placeId]:null;
   var st=(saved&&saved.outreachStatus)||"New";
-  return st==="Come back"?"st-comeback":st==="Contacted"?"st-contacted":
-         st==="On trial"?"st-trial":st==="Converted"?"st-converted":
-         st==="Lost"?"st-lost":"st-new";
+  return STATUS_COLOURS[st]||STATUS_COLOURS["New"];
 }
 
-function mapFor(view,list){
-  // No picture is never fatal — the cards below still work. But it used to be
-  // completely silent, which is indistinguishable from a broken app.
-  if(!MAP||!MAP.img){
-    if(!MAPERR) return "";
-    return '<div class="msg" style="margin-bottom:10px">'+esc(MAPERR)+
-      '<div style="margin-top:8px"><button class="sec" style="padding:6px 10px" ' +
-      'onclick="refreshPicture()">Try again</button></div></div>';
-  }
-  var on={};
-  var pins=view.map(function(l,i){
-    var idx=POOL.indexOf(l); on[idx]=1;
-    return { lat:l.lat, lng:l.lng,
-             cls: COLOUR_BY==="status"?statusPinCls(l):bandCls(l.field.band),
-             label:i+1,
-             title:l.businessName+" \u2014 "+l.field.band, onclick:"jump("+idx+")" };
+// A marker is a coloured disc we draw ourselves rather than Leaflet's default
+// teardrop, so the tier palette is the only thing deciding what it looks like.
+// `colour` is always one of our own constants; `label` is escaped.
+function discIcon(colour,label,cls){
+  var n=cls==="you"?19:25;
+  return L.divIcon({
+    className:"",   // "" drops Leaflet's default white-box .leaflet-div-icon
+    html:'<span class="leafpin'+(cls?" "+cls:"")+'" style="background:'+colour+'">'+
+         esc(label==null?"":label)+'</span>',
+    iconSize:[n,n], iconAnchor:[n/2,n/2],
   });
-  var dim=list.filter(function(l){ return !on[POOL.indexOf(l)]; });
-  var legend = COLOUR_BY==="status"
-    ? [{colour:"#94a3b8",label:"New"},{colour:"#ea580c",label:"Come back"},
-       {colour:"#2563eb",label:"Contacted"},{colour:"#ca8a04",label:"On trial"},
-       {colour:"#16a34a",label:"Converted"},{colour:"#dc2626",label:"Lost"},
-       {colour:"#4338ca",label:CENTRE_IS_ME?"You":"Centre"}]
-    : [{colour:"#047857",label:"Knock now"},{colour:"#b45309",label:"Worth a look"},
-       {colour:"#94a3b8",label:"Skip"},
-       {colour:"#4338ca",label:CENTRE_IS_ME?"You":"Centre"}];
-  if(view.length<list.length) legend.push({colour:"#94a3b8",label:"Hidden by filter",faint:true});
+}
 
-  var ctl='<div class="mapctl">'+
-    '<button onclick="zoomMap(1)" aria-label="Zoom in">+</button>'+
-    '<button onclick="zoomMap(-1)" aria-label="Zoom out">\u2212</button>'+
-    '<button class="fit" onclick="zoomFit()"'+(MAPZOOM==null?" disabled":"")+'>Fit</button>'+
-    '<span class="lab">'+(MAPZOOM==null?"fitted":"zoom "+MAPZOOM)+'</span>'+
+function showMapErr(){
+  var el=document.getElementById("mapErr");
+  if(!el) return;
+  if(!MAPERR){ el.style.display="none"; el.innerHTML=""; return; }
+  el.style.display="";
+  // Same shape as every other map failure on this page: say it plainly, offer
+  // to try again, and never guess at a cause you don't have.
+  el.innerHTML='<div class="msg"><b>'+esc(MAPERR)+'</b>'+
+    '<div style="margin-top:8px"><button class="sec" style="padding:6px 10px" '+
+    'onclick="retryTiles()">Try again</button></div></div>';
+}
+
+function retryTiles(){
+  TILE_FAILS=0; MAPERR=null; showMapErr();
+  if(TILES) TILES.redraw();
+}
+
+// One Leaflet instance for the life of the page. Re-creating it per render
+// would throw away your pan and zoom and re-download every tile — and render()
+// runs on every GPS tick.
+function ensureMap(){
+  if(GMAP) return GMAP;
+  GMAP=L.map("mapCanvas",{scrollWheelZoom:true}).setView(HOME,16);
+  TILES=L.tileLayer(OSM_TILES,{maxZoom:19,attribution:OSM_ATTRIB});
+  TILES.on("tileload",function(){
+    TILE_FAILS=0;
+    if(MAPERR===OFFLINE_MAP_MSG){ MAPERR=null; showMapErr(); }
+  });
+  TILES.on("tileerror",function(){
+    TILE_FAILS++;
+    // navigator.onLine is the honest signal for "this phone knows it has no
+    // data". Without it, a few failures usually just mean a couple of bad
+    // tiles at the edge of the view, which isn't worth covering the map for.
+    if(navigator.onLine===false || TILE_FAILS>=4){ MAPERR=OFFLINE_MAP_MSG; showMapErr(); }
+  });
+  TILES.addTo(GMAP);
+  GPINS=L.layerGroup().addTo(GMAP);
+  if(navigator.onLine===false){ MAPERR=OFFLINE_MAP_MSG; showMapErr(); }
+  return GMAP;
+}
+// The browser telling us outright is better than waiting for four tiles to
+// time out on a dead street.
+window.addEventListener("offline",function(){ OFFLINE=true; MAPERR=OFFLINE_MAP_MSG; showMapErr(); });
+
+// Tap a marker, get the card. The map answers "which way", the card answers
+// "why" — so the popup is the short version and the button goes to the card.
+function pinPopup(l,idx){
+  return '<b>'+esc(l.businessName)+'</b>'+
+    (l.category?'<div style="font-size:12px;color:#64748b;">'+esc(l.category)+'</div>':"")+
+    '<div style="font-size:12.5px;margin-top:4px;"><b>'+esc(l.field.total)+'</b> · '+esc(l.field.band)+
+      (l.metresAway!=null?' · '+esc(l.metresAway)+'m away':'')+'</div>'+
+    (l.rating!=null?'<div style="font-size:12.5px;">'+esc(l.rating)+'★ · '+esc(l.reviewCount||0)+' reviews</div>':"")+
+    '<div style="margin-top:7px;"><button class="sec" style="padding:6px 10px" '+
+      'onclick="jump('+idx+')">Open this card</button></div>';
+}
+
+// Draw the markers for the current view. `view` is what passed the filter,
+// `list` is everything — the difference is drawn small and faded, because a
+// street you've filtered down to two doors is still a street.
+function drawMap(view,list){
+  var box=document.getElementById("mapBox");
+  // Live Google results get no map — see POOL_IS_LIVE. Say so plainly rather
+  // than showing an empty space that reads as a bug.
+  if(POOL_IS_LIVE){
+    box.style.display="block";
+    box.innerHTML='<div class="msg" style="margin:0">No map on live Google results \u2014 '+
+      'Google\'s terms don\u2019t allow their data on a non-Google map. '+
+      'Your saved leads still show one.</div>';
+    return;
+  }
+  // Restore the canvas if the live-search branch replaced it.
+  if(!document.getElementById("mapCanvas")){ box.innerHTML=MAP_MARKUP; GMAP=null; }
+  var pts=[];
+  view.forEach(function(l){ if(l.lat!=null&&l.lng!=null) pts.push([l.lat,l.lng]); });
+  if(HERE) pts.push([HERE.lat,HERE.lng]);
+  // Nothing to draw is not a failure, it's an empty list.
+  if(!pts.length){ box.style.display="none"; return; }
+  box.style.display="block";
+  ensureMap();
+  // The container was display:none until a moment ago, so Leaflet still thinks
+  // it has no size and will paint one tile in the corner.
+  GMAP.invalidateSize();
+
+  GPINS.clearLayers();
+  var on={};
+  view.forEach(function(l,i){
+    var idx=POOL.indexOf(l); on[idx]=1;
+    if(l.lat==null||l.lng==null) return;
+    L.marker([l.lat,l.lng],{
+      icon:discIcon(COLOUR_BY==="status"?statusColour(l):bandColour(l.field.band), i+1),
+      title:l.businessName+" — "+l.field.band,
+    }).bindPopup(pinPopup(l,idx)).addTo(GPINS);
+  });
+  // Deliberately subordinate: keeps the street recognisable without competing
+  // with the doors you're actually going to.
+  list.forEach(function(l){
+    if(on[POOL.indexOf(l)]) return;
+    if(l.lat==null||l.lng==null) return;
+    L.circleMarker([l.lat,l.lng],{radius:5,color:"#fff",weight:1.5,
+      fillColor:"#94a3b8",fillOpacity:.5}).addTo(GPINS);
+  });
+  if(HERE){
+    MEMARK=L.marker([HERE.lat,HERE.lng],{
+      icon:discIcon(ME_COLOUR,CENTRE_IS_ME?"Y":"+","you"),
+      title:CENTRE_IS_ME?"You are here":"Search centre", zIndexOffset:1000,
+    }).addTo(GPINS);
+  } else MEMARK=null;
+
+  // Frame the current results, but only when the set has actually changed — so
+  // a new search frames itself, and toggling the colour or walking ten metres
+  // doesn't yank the view out from under your thumb mid-tap.
+  var sig=pts.map(function(p){ return p[0].toFixed(5)+","+p[1].toFixed(5); }).join("|");
+  if(sig!==PIN_SIG){
+    GMAP.fitBounds(L.latLngBounds(pts),{padding:[26,26],maxZoom:17});
+    PIN_SIG=sig;
+  }
+
+  document.getElementById("mapCtl").innerHTML=
+    '<button class="fit" onclick="fitPins()">Fit</button>'+
+    (HERE?'<button class="fit" onclick="recentre()">Recentre</button>':'')+
     '<span style="flex:1"></span>'+
     '<button class="fit'+(COLOUR_BY==="tier"?" on":"")+'" onclick="setColourBy(\'tier\')">Tier</button>'+
-    '<button class="fit'+(COLOUR_BY==="status"?" on":"")+'" onclick="setColourBy(\'status\')">Status</button>'+
-    '</div>'+
-    '<div id="recentre" style="display:none;margin:-4px 0 10px;">'+
-      '<button class="sec" style="width:100%" onclick="zoomFit()">You\'ve walked off the map \u2014 recentre</button></div>';
+    '<button class="fit'+(COLOUR_BY==="status"?" on":"")+'" onclick="setColourBy(\'status\')">Status</button>';
 
-  var html=TreyMap.html({ map:MAP, pins:pins, dim:dim, me:HERE,
-    meLabel:CENTRE_IS_ME?"Y":"+", meTitle:CENTRE_IS_ME?"You are here":"Search centre",
-    legend:legend, alt:"Map of the businesses around you" });
-  // Give the "you" dot an id so it can be moved on every GPS tick without
-  // redrawing the whole map.
-  html=html.replace('<span class="pin you"','<span class="pin you" id="meDot"');
-  return html+ctl;
+  var legend = COLOUR_BY==="status"
+    ? Object.keys(STATUS_COLOURS).map(function(k){ return {colour:STATUS_COLOURS[k],label:k}; })
+        .concat([{colour:ME_COLOUR,label:CENTRE_IS_ME?"You":"Centre"}])
+    : [{colour:TIER_COLOURS["1"],label:"Knock now"},{colour:TIER_COLOURS["2"],label:"Worth a look"},
+       {colour:TIER_COLOURS["3"],label:"Skip"},{colour:ME_COLOUR,label:CENTRE_IS_ME?"You":"Centre"}];
+  if(view.length<list.length) legend.push({colour:"#94a3b8",label:"Hidden by filter",faint:true});
+  document.getElementById("mapLegend").innerHTML=legend.map(function(x){
+    return '<span><i style="background:'+esc(x.colour)+(x.faint?";opacity:.5;width:7px;height:7px":"")+
+      '"></i>'+esc(x.label)+'</span>';
+  }).join("");
+
+  showMapErr();
 }
+
+// Frame every pin again after you've panned off. Deliberately not through
+// render() — re-framing isn't the same event as the list changing.
+function fitPins(){ PIN_SIG=null; render(POOL,RADIUS,LABEL); }
+function recentre(){ if(GMAP&&HERE) GMAP.setView([HERE.lat,HERE.lng],GMAP.getZoom()); }
 
 function setColourBy(v){ COLOUR_BY=v; render(POOL,RADIUS,LABEL); }
 
@@ -754,52 +953,15 @@ document.addEventListener("visibilitychange",function(){
   if(document.hidden) stopWatching(); else if(POOL.length&&CENTRE_IS_ME) startWatching();
 });
 
-// Cheap refresh: the dot and the distance labels only. No re-order, no refetch.
+// Cheap refresh: the "you" marker and the distance labels only. No re-order,
+// no tile fetch — Leaflet keeps the tiles it already has, so walking down a
+// street costs nothing at all now.
 function updateInPlace(){
-  var me=document.getElementById("meDot");
-  if(me&&MAP){
-    var p=pinPos(HERE.lat,HERE.lng);
-    if(p){ me.style.left=p.x+"%"; me.style.top=p.y+"%"; me.style.display=""; }
-    else me.style.display="none";       // walked off the edge of the picture
-  }
+  if(MEMARK&&HERE) MEMARK.setLatLng([HERE.lat,HERE.lng]);
   POOL.forEach(function(l){
     var el=document.getElementById("dist"+POOL.indexOf(l));
     if(el&&l.metresAway!=null) el.textContent=" \u00b7 "+l.metresAway+"m away";
   });
-  var rc=document.getElementById("recentre");
-  if(rc&&MAP&&HERE){
-    // Offer to recentre once you've walked off the picture you're looking at.
-    rc.style.display = pinPos(HERE.lat,HERE.lng) ? "none" : "";
-  }
-}
-
-// Zoom re-fetches only the PICTURE — one Static Maps call, no Places search.
-async function zoomMap(delta){
-  var base = MAPZOOM!=null ? MAPZOOM : (MAP?MAP.zoom:16);
-  MAPZOOM = Math.max(1,Math.min(20, base+delta));
-  await refreshPicture();
-}
-async function zoomFit(){ MAPZOOM=null; await refreshPicture(); }
-
-async function refreshPicture(){
-  var pts=POOL.filter(function(l){ return l.lat!=null&&l.lng!=null; })
-    .map(function(l){ return {lat:l.lat,lng:l.lng}; });
-  if(HERE) pts.push({lat:HERE.lat,lng:HERE.lng});
-  if(!pts.length) return;
-  try{
-    var r=await fetch(API,{method:"POST",
-      headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
-      body:JSON.stringify({action:"basemap",points:pts,
-        zoom: MAPZOOM==null?undefined:MAPZOOM,
-        // Keep yourself at the centre while zooming, so + doesn't wander off.
-        centreLat: HERE?HERE.lat:undefined, centreLng: HERE?HERE.lng:undefined })});
-    var d=await r.json();
-    if(d && d.map){ MAP=d.map; MAPERR=null; }
-    // Keep the old picture rather than blanking the screen — but say why there
-    // isn't a new one, in the server's own words rather than a guess.
-    else if(d) MAPERR=d.mapError||d.error||null;
-  }catch(e){ MAPERR = OFFLINE ? null : "Couldn't reach Trey to draw the map."; }
-  render(POOL,RADIUS,LABEL);
 }
 
 // Set where a business has got to, from the doorstep. Writes to the same leads
@@ -868,10 +1030,13 @@ function render(list,radius,label){
     (radius?(" within "+radius+"m of "+(label||"you")):(" in "+(label||"your list")))+
     " · "+(SORT==="distance"?"nearest first":"best door first");
 
-  var mapHtml = mapFor(view, list);
+  // Banner, map and list are written separately so the map keeps its Leaflet
+  // instance across a render. The order on screen is unchanged.
+  document.getElementById("offlineBox").innerHTML=offlineBanner();
+  drawMap(view, list);
 
-  if(!view.length){ out.innerHTML=offlineBanner()+mapHtml+'<div class="msg">Nothing in that band here. Try <b>All</b>, or a wider radius.</div>'; return; }
-  out.innerHTML=offlineBanner()+mapHtml+view.map(function(l,i){
+  if(!view.length){ out.innerHTML='<div class="msg">Nothing in that band here. Try <b>All</b>, or a wider radius.</div>'; return; }
+  out.innerHTML=view.map(function(l,i){
     var idx=POOL.indexOf(l);
     return '<div class="card" id="c'+idx+'">'+
       '<div class="row">'+

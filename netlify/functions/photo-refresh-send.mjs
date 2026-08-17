@@ -19,6 +19,8 @@
 //   {{2}} tailored shot-list (one line, e.g. "a tidy bay • a happy handover • …")
 
 import { getStore } from "@netlify/blobs";
+import phoneMod from "./phone.js";
+const { toE164 } = phoneMod;
 
 // Normalise a stored phone number to E.164 for Twilio.
 //
@@ -31,17 +33,6 @@ import { getStore } from "@netlify/blobs";
 //
 // Normalising at SEND time as well as on write means records already saved with
 // a space are fixed too, with no data migration.
-function toE164(phone) {
-  const raw = String(phone || "").trim();
-  if (!raw) return "";
-  const d = raw.replace(/[^\d]/g, "");
-  if (!d) return "";
-  if (raw.startsWith("+")) return "+" + d;   // already international — trust it
-  if (d.startsWith("00")) return "+" + d.slice(2);
-  if (d.startsWith("0")) return "+44" + d.slice(1);  // UK national
-  if (d.startsWith("44")) return "+" + d;
-  return "+" + d;
-}
 
 
 export const config = { schedule: "0 9 8 1,4,7,10 *" };

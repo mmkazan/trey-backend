@@ -138,7 +138,11 @@ function toCsv(records, kind) {
 
 exports.handler = async (event) => {
   const params = (event && event.queryStringParameters) || {};
-  const who = adminIdentity(event, null, params);
+  // No `params` argument: the admin token must come from the Authorization
+  // header or the POST body, NEVER the query string. A token in a URL lands in
+  // Netlify's request logs, browser history and any Referer — and this endpoint
+  // returns every client, lead and consent record in one file.
+  const who = adminIdentity(event, null);
   if (!who) return unauthorized();
   // A full dump of every customer, lead and consent record is not something a
   // future runner should be able to take off the premises.

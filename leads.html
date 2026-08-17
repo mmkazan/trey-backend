@@ -5,6 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Trey Leads</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<!--
+  Leaflet 1.9.4, pinned exactly — never "latest", because a CDN quietly moving
+  the file under a fixed integrity hash gives you a blank map and no error.
+
+  These are the two files cdnjs mirrors VERBATIM from Leaflet's own npm dist
+  (leaflet.js and leaflet.css), so the integrity values below are Leaflet's own
+  published SRI hashes for that release. Deliberately NOT leaflet.min.css: that
+  one is minified by cdnjs itself, so its bytes are cdnjs's rather than
+  Leaflet's and there is no upstream hash to check them against. A wrong hash
+  fails silently — the browser simply refuses the file — which is precisely the
+  defect class this repo keeps finding, so use the file you can verify.
+-->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root{--bg:#eef3fc;--card:#fff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;--accent:#4f46e5;--accent2:#4338ca;--danger:#dc2626;}
   *{box-sizing:border-box;}
@@ -89,29 +105,37 @@
   .copybtn{background:#f1f5f9;color:#0f172a;padding:5px 11px;font-size:12px;border-radius:6px;}
   .copybtn.ok{background:#dcfce7;color:#166534;}
   .linkbtn{background:#eef2ff;color:#4338ca;padding:5px 11px;font-size:12px;border-radius:6px;border:none;cursor:pointer;}
-  /* Planning map. Same dot mechanics as go.html — see map-pins.js. */
-  /* Capped, or at full desktop width a 640x380 picture is ~800px tall and you
-     scroll past the list to reach it. */
-  .mapwrap{position:relative;line-height:0;margin-bottom:10px;max-width:820px;}
-  .map{width:100%;border-radius:10px;border:1px solid #cfe0f6;display:block;}
-  .pin{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;padding:0;
-       border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.5);
-       color:#fff;font-size:11px;font-weight:800;line-height:18px;text-align:center;cursor:pointer;}
-  /* Colour is TIER — how good a prospect — matching the tier filter beside the
-     map and the bands in go.html. Colouring by pipeline status (the first
-     version) made every dot green, because every lead starts as "New". */
-  .pin.t1{background:#047857;} .pin.t2{background:#b45309;} .pin.t3{background:#94a3b8;}
-  /* Status colours, matched to the .s-* pills so a dot and its row agree. */
-  .pin.st-new{background:#94a3b8;} .pin.st-comeback{background:#ea580c;} .pin.st-contacted{background:#2563eb;}
-  .pin.st-trial{background:#ca8a04;} .pin.st-converted{background:#16a34a;}
-  .pin.st-lost{background:#dc2626;}
-  .pin.mine{background:#4338ca;}
-  .pin.lost{background:#cbd5e1;color:#64748b;border-color:#e2e8f0;}
-  .pin.you{background:#4338ca;width:18px;height:18px;line-height:14px;font-size:10px;cursor:default;}
-  .dim{position:absolute;transform:translate(-50%,-50%);width:9px;height:9px;border-radius:50%;
-       background:#94a3b8;border:1.5px solid #fff;opacity:.5;}
+  /* Planning map — Leaflet over OpenStreetMap tiles.
+     It used to be a Google Static Maps picture with dots painted on top as CSS
+     percentages, which meant no drag, no pinch, no scroll-zoom, and a billed
+     Static Maps call every time you pressed +. Leaflet owns the projection and
+     the interaction now, so all of that (and map-pins.js) is gone. */
+  /* Capped, or at full desktop width the map pushes the list off the screen. */
+  .mapwrap{position:relative;margin-bottom:10px;max-width:820px;}
+  /* z-index:0 makes the map its own stacking context. Leaflet's panes sit at
+     z-index 400-1000, and without this they paint straight over the draft
+     modal (z-index 60), which is a fixed overlay on the same page. */
+  .leafmap{height:420px;border-radius:10px;border:1px solid #cfe0f6;position:relative;z-index:0;}
+  .leafmap.sm{height:260px;}
+  /* A marker is a plain coloured disc. Nothing here may set position or
+     transform — Leaflet places the icon itself, and a second opinion about
+     where it goes is how dots end up in the wrong street. */
+  .leafpin{display:block;width:22px;height:22px;border-radius:50%;border:2px solid #fff;
+       box-shadow:0 1px 4px rgba(15,23,42,.5);color:#fff;font-size:11px;font-weight:800;
+       line-height:18px;text-align:center;cursor:pointer;}
+  /* A numbered stop on a planned walk. Bigger, because the number has to be
+     readable at a glance while you're reading the order off the screen. */
+  .leafpin.n{width:26px;height:26px;line-height:22px;font-size:12px;}
   .maplegend{display:flex;gap:14px;font-size:12px;color:#64748b;margin:0 0 12px;flex-wrap:wrap;}
   .mapctl{display:flex;gap:6px;align-items:center;margin:0 0 8px;flex-wrap:wrap;}
+  /* The walk planner's controls. One row, because it is two inputs and a verb. */
+  .walkctl{display:flex;gap:8px;align-items:center;margin:0 0 10px;flex-wrap:wrap;}
+  .walkctl input{width:74px;padding:6px 8px;font-size:13px;}
+  .walkctl button{font-size:13px;font-weight:700;padding:7px 13px;}
+  .walkbox{background:#eef2ff;border:1px solid #e0e7ff;border-radius:10px;padding:10px 12px;
+       font-size:13px;color:#3730a3;line-height:1.5;margin:0 0 12px;}
+  .walkbox b{color:#312e81;}
+  .walkbox ol{margin:8px 0 0;padding-left:20px;font-size:12.5px;color:#334155;}
   .mapctl button{font-size:13px;font-weight:800;width:32px;height:32px;padding:0;border-radius:8px;
     border:1px solid #cfe0f6;background:#fff;color:#334155;cursor:pointer;}
   .mapctl button:disabled{opacity:.4;cursor:default;}
@@ -186,6 +210,18 @@
         <div style="flex:0;"><button class="btn-primary" onclick="prospect()">Search</button></div>
       </div>
       <div id="areaOut"></div>
+      <!-- The live search gets its OWN map, kept inside the orange "not your
+           leads" box, so a Google result can never be mistaken for a saved
+           lead on the planning map further down. The canvas lives in the markup
+           rather than being written by JS because a Leaflet instance has to
+           outlive the innerHTML rewrites that redraw the list around it. -->
+      <div id="areaBox" style="display:none;border:1px solid #fed7aa;background:#fff7ed;border-radius:10px;padding:11px 13px;margin-top:12px;">
+        <div style="font-weight:800;font-size:13px;color:#9a3412;text-transform:uppercase;letter-spacing:.04em;">Live Google results — not your leads</div>
+        <div class="mapnote" style="margin:6px 0 0;" id="areaHdr"></div>
+        <div class="mapwrap" style="margin:10px 0 0;"><div id="areaMapCanvas" class="leafmap sm"></div></div>
+        <div class="maplegend" id="areaLegend" style="margin:8px 0 0;"></div>
+      </div>
+      <div id="areaList"></div>
     </div>
 
     <div class="card" style="padding:14px 18px;">
@@ -216,13 +252,33 @@
     </div>
 
     <div class="counts" id="counts"></div>
-    <div id="leadMap"></div>
+    <!-- The map's own DOM is static. Only the notes, the legend and the Leaflet
+         layers change — rebuilding this with innerHTML on every filter change
+         would destroy the map instance and re-download every tile. -->
+    <div id="leadMap" style="display:none;">
+      <div class="mapctl" id="mapCtl"></div>
+      <!-- Plan a walk. route.js solves an ORIENTEERING problem, not a shortest
+           path: the input is a time budget, and it picks which doors are worth
+           the walk as well as the order. So the control is minutes. -->
+      <div class="walkctl">
+        <span class="lab" style="font-size:12px;color:#64748b;font-weight:700;">Plan a walk</span>
+        <input id="walkMins" type="number" min="5" max="480" step="5" value="120" aria-label="Time budget in minutes" />
+        <span class="lab" style="font-size:12px;color:#64748b;">minutes, from the map centre</span>
+        <button class="btn-primary" onclick="planWalk()">Plan walk</button>
+        <button class="btn-secondary" id="walkClear" onclick="clearWalk()" style="display:none;">Clear route</button>
+      </div>
+      <div id="mapNote"></div>
+      <div id="walkOut"></div>
+      <div class="mapwrap"><div id="leadMapCanvas" class="leafmap"></div></div>
+      <div class="maplegend" id="mapLegend"></div>
+      <div class="mapnote" id="mapSummary"></div>
+    </div>
     <div id="leadList"></div>
   </main>
   <div id="draftModal" class="modal-bg" onclick="if(event.target===this)closeDraft()"></div>
 </div>
 
-<script src="/map-pins.js"></script>
+<script src="/route.js"></script>
 <script>
   const API = "/.netlify/functions/leads";
   const NEARBY_API = "/.netlify/functions/nearby";
@@ -572,34 +628,60 @@
   }
 
   // ---- The planning map ----------------------------------------------------
-  // Same idea as go.html: the PICTURE costs a Static Maps call, the DOTS are
-  // free. So the picture is fetched once, fitted to whatever is on screen, and
-  // every subsequent filter or search just redraws dots over it instantly. A
-  // "Refit" button appears when the filtered set has drifted off the frame.
-  let VIEW = "list", ROWS = [], MAPDATA = null, MAPFOR = 0;
-  // Why the last map attempt produced no picture, in the server's own words.
-  let MAPERR = null;
-  // null = fit everything in frame (the default). A number = you've zoomed.
-  let MAPZOOM = null;
-  // Colour the dots by prospect tier, or by where they are in the pipeline.
+  // Leaflet over OpenStreetMap tiles. What was here before was a Google Static
+  // Maps picture with dots painted on top as CSS percentages: no drag, no
+  // pinch, no scroll-zoom, and one billed Static Maps call per press of the
+  // zoom button. Leaflet does the projection and the interaction itself, which
+  // is why map-pins.js and its hand-rolled Web Mercator maths are gone.
+  //
+  // TILES: OSM's public tile servers are free and need no key, and at our
+  // volume — one person planning a round — that is entirely within their fair
+  // use. If this ever gets busy (many users, or a map on a public page), move
+  // to a paid tile host such as MapTiler or Protomaps rather than leaning
+  // harder on a free service. It is the same L.tileLayer call with a different
+  // URL, so nobody has to redesign anything to do it.
+  //
+  // The attribution below is a LICENCE CONDITION of ODbL, not decoration.
+  // Do not remove it, hide it, or shrink it out of readability.
+  const OSM_TILES = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const OSM_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+  // TIER COLOURS. Green = best door, amber = worth a look, grey = skip.
+  //
+  // This object is duplicated VERBATIM in go.html and tests/map.test.js pulls
+  // it out of both files and compares them. Two maps using one palette to mean
+  // two different things was asking to be misread, and was — see the note on
+  // pinColour() below. If you change a colour here, change it there.
+  const TIER_COLOURS = { "1":"#047857", "2":"#b45309", "3":"#94a3b8" };
+  // Pipeline colours, matched to the .s-* pills so a marker and its row agree.
+  const STATUS_COLOURS = { "New":"#94a3b8", "Come back":"#ea580c", "Contacted":"#2563eb",
+    "On trial":"#ca8a04", "Converted":"#16a34a", "Lost":"#dc2626" };
+  const MINE_COLOUR = "#4338ca";   // already a customer — not a door to knock on
+  const LOST_COLOUR = "#cbd5e1";
+
+  // Derby city centre. Only ever seen for the half-second before the first
+  // fitBounds, and only if you open the map with nothing to show.
+  const HOME = [52.9225, -1.4746];
+
+  let VIEW = "list", ROWS = [];
+  let LMAP = null, LPINS = null, LROUTE = null;
+  // Signature of the pin set the map was last framed to. fitBounds only fires
+  // when this changes, so toggling the colour or planning a walk doesn't yank
+  // the view out from under you, but a new search always frames its own
+  // results. null (not "") so that the very first draw always frames itself.
+  let PIN_SIG = null;
+  let WALK = null;
+  // Colour the markers by prospect tier, or by where they are in the pipeline.
   // Tier is the default because it's what you decide a walk on; status becomes
   // the useful one once you've actually been out and set some.
   let COLOUR_BY = "tier";
 
   function setColourBy(v){ COLOUR_BY = v; drawMap(); }
-  function zoomMap(delta){
-    const base = MAPZOOM != null ? MAPZOOM : (MAPDATA ? MAPDATA.zoom : 14);
-    MAPZOOM = Math.max(1, Math.min(20, base + delta));
-    fetchBaseMap();
-  }
-  function zoomFit(){ MAPZOOM = null; fetchBaseMap(); }
 
   function setView(v){
     VIEW = v;
-    document.getElementById("vList").className = v === "list" ? "" : "";
     document.getElementById("vList").className = v === "list" ? "on" : "";
     document.getElementById("vMap").className  = v === "map"  ? "on" : "";
-    if (v === "map" && !MAPDATA) { fetchBaseMap(); return; }
     drawMap();
   }
 
@@ -610,117 +692,287 @@
   //
   // The first version coloured by outreachStatus, which was a mistake that only
   // showed up against real data: all 286 leads were "New", so the map was a sea
-  // of identical green dots. Tier is what actually varies (62 / 143 / 81) and
+  // of identical grey dots. Tier is what actually varies (62 / 143 / 81) and
   // it's what you're deciding on when planning a walk.
   //
   // It also means green/amber/grey now mean the SAME thing here as in go.html —
-  // best door, worth a look, skip. Two maps using one palette for two different
-  // things was asking to be misread, and was.
+  // best door, worth a look, skip.
   //
   // Pipeline status only overrides the colour when the business isn't a prospect
   // at all: already yours (indigo) or lost (faded).
-  function pinCls(l){
+  function pinColour(l){
     const st = l.outreachStatus || "New";
-    if (COLOUR_BY === "status") {
-      // The same five colours as the pills on the cards, so a dot and its row
-      // always agree at a glance.
-      return st === "Come back" ? "st-comeback"
-        : st === "Contacted" ? "st-contacted"
-        : st === "On trial" ? "st-trial"
-        : st === "Converted" ? "st-converted"
-        : st === "Lost" ? "st-lost" : "st-new";
-    }
-    if (l.isClient || st === "Converted" || st === "On trial") return "mine";
-    if (st === "Lost") return "lost";
-    const t = Number(l.tier);
-    return t === 1 ? "t1" : t === 2 ? "t2" : t === 3 ? "t3" : "t3";
+    if (COLOUR_BY === "status") return STATUS_COLOURS[st] || STATUS_COLOURS.New;
+    if (l.isClient || st === "Converted" || st === "On trial") return MINE_COLOUR;
+    if (st === "Lost") return LOST_COLOUR;
+    return TIER_COLOURS[String(Number(l.tier))] || TIER_COLOURS["3"];
   }
 
-  async function fetchBaseMap(){
-    const box = document.getElementById("leadMap");
-    const pts = withGeo(ROWS).map(o => ({ lat:o.l.lat, lng:o.l.lng }));
-    if (!pts.length) { drawMap(); return; }
-    box.innerHTML = '<div class="card muted">Drawing the map…</div>';
-    try {
-      const res = await fetch(NEARBY_API, { method:"POST",
-        headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
-        body: JSON.stringify({ action:"basemap", points: pts,
-          // Only sent when you've zoomed; otherwise the server fits the pins.
-          zoom: MAPZOOM == null ? undefined : MAPZOOM }) });
-      if (res.status === 403) { logout(); return; }
-      const d = await res.json();
-      MAPDATA = d.map || null;
-      // Whatever Google actually said, verbatim. A blank map used to be silent
-      // and the printed guess was wrong, which cost an evening.
-      MAPERR = MAPDATA ? null : (d.mapError || d.error || null);
-      MAPFOR = pts.length;
-    } catch(e) { MAPDATA = null; MAPERR = "Couldn't reach Trey's server to build the map."; }
-    drawMap();
+  // A marker is a coloured disc we draw ourselves rather than Leaflet's default
+  // teardrop, so the tier palette is the only thing deciding what it looks like.
+  // `colour` is always one of our own constants; `label` is escaped because it
+  // can be a business-supplied number one day.
+  function discIcon(colour, label, big){
+    const n = big ? 26 : 22;
+    return L.divIcon({
+      className: "",   // "" drops Leaflet's default white-box .leaflet-div-icon
+      html: '<span class="leafpin' + (big ? " n" : "") + '" style="background:' + colour + '">' +
+            esc(label == null ? "" : label) + "</span>",
+      iconSize: [n, n], iconAnchor: [n / 2, n / 2],
+    });
+  }
+
+  // The hollow twin of discIcon, for a coordinate we only know approximately.
+  // Deliberately reads as "outline, not filled in" at a glance.
+  function ringIcon(colour) {
+    return L.divIcon({
+      className: "",
+      html: '<span style="display:block;width:13px;height:13px;border-radius:50%;' +
+            'border:3px solid ' + colour + ';background:#fff;box-sizing:border-box;' +
+            'box-shadow:0 0 0 1px rgba(15,23,42,.25)"></span>',
+      iconSize: [13, 13], iconAnchor: [7, 7],
+    });
+  }
+
+  // One Leaflet instance for the life of the page. Re-creating it per render
+  // would throw away your pan and zoom and re-download every tile.
+  function ensureMap(){
+    if (LMAP) return LMAP;
+    LMAP = L.map("leadMapCanvas", { scrollWheelZoom: true }).setView(HOME, 13);
+    L.tileLayer(OSM_TILES, { maxZoom: 19, attribution: OSM_ATTRIB }).addTo(LMAP);
+    LPINS  = L.layerGroup().addTo(LMAP);
+    LROUTE = L.layerGroup().addTo(LMAP);
+    return LMAP;
+  }
+
+  // Clicking a marker answers "who is this?" with the same numbers the row
+  // shows, and a way into the row itself for everything else.
+  function leadPopup(l, i){
+    const p = prospectScore(l);
+    return '<b>' + esc(l.businessName || "—") + '</b>' +
+      (l.category ? '<div class="muted" style="font-size:12px;">' + esc(l.category) + '</div>' : "") +
+      '<div style="font-size:12.5px;margin-top:4px;">Tier ' + esc(l.tier || "?") +
+        ' · Opportunity <b>' + esc(p.total) + '</b> · ' + esc(l.outreachStatus || "New") + '</div>' +
+      (l.rating != null
+        ? '<div style="font-size:12.5px;">' + esc(l.rating) + '★ · ' + esc(l.reviewCount || 0) + ' reviews</div>'
+        : "") +
+      (l.address ? '<div class="muted" style="font-size:12px;margin-top:3px;">' + esc(l.address) + '</div>' : "") +
+      '<div style="margin-top:7px;"><button class="btn-secondary" onclick="jumpLead(' + i + ')">Open this lead</button></div>';
+  }
+
+  // Frame every pin again after you've panned off. Deliberately does NOT go
+  // through drawMap — re-framing is not the same event as the filter changing,
+  // and it must never take a planned route off the map.
+  function fitPins(){
+    ensureMap();
+    const pts = withGeo(ROWS).map(o => [o.l.lat, o.l.lng]);
+    if (pts.length) LMAP.fitBounds(L.latLngBounds(pts), { padding: [28, 28], maxZoom: 17 });
   }
 
   function drawMap(){
     const box = document.getElementById("leadMap");
-    if (VIEW !== "map") { box.innerHTML = ""; return; }
+    if (VIEW !== "map") { box.style.display = "none"; return; }
+    box.style.display = "block";
+    ensureMap();
+    // The container was display:none until a moment ago, so Leaflet still
+    // thinks it has no size and will paint a single tile in the corner.
+    LMAP.invalidateSize();
 
     const placed = withGeo(ROWS), missing = needGeo(ROWS);
-    let note = "";
-    if (missing.length) {
-      // Never silently show fewer pins than leads. Say what's missing and offer
-      // to fix it, with the cost stated up front.
-      note += '<div class="mapnote"><b>' + missing.length + '</b> of ' + ROWS.length +
+
+    // Never silently show fewer pins than leads. Say what's missing and offer
+    // to fix it, with the cost stated up front.
+    document.getElementById("mapNote").innerHTML = missing.length
+      ? '<div class="mapnote"><b>' + missing.length + '</b> of ' + ROWS.length +
         ' leads have no coordinates yet, so they can\'t be drawn. ' +
         '<button class="btn-secondary" style="margin-left:6px" onclick="locateMissing()">Look up ' +
-        Math.min(missing.length, 60) + '</button> ' +
-        '<span class="muted">(one Google lookup each; kept 30 days)</span></div>';
-    }
-    if (!MAPDATA) {
-      // Say WHY, in Google's own words, rather than guessing at a cause. The
-      // list below still works — a missing picture is never fatal.
-      const why = placed.length
-        ? (MAPERR ? esc(MAPERR) : 'No map picture came back, and the server gave no reason.')
-        : 'None of these leads have coordinates yet.';
-      box.innerHTML = note + '<div class="card muted">' + why +
-        (placed.length ? ' <button class="btn-secondary" style="margin-left:6px" ' +
-          'onclick="fetchBaseMap()">Try again</button>' : '') + '</div>';
-      return;
+        Math.min(missing.length, 40) + '</button> ' +
+        // FREE now, and kept for good. Geocoding moved off Google's Places API to
+        // Nominatim + postcodes.io (17 Aug), so there is no per-lookup cost and no
+        // 30-day deletion clock. It is rate-limited to one a second by Nominatim's
+        // usage policy, which is why this takes a moment rather than being instant.
+        '<span class="muted">(free \u2014 about a second each)</span></div>'
+      : "";
+
+    LPINS.clearLayers();
+    const pts = [];
+
+    // HOW ACCURATE IS THIS PIN? (17 Aug 2026)
+    //
+    // Coordinates now come from one of two places, and they are NOT equally
+    // precise:
+    //   geoSource "address"  — Nominatim matched the full street address. The pin
+    //                          is on the building.
+    //   geoSource "postcode" — only the postcode resolved, so this is the postcode
+    //                          CENTROID: roughly 100m out in a town, and every
+    //                          shop sharing that postcode lands on the same spot.
+    //
+    // Drawing the second as though it were the first is exactly the dishonesty
+    // that cost an evening with the map error — a map that looks precise and
+    // isn't is worse than one that admits it. Centroid pins are drawn hollow, and
+    // shops sharing a centroid are fanned out so each stays clickable. The LIST is
+    // authoritative for which shop is which; the map is authoritative for roughly
+    // where.
+    const centroidAt = {};
+    placed.forEach(function (o) {
+      if (o.l.geoSource === "postcode") {
+        const k = Number(o.l.lat).toFixed(5) + "," + Number(o.l.lng).toFixed(5);
+        centroidAt[k] = (centroidAt[k] || 0) + 1;
+      }
+    });
+    const fanned = {};
+
+    placed.forEach(function (o) {
+      const l = o.l;
+      const vague = l.geoSource === "postcode";
+      let lat = Number(l.lat), lng = Number(l.lng);
+
+      if (vague) {
+        const k = lat.toFixed(5) + "," + lng.toFixed(5);
+        const total = centroidAt[k] || 1;
+        if (total > 1) {
+          // Spread them on a small circle — ~15m, well inside the centroid's own
+          // error, so nothing is moved further from the truth than it already was.
+          const n = (fanned[k] = (fanned[k] || 0));
+          fanned[k]++;
+          const ang = (2 * Math.PI * n) / total;
+          lat += (15 / 111320) * Math.cos(ang);
+          lng += (15 / (111320 * Math.cos(lat * Math.PI / 180))) * Math.sin(ang);
+        }
+      }
+
+      L.marker([lat, lng], {
+        icon: vague ? ringIcon(pinColour(l)) : discIcon(pinColour(l), ""),
+        title: (l.businessName || "") + " — Tier " + (l.tier || "?") + " · " + (l.outreachStatus || "New") +
+               (vague ? " · approximate (postcode only)" : ""),
+      }).bindPopup(leadPopup(l, o.i) +
+        (vague ? '<div class="muted" style="margin-top:6px">Approximate \u2014 postcode centroid, not the door.</div>' : ''))
+        .addTo(LPINS);
+      pts.push([lat, lng]);
+    });
+
+    // Frame the current results, but only when the set has actually changed —
+    // so a new search frames itself and a colour toggle leaves your view alone.
+    const sig = pts.map(p => p[0].toFixed(5) + "," + p[1].toFixed(5)).join("|");
+    if (sig !== PIN_SIG) {
+      // A route planned against the old set is no longer the answer to the
+      // question on screen. Drop it and say so rather than leaving a stale one.
+      if (WALK) clearWalk("The filter changed, so the route was cleared. Plan it again.");
+      if (pts.length) LMAP.fitBounds(L.latLngBounds(pts), { padding: [28, 28], maxZoom: 17 });
+      PIN_SIG = sig;
     }
 
-    const onFrame = TreyMap.countPlaceable(MAPDATA, placed.map(o => o.l));
-    if (onFrame < placed.length) {
-      note += '<div class="mapnote">' + (placed.length - onFrame) +
-        ' outside this view. <button class="btn-secondary" onclick="fetchBaseMap()">Refit map</button></div>';
-    }
-
-    const ctl =
-      '<div class="mapctl">' +
-      '<button onclick="zoomMap(1)" title="Zoom in">+</button>' +
-      '<button onclick="zoomMap(-1)" title="Zoom out">&minus;</button>' +
-      '<button class="colby" style="width:auto" onclick="zoomFit()" ' +
-        (MAPZOOM == null ? 'disabled' : '') + ' title="Fit every pin back in frame">Fit</button>' +
-      '<span class="lab">' + (MAPZOOM == null ? 'fitted' : 'zoom ' + MAPZOOM) + '</span>' +
+    document.getElementById("mapCtl").innerHTML =
+      '<button class="colby" onclick="fitPins()" title="Frame every pin again">Fit</button>' +
       '<span style="flex:1"></span>' +
       '<span class="lab">Colour</span>' +
       '<button class="colby' + (COLOUR_BY === "tier" ? " on" : "") + '" onclick="setColourBy(\'tier\')">Tier</button>' +
-      '<button class="colby' + (COLOUR_BY === "status" ? " on" : "") + '" onclick="setColourBy(\'status\')">Status</button>' +
-      '</div>';
+      '<button class="colby' + (COLOUR_BY === "status" ? " on" : "") + '" onclick="setColourBy(\'status\')">Status</button>';
 
     const legend = COLOUR_BY === "status"
-      ? [{colour:"#94a3b8",label:"New"},{colour:"#ea580c",label:"Come back"},
-         {colour:"#2563eb",label:"Contacted"},{colour:"#ca8a04",label:"On trial"},
-         {colour:"#16a34a",label:"Converted"},{colour:"#dc2626",label:"Lost"}]
-      : [{colour:"#047857",label:"Tier 1"},{colour:"#b45309",label:"Tier 2"},
-         {colour:"#94a3b8",label:"Tier 3"},{colour:"#4338ca",label:"Already yours"}];
+      ? Object.keys(STATUS_COLOURS).map(k => ({ colour: STATUS_COLOURS[k], label: k }))
+      : [{ colour: TIER_COLOURS["1"], label: "Tier 1" }, { colour: TIER_COLOURS["2"], label: "Tier 2" },
+         { colour: TIER_COLOURS["3"], label: "Tier 3" }, { colour: MINE_COLOUR, label: "Already yours" }];
+    // A hollow key entry, shown only when there is at least one approximate pin —
+    // no point explaining a symbol that isn't on the map.
+    const anyVague = placed.some(function (o) { return o.l.geoSource === "postcode"; });
+    document.getElementById("mapLegend").innerHTML = legend.map(function (x) {
+      return '<span><i style="background:' + esc(x.colour) + '"></i>' + esc(x.label) + "</span>";
+    }).join("") + (anyVague
+      ? '<span title="Only the postcode resolved, so the pin is the postcode centroid — about 100m out, and shared by every shop on that postcode.">' +
+        '<i style="background:#fff;border:3px solid #64748b;box-sizing:border-box"></i>' +
+        'hollow = approximate (postcode only)</span>'
+      : "");
 
-    const pins = placed.map(o => ({
-      lat:o.l.lat, lng:o.l.lng, cls:pinCls(o.l), label:"",
-      title:(o.l.businessName||"") + " — Tier " + (o.l.tier||"?") +
-            " · " + (o.l.outreachStatus||"New"),
-      onclick:"jumpLead(" + o.i + ")",
-    }));
-    box.innerHTML = note + ctl + TreyMap.html({
-      map: MAPDATA, pins: pins, legend: legend, alt: "Map of your leads",
-    }) + '<div class="mapnote">Showing <b>' + onFrame + '</b> of ' + ROWS.length +
-      ' filtered leads. Click a dot to jump to it.</div>';
+    document.getElementById("mapSummary").innerHTML =
+      'Showing <b>' + placed.length + '</b> of ' + ROWS.length +
+      ' filtered leads. Click a marker for the business; drag, pinch or scroll to move the map.' +
+      (anyVague
+        ? ' <b>' + placed.filter(function (o) { return o.l.geoSource === "postcode"; }).length +
+          '</b> are approximate \u2014 the list is the authority on which shop is which.'
+        : '');
+  }
+
+  // ---- Plan a walk ---------------------------------------------------------
+  // route.js picks the SUBSET of doors worth walking to as well as the order —
+  // read its header before changing anything here. It is deliberately
+  // pessimistic about time, so a plan that says 120 minutes should finish early
+  // rather than overrun.
+  //
+  // It plans from the MAP CENTRE, not from a GPS fix: this is the desk screen,
+  // you are not standing there. Pan to where you'll park, then press Plan.
+  function planWalk(){
+    if (VIEW !== "map") setView("map");
+    ensureMap();
+    const mins = Math.max(1, Number(document.getElementById("walkMins").value) || 120);
+    const c = LMAP.getCenter();
+    const start = { lat: c.lat, lng: c.lng };
+
+    // Hand the planner EVERY filtered lead, including the ones with no
+    // coordinates, so its `skipped` list is the honest answer to "what did you
+    // ignore?" rather than a list we quietly pre-filtered for it.
+    //
+    // The planner ranks on `score`. A lead's stored score only exists on Apify
+    // imports, so passing raw leads would hand it a pile of zeroes — send the
+    // Opportunity score this screen already sorts by instead.
+    const cands = ROWS.map(function (o) {
+      return { lat: o.l.lat, lng: o.l.lng, score: prospectScore(o.l).total, i: o.i, lead: o.l };
+    });
+
+    const plan = TreyRoute.planWalk(start, cands, mins);
+    WALK = plan;
+    document.getElementById("walkClear").style.display = "";
+
+    LROUTE.clearLayers();
+    const line = [[start.lat, start.lng]].concat(plan.order.map(s => [s.lat, s.lng]));
+    if (plan.order.length) {
+      L.polyline(line, { color: MINE_COLOUR, weight: 4, opacity: .8, dashArray: "6 6" }).addTo(LROUTE);
+      L.marker([start.lat, start.lng], { icon: discIcon("#0f172a", "S"), title: "Start — the map centre" }).addTo(LROUTE);
+      plan.order.forEach(function (s) {
+        // zIndexOffset lifts the numbered stops above the plain tier markers,
+        // which stay on show so you can see what the plan walked past.
+        L.marker([s.lat, s.lng], {
+          icon: discIcon(MINE_COLOUR, s.n, true), zIndexOffset: 1000,
+          title: s.n + ". " + (s.lead.lead.businessName || ""),
+        }).bindPopup('<b>Stop ' + s.n + '</b>' + leadPopup(s.lead.lead, s.lead.i)).addTo(LROUTE);
+      });
+      LMAP.fitBounds(L.latLngBounds(line), { padding: [30, 30], maxZoom: 17 });
+    }
+
+    // WHAT WAS LEFT OUT, always. A planner that quietly ignores half your list
+    // is worse than no planner — silently dropping records is the exact defect
+    // this codebase keeps finding, so the counts go on screen next to the win.
+    const by = {};
+    plan.skipped.forEach(function (s) { by[s.reason] = (by[s.reason] || 0) + 1; });
+    const reasons = Object.keys(by).map(k => by[k] + " " + k).join(", ");
+    const dist = plan.distanceMetres >= 1000
+      ? (plan.distanceMetres / 1000).toFixed(1) + " km" : plan.distanceMetres + " m";
+
+    document.getElementById("walkOut").innerHTML = '<div class="walkbox">' +
+      (plan.stops.length
+        ? '<b>' + plan.stops.length + ' doors</b> · <b>' + plan.totalMinutes + ' min</b> (' +
+          plan.walkMinutes + ' walking, ' + plan.dwellMinutes + ' talking) · ' + dist +
+          ' · total score <b>' + plan.totalScore + '</b>'
+        : '<b>No walk fits ' + mins + ' minutes from here.</b> Pan closer to your leads, or give it longer.') +
+      '<div class="mapnote" style="margin:7px 0 0;">' +
+        'Left out: <b>' + plan.dropped.length + '</b> that wouldn\'t fit the budget (or were too far to walk to)' +
+        (plan.skipped.length
+          ? ', <b>' + plan.skipped.length + '</b> that couldn\'t be planned at all — ' + esc(reasons)
+          : '') +
+        '. <b>' + plan.considered + '</b> of ' + ROWS.length + ' filtered leads were considered.' +
+      '</div>' +
+      (plan.order.length
+        ? '<ol>' + plan.order.map(s => '<li>' + esc(s.lead.lead.businessName || "—") + "</li>").join("") + "</ol>"
+        : "") +
+      '</div>';
+  }
+
+  function clearWalk(why){
+    WALK = null;
+    if (LROUTE) LROUTE.clearLayers();
+    document.getElementById("walkClear").style.display = "none";
+    document.getElementById("walkOut").innerHTML = why
+      ? '<div class="mapnote">' + esc(why) + '</div>' : "";
   }
 
   // Click a dot, get the lead. The map answers "where", the card answers "who".
@@ -737,22 +989,34 @@
   async function locateMissing(){
     const missing = needGeo(ROWS).slice(0, 60);
     if (!missing.length) return;
-    const box = document.getElementById("leadMap");
-    box.innerHTML = '<div class="card muted">Looking up ' + missing.length + ' locations…</div>';
+    // Writes into the note strip above the map, never over the map itself —
+    // blowing away #leadMap would take the Leaflet instance with it.
+    const box = document.getElementById("mapNote");
+    box.innerHTML = '<div class="mapnote">Looking up ' + missing.length + ' locations…</div>';
     try {
+      // Sends ADDRESSES, not place ids. The server geocodes them with open data
+      // (Nominatim, then postcodes.io) — a place id would mean a Places call, and
+      // Places-derived coordinates cannot lawfully be drawn on a Leaflet map.
       const res = await fetch(NEARBY_API, { method:"POST",
         headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
-        body: JSON.stringify({ action:"locate", placeIds: missing.map(o => o.l.placeId) }) });
+        body: JSON.stringify({ action:"locate", items: missing.map(o => ({
+          id: o.l.id,
+          address: o.l.address || "",
+          postcode: o.l.postcode || o.l.address || ""
+        })) }) });
       if (res.status === 403) { logout(); return; }
       const d = await res.json();
-      if (d.error) { box.innerHTML = '<div class="card muted">'+esc(d.error)+'</div>'; return; }
+      if (d.error) { box.innerHTML = '<div class="mapnote">'+esc(d.error)+'</div>'; return; }
       const updates = [];
       missing.forEach(o => {
-        const hit = d.found && d.found[o.l.placeId];
+        const hit = d.found && d.found[o.l.id];
         if (!hit) return;
-        o.l.lat = hit.lat; o.l.lng = hit.lng;
+        o.l.lat = hit.lat; o.l.lng = hit.lng; o.l.geoSource = hit.geoSource;
+        // geoSource travels with the coordinate. leads.js keys expiry off it, and
+        // the map draws centroid pins differently — so losing it here would both
+        // resurrect the 30-day purge and make a 100m blob look like a shopfront.
         updates.push({ id:o.l.id, placeId:o.l.placeId, businessName:o.l.businessName,
-                       lat:hit.lat, lng:hit.lng });
+                       lat:hit.lat, lng:hit.lng, geoSource:hit.geoSource });
       });
       if (updates.length) {
         await fetch(API, { method:"POST",
@@ -762,39 +1026,76 @@
       // The server works to a deadline (Netlify kills a function at 10s), so a
       // big backlog needs more than one press. Say how many are left rather than
       // looking finished when it isn't.
-      MAPDATA = null;
-      await fetchBaseMap();
+      drawMap();
       const left = needGeo(ROWS).length;
       if (left) {
-        const box2 = document.getElementById("leadMap");
-        box2.insertAdjacentHTML("afterbegin",
+        document.getElementById("mapNote").insertAdjacentHTML("afterbegin",
           '<div class="mapnote">Located <b>' + updates.length + '</b>. <b>' + left +
           '</b> still to go — press <b>Look up</b> again.' +
-          ((d.failed && d.failed.length) ? ' ' + d.failed.length + ' had no location on Google.' : '') +
+          ((d.failed && d.failed.length)
+            ? ' ' + d.failed.length + ' could not be matched from their address or postcode.' : '') +
           '</div>');
       }
-    } catch(e){ box.innerHTML = '<div class="card muted">Lookup failed: '+esc(e.message)+'</div>'; }
+    } catch(e){ box.innerHTML = '<div class="mapnote">Lookup failed: '+esc(e.message)+'</div>'; }
   }
 
   // ---- Prospect an area from the desk --------------------------------------
-  // Its OWN map, drawn on the picture nearby.js already returned with the search
-  // — so it costs nothing extra, and the live results can never be mistaken for
-  // dots on the saved-leads map below.
-  let AREA = [], AREAMAP = null;
+  // Its OWN Leaflet map, kept inside the orange box, so live Google results can
+  // never be mistaken for saved leads on the planning map below. Same tiles,
+  // same palette, half the height.
+  let AREA = [], AMAP = null, APINS = null;
 
-  function areaMapHtml(){
-    if (!AREAMAP) return "";
-    const cls = (l) => l.isClient ? "mine"
-      : l.field.band === "Knock now" ? "t1" : l.field.band === "Worth a look" ? "t2" : "t3";
-    return TreyMap.html({
-      map: AREAMAP,
-      pins: AREA.map((l,i) => ({ lat:l.lat, lng:l.lng, cls:cls(l), label:"",
-        title:(l.businessName||"") + " — " + (l.isClient?"already yours":l.field.band) })),
-      legend: [{colour:"#047857",label:"Knock now"},{colour:"#b45309",label:"Worth a look"},
-               {colour:"#94a3b8",label:"Skip"},{colour:"#4338ca",label:"Already yours"}],
-      alt: "Map of the live search results",
-    });
+  function ensureAreaMap(){
+    if (AMAP) return AMAP;
+    AMAP = L.map("areaMapCanvas", { scrollWheelZoom: true }).setView(HOME, 15);
+    L.tileLayer(OSM_TILES, { maxZoom: 19, attribution: OSM_ATTRIB }).addTo(AMAP);
+    APINS = L.layerGroup().addTo(AMAP);
+    return AMAP;
   }
+
+  // The live search has no tier — it has fieldScore's band. Map it onto the
+  // same three colours so "green" means the same thing on every map in Trey.
+  function bandColour(l){
+    if (l.isClient) return MINE_COLOUR;
+    return l.field.band === "Knock now" ? TIER_COLOURS["1"]
+      : l.field.band === "Worth a look" ? TIER_COLOURS["2"] : TIER_COLOURS["3"];
+  }
+
+  function drawAreaMap(centre){
+    ensureAreaMap();
+    AMAP.invalidateSize();
+    APINS.clearLayers();
+    const pts = [];
+    AREA.forEach(function (l) {
+      if (l.lat == null || l.lng == null) return;
+      L.marker([l.lat, l.lng], {
+        icon: discIcon(bandColour(l), ""),
+        title: (l.businessName || "") + " — " + (l.isClient ? "already yours" : l.field.band),
+      }).bindPopup(
+        '<b>' + esc(l.businessName || "—") + '</b>' +
+        (l.category ? '<div class="muted" style="font-size:12px;">' + esc(l.category) + '</div>' : "") +
+        '<div style="font-size:12.5px;margin-top:4px;">' + esc(l.field.band) +
+          ' · score <b>' + esc(l.field.total) + '</b></div>' +
+        (l.rating != null
+          ? '<div style="font-size:12.5px;">' + esc(l.rating) + '★ · ' + esc(l.reviewCount || 0) + ' reviews</div>'
+          : "")
+      ).addTo(APINS);
+      pts.push([l.lat, l.lng]);
+    });
+    if (centre && isFinite(centre.lat) && isFinite(centre.lng)) {
+      L.marker([centre.lat, centre.lng], { icon: discIcon(MINE_COLOUR, "+"), title: "Search centre" }).addTo(APINS);
+      pts.push([centre.lat, centre.lng]);
+    }
+    if (pts.length) AMAP.fitBounds(L.latLngBounds(pts), { padding: [22, 22], maxZoom: 18 });
+
+    document.getElementById("areaLegend").innerHTML =
+      [{ colour: TIER_COLOURS["1"], label: "Knock now" }, { colour: TIER_COLOURS["2"], label: "Worth a look" },
+       { colour: TIER_COLOURS["3"], label: "Skip" }, { colour: MINE_COLOUR, label: "Already yours / centre" }]
+      .map(function (x) {
+        return '<span><i style="background:' + esc(x.colour) + '"></i>' + esc(x.label) + "</span>";
+      }).join("");
+  }
+
   async function prospect(){
     const q = document.getElementById("areaQ").value.trim();
     const out = document.getElementById("areaOut");
@@ -803,39 +1104,42 @@
     try {
       const res = await fetch(NEARBY_API, { method:"POST",
         headers:{ "Content-Type":"application/json", Authorization:"Bearer "+token },
-        body: JSON.stringify({ where:q, radius:Number(document.getElementById("areaRadius").value) }) });
+        // includeMap:false — the server can still build a Static Maps picture
+        // (staticMap() is untouched in nearby.js), we just never ask for one.
+        // Leaflet draws the map now, so that image would be a billed Google
+        // call and a base64 blob roughly doubling the response, for nothing.
+        body: JSON.stringify({ where:q, includeMap:false,
+          radius:Number(document.getElementById("areaRadius").value) }) });
       if (res.status === 403) { logout(); return; }
       const d = await res.json();
       if (!res.ok || d.error) {
+        document.getElementById("areaBox").style.display = "none";
+        document.getElementById("areaList").innerHTML = "";
         out.innerHTML = '<div class="muted" style="padding:10px 0;">'+
           esc(d.error||("HTTP "+res.status))+(d.config?' — set GOOGLE_PLACES_API_KEY in Netlify.':'')+'</div>';
         return;
       }
       AREA = d.leads || [];
-      AREAMAP = d.map || null;
       const known = new Set(LEADS.map(l => l.placeId).filter(Boolean));
       const already = AREA.filter(l => l.isClient || (l.placeId && known.has(l.placeId))).length;
+      out.innerHTML = "";
       // THESE ARE NOT YOUR LEADS. Saying so loudly, because the page also has a
       // leads list, a tier filter and a map — and the first time this ran for
       // real, 19 live Google results next to 286 saved leads read as one thing.
       // The tier filter and the leads map apply to the leads, never to these.
-      out.innerHTML =
-        '<div style="margin-top:12px;border:1px solid #fed7aa;background:#fff7ed;border-radius:10px;padding:11px 13px;">'+
-        '<div style="font-weight:800;font-size:13px;color:#9a3412;text-transform:uppercase;letter-spacing:.04em;">Live Google results — not your leads</div>'+
-        '<div class="mapnote" style="margin:6px 0 0;"><b>'+AREA.length+
-        '</b> businesses within '+d.radius+'m of '+esc(d.placeLabel||q)+
+      document.getElementById("areaHdr").innerHTML =
+        '<b>'+AREA.length+'</b> businesses within '+d.radius+'m of '+esc(d.placeLabel||q)+
         ', best door first. Scored on what Google shows — <b>no reply-rate data</b>, so these numbers aren\'t the Tier you see below. '+
         'The tier filter and the map underneath apply to your saved leads, not to this list.'+
-        (already?' <b>'+already+'</b> of these you already have.':'')+
-        '</div>'+
-        (AREAMAP ? '<div style="margin-top:10px;">'+areaMapHtml()+'</div>' : '')+
-        '</div>' +
+        (already?' <b>'+already+'</b> of these you already have.':'');
+      document.getElementById("areaBox").style.display = "block";
+      drawAreaMap(d.centre);
+
+      document.getElementById("areaList").innerHTML =
         AREA.map(function(l,i){
           const have = l.isClient || (l.placeId && known.has(l.placeId));
           return '<div class="row" style="align-items:center;border-top:1px solid #eef2f7;padding:8px 0;margin:0;">'+
-            '<div style="flex:0 0 44px;font-weight:800;color:'+
-              (l.field.band==="Knock now"?"#047857":l.field.band==="Worth a look"?"#b45309":"#94a3b8")+
-              '">'+l.field.total+'</div>'+
+            '<div style="flex:0 0 44px;font-weight:800;color:'+bandColour(l)+'">'+l.field.total+'</div>'+
             '<div style="flex:2;"><b>'+esc(l.businessName)+'</b><div class="muted" style="font-size:12px;">'+
               esc(l.category||"")+(l.rating!=null?' · '+l.rating+'★ · '+(l.reviewCount||0)+' reviews':'')+'</div></div>'+
             '<div style="flex:0;">'+(have

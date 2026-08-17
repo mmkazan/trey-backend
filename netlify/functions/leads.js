@@ -63,14 +63,44 @@ const CONSENT_SCRIPTS = {
 // So coordinates are stored WITH THE DATE THEY WERE FETCHED, and purged the
 // moment they go stale. The place_id stays, so they can always be fetched again.
 //
-// The purge happens lazily, on read — meaning expired coordinates are actually
-// DELETED from the record, not merely hidden from the response. The leads list
-// is looked at often enough for that to be reliable, and it needs no extra
-// scheduled function to go wrong quietly.
+// The purge happens lazily on read — expired coordinates are actually DELETED
+// from the record, not merely hidden from the response — AND on a daily sweep.
+//
+// WHY THE SWEEP (17 Aug 2026). This used to say the read path alone was enough
+// because "the leads list is looked at often enough for that to be reliable".
+// That is an assumption about human behaviour, not a control: a lead nobody
+// opens is never read, so its coordinates are never purged, and a rule we can
+// only claim to follow on the days someone opens the page is not a rule we
+// follow. geo-purge.mjs walks the whole store every night and imports the two
+// functions below, so the read path and the sweep can never disagree about what
+// "expired" means.
 const GEO_MAX_AGE_DAYS = 30;
+
+// PROVENANCE DECIDES EXPIRY (changed 17 Aug 2026).
+//
+// The 30-day rule is a term of GOOGLE'S contract — it governs coordinates
+// obtained through the Places API. It is not a law of nature and it does not
+// apply to coordinates from anywhere else.
+//
+// Coordinates now come from Nominatim (OpenStreetMap) or postcodes.io (ONS/OS
+// open data), geocoded from the lead's own Apify-sourced address. That data is
+// openly licensed, carries no caching restriction, and must NOT be thrown away
+// every 30 days — doing so would mean re-geocoding the whole list monthly for
+// no reason at all.
+//
+// So expiry keys off `geoSource`:
+//   "address"  — Nominatim, from the stored address. Never expires.
+//   "postcode" — postcodes.io centroid fallback.        Never expires.
+//   "places"   — legacy, from Google.                   Expires at 30 days.
+//   missing    — legacy record predating this field.    Expires at 30 days.
+//
+// Unknown provenance is treated as Google-derived on purpose: the safe mistake
+// is deleting a coordinate we could have kept, not keeping one we had to delete.
+const OPEN_GEO_SOURCES = ["address", "postcode"];
 
 function geoExpired(lead, now) {
   if (!lead || lead.lat == null || lead.lng == null) return false;
+  if (OPEN_GEO_SOURCES.includes(lead.geoSource)) return false;
   const at = Date.parse(lead.geoAt || "");
   // No timestamp means we can't prove it's fresh, so treat it as expired.
   if (isNaN(at)) return true;
@@ -80,6 +110,9 @@ function geoExpired(lead, now) {
 function stripGeo(lead) {
   const out = { ...lead };
   delete out.lat; delete out.lng; delete out.geoAt;
+  // Clear provenance too. A record that keeps geoSource:"places" after its
+  // coordinates are gone would mislabel whatever replaces them.
+  delete out.geoSource;
   return out;
 }
 
@@ -89,17 +122,19 @@ function stripGeo(lead) {
 function geoFields(incoming, existing, nowIso) {
   const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
   const inLat = num(incoming.lat), inLng = num(incoming.lng);
-  const none = { lat: undefined, lng: undefined, geoAt: undefined };
+  const none = { lat: undefined, lng: undefined, geoAt: undefined, geoSource: undefined };
   if (inLat !== null && inLng !== null) {
     const at = Date.parse(incoming.geoAt || "");
     const stamp = isNaN(at) ? nowIso : new Date(at).toISOString();
     // Being handed coordinates already older than the allowance is an upstream
     // bug; drop them rather than laundering them into a fresh timestamp.
-    if (Date.now() - Date.parse(stamp) >= GEO_MAX_AGE_DAYS * 86400000) return none;
-    return { lat: inLat, lng: inLng, geoAt: stamp };
+    const src = OPEN_GEO_SOURCES.includes(incoming.geoSource) ? incoming.geoSource : "places";
+    // Only Google-derived coordinates can arrive already too old to keep.
+    if (src === "places" && Date.now() - Date.parse(stamp) >= GEO_MAX_AGE_DAYS * 86400000) return none;
+    return { lat: inLat, lng: inLng, geoAt: stamp, geoSource: src };
   }
   if (existing && existing.lat != null && existing.lng != null && !geoExpired(existing, Date.now())) {
-    return { lat: existing.lat, lng: existing.lng, geoAt: existing.geoAt };
+    return { lat: existing.lat, lng: existing.lng, geoAt: existing.geoAt, geoSource: existing.geoSource };
   }
   return none;
 }
@@ -245,7 +280,7 @@ exports.handler = async (event) => {
     const m = await clientMatchers();
     const { blobs } = await leadsStore.list();
     const nowMs = Date.now();
-    let purged = 0;
+    let purged = 0, purgeFailed = 0;
     const leads = await Promise.all(blobs.map(async (b) => {
       let l = await leadsStore.get(b.key, { type: "json" });
       if (!l) return null;
@@ -253,12 +288,24 @@ exports.handler = async (event) => {
       // not merely omitted from the response. See GEO_MAX_AGE_DAYS above.
       if (geoExpired(l, nowMs)) {
         l = stripGeo(l);
-        await leadsStore.setJSON(b.key, l).catch(() => {});
-        purged++;
+        // FIXED 17 Aug 2026. This was `.catch(() => {})` and still counted the
+        // lead as purged — so a failed write reported success while the
+        // coordinates survived on disk. An undetectable failure of the exact
+        // obligation this code exists to enforce. A failure is now counted
+        // separately and logged loudly; the response still hides the stale
+        // coordinates, but nobody is told they were deleted when they weren't.
+        try {
+          await leadsStore.setJSON(b.key, l);
+          purged++;
+        } catch (e) {
+          purgeFailed++;
+          console.error(`[leads] COORDINATE PURGE WRITE FAILED for ${b.key} — lat/lng older than ${GEO_MAX_AGE_DAYS} days are still stored:`, e.message);
+        }
       }
       return { ...l, id: b.key, isClient: isClient(l, m) };
     }));
     if (purged) console.log(`[leads] purged coordinates older than ${GEO_MAX_AGE_DAYS} days from ${purged} lead(s)`);
+    if (purgeFailed) console.error(`[leads] ${purgeFailed} coordinate purge write(s) FAILED — those leads still hold expired lat/lng. The nightly geo-purge will retry.`);
     // Attach the compliance verdict server-side so the UI can't disagree with it.
     let suppressedTails = new Set();
     try {
@@ -471,3 +518,16 @@ exports.handler = async (event) => {
 
   return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
 };
+
+// The 30-day coordinate rule, shared with the nightly sweep (geo-purge.mjs).
+//
+// Exported rather than copied. Two implementations of "when does a coordinate
+// expire" would drift, and the day they drift is the day the sweep quietly
+// stops deleting something the read path considers stale — the failure mode
+// being a Maps Platform terms breach nobody can see. `exports` and
+// `module.exports` are the same object here (neither is reassigned), so adding
+// these does not disturb `exports.handler` above.
+module.exports.geoExpired = geoExpired;
+module.exports.stripGeo = stripGeo;
+module.exports.GEO_MAX_AGE_DAYS = GEO_MAX_AGE_DAYS;
+module.exports.OPEN_GEO_SOURCES = OPEN_GEO_SOURCES;

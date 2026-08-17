@@ -1,4 +1,5 @@
 const { getStore } = require("@netlify/blobs");
+const { toE164 } = require("./phone");
 
 // Normalise a stored phone number to E.164 for Twilio.
 //
@@ -11,31 +12,6 @@ const { getStore } = require("@netlify/blobs");
 //
 // Normalising at SEND time as well as on write means records already saved with
 // a space are fixed too, with no data migration.
-function toE164(phone) {
-  const raw = String(phone || "").trim();
-  if (!raw) return "";
-  // "(0)" is the international convention for an OPTIONAL trunk digit — it is
-  // never part of an E.164 number. "+44 (0)7933 189216" is how a large share of
-  // UK businesses write their number; stripping non-digits naively yields
-  // "+4407933189216", which Twilio rejects with 21211 and the owner never finds
-  // out, because their review alerts simply stop arriving. Same trap for
-  // "+353 (0)86…". Remove it before anything else.
-  const cleaned = raw.replace(/\(\s*0\s*\)/g, "");
-  const d = cleaned.replace(/[^\d]/g, "");
-  if (!d) return "";
-  // A trunk 0 written straight after the country code ("+44 07933…") is the
-  // same mistake without the brackets. No UK subscriber number begins with 0,
-  // so "440…" is always a trunk zero, never a real number.
-  if (cleaned.startsWith("+")) return d.startsWith("440") ? "+44" + d.slice(3) : "+" + d;
-  if (d.startsWith("00")) {
-    const rest = d.slice(2);
-    return rest.startsWith("440") ? "+44" + rest.slice(3) : "+" + rest;
-  }
-  if (d.startsWith("0")) return "+44" + d.slice(1);   // UK national
-  if (d.startsWith("440")) return "+44" + d.slice(3);
-  if (d.startsWith("44")) return "+" + d;
-  return "+" + d;
-}
 
 
 // Receives an incoming Google review (POSTed by whatever review source feeds
@@ -86,6 +62,20 @@ exports.handler = async (event) => {
 
   if (!locationId) {
     return { statusCode: 400, body: JSON.stringify({ error: "locationId is required" }) };
+  }
+
+  // reviewId becomes part of a BLOB KEY (`pending:<id>` and
+  // `review:<loc>:<month>:<id>`). Unvalidated, a caller holding the webhook
+  // secret could write to arbitrary keys in the reviews store, including
+  // overwriting another location's records. Constrain it to the shape Google
+  // actually uses before it is ever concatenated into a key.
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(reviewId))) {
+    return { statusCode: 400, body: JSON.stringify({ error: "Invalid reviewId" }) };
+  }
+  // Bound the free-text fields too: `comment` goes straight into the Gemini
+  // prompt (cost + prompt-injection surface) and `rating` is rendered.
+  if (comment != null && String(comment).length > 4000) {
+    return { statusCode: 400, body: JSON.stringify({ error: "Comment too long" }) };
   }
 
   // Authenticate the caller with TREY_WEBHOOK_SECRET, sent either as the

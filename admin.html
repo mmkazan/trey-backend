@@ -449,6 +449,11 @@
         </div>
       </div>
       <div class="detailGrid" id="detailGrid"></div>
+      <!-- Clearing the two flags that nothing could ever clear: the "NEW" badge
+           on a self-serve signup, and a referral free month once it has actually
+           been applied in Stripe. Both lists only ever grew. Filled in by
+           showDetail(); hidden when there is nothing outstanding. -->
+      <div id="flagActions" style="display:none;margin-top:16px;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;"></div>
       <div class="actions">
         <button class="btn-primary" onclick="editFromDetail()">Edit client</button>
         <button class="btn-danger" onclick="deleteFromDetail()">Delete client</button>
@@ -760,9 +765,10 @@
       cc._referredBy = ref ? (ref.businessName || c.referredBy) : c.referredBy;
     }
     const sent = (clientsCache || []).filter((x) => x.referredBy === c.locationId);
+    let owed = [];
     if (sent.length) {
       const live = sent.filter((x) => String(x.subscriptionStatus).toLowerCase() === "active");
-      const owed = live.filter((x) => !x.referralCredited);
+      owed = live.filter((x) => !x.referralCredited);
       cc._referralsSent = sent.length + " (" + live.length + " subscribed)";
       cc._creditsOwed = owed.length
         ? owed.length + " — " + owed.map((x) => x.businessName || x.locationId).join(", ")
@@ -782,6 +788,7 @@
       </div>`;
     }).join("");
     document.getElementById("detailCard").dataset.locationId = c.locationId;
+    renderFlagActions(c, owed);
     renderTapStand(c.locationId);
     document.getElementById("detailCard").style.display = "block";
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1244,6 +1251,95 @@
     filterClients();
   }
   function showDetailByLoc(loc) { const c = clientsCache.find((x) => x.locationId === loc); if (c) showDetail(c); }
+
+  // --- Clearing a flag --------------------------------------------------------
+  //
+  // Two flags used to be written once and never cleared: needsReview (set true
+  // by every self-serve signup) and referralCredited (set false at signup, with
+  // a comment claiming the admin flipped it in Stripe — no save path ever
+  // carried the field). So the "NEW" badge never came off anyone, and the free
+  // months owed list counted credits that had already been paid. A list that
+  // only grows is a list that stops being read, and one of these is about money.
+  //
+  // The API path is deliberately narrow: action "flags" writes those two named
+  // booleans and touches nothing else on the record — see client.js.
+  function renderFlagActions(c, owed) {
+    const el = document.getElementById("flagActions");
+    const bits = [];
+
+    if (c.needsReview) {
+      bits.push(`
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          <div style="flex:1;min-width:220px;font-size:13px;color:#334155;">
+            <b>New self-serve signup.</b> Check the details and add their Google IDs, then clear the badge.
+          </div>
+          <button class="btn-primary" onclick='markReviewed("${esc(c.locationId)}")'>Reviewed</button>
+        </div>`);
+    } else if (c.reviewedAt) {
+      bits.push(`<div class="muted" style="font-size:12.5px;">Signup reviewed ${esc(new Date(c.reviewedAt).toLocaleDateString())}${c.reviewedBy ? " by " + esc(c.reviewedBy) : ""}.</div>`);
+    }
+
+    // One button per referral, because they are credited one at a time in
+    // Stripe and a single "mark all" would record money as paid that wasn't.
+    for (const r of (owed || [])) {
+      bits.push(`
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+          <div style="flex:1;min-width:220px;font-size:13px;color:#334155;">
+            <b>Free month owed</b> for referring ${esc(r.businessName || r.locationId)}.
+          </div>
+          <button class="btn-secondary" onclick='markCreditApplied("${esc(r.locationId)}")'>Mark credit applied</button>
+        </div>`);
+    }
+
+    el.innerHTML = bits.join("");
+    el.style.display = bits.length ? "block" : "none";
+  }
+
+  async function markReviewed(loc) {
+    const c = clientsCache.find((x) => x.locationId === loc);
+    const name = c ? (c.businessName || loc) : loc;
+    await setClientFlags({ locationId: loc, needsReview: false }, name + " marked as reviewed.");
+  }
+
+  async function markCreditApplied(loc) {
+    const c = clientsCache.find((x) => x.locationId === loc);
+    const name = c ? (c.businessName || loc) : loc;
+    // Confirmed because this is the record that says the money went out. Getting
+    // it wrong means somebody quietly never receives their free month.
+    if (!window.confirm(
+      "Mark the referral free month for " + name + " as applied?\n\n" +
+      "Only do this once the credit is actually on their Stripe subscription — " +
+      "this is what takes them off the owed list.")) return;
+    await setClientFlags({ locationId: loc, referralCredited: true }, "Credit recorded for " + name + ".");
+  }
+
+  // Both actions go through here so the failure handling is written once. The
+  // detail card is re-rendered from the reloaded data rather than patched in
+  // place: the button disappearing IS the confirmation that it saved.
+  async function setClientFlags(fields, okMsg) {
+    const el = document.getElementById("detailStatus");
+    const openLoc = document.getElementById("detailCard").dataset.locationId;
+    el.textContent = "Saving…"; el.className = "";
+    try {
+      const res = await fetch(API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ token, action: "flags" }, fields)),
+      });
+      if (res.status === 403) { logout(); return; }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      await loadClients();
+      const fresh = clientsCache.find((x) => x.locationId === openLoc);
+      if (fresh) showDetail(fresh);
+      const el2 = document.getElementById("detailStatus");
+      el2.textContent = okMsg;
+      el2.className = "success";
+    } catch (err) {
+      el.textContent = "Couldn't save: " + err.message;
+      el.className = "error";
+    }
+  }
 // Delete a client and everything keyed to it. Irreversible, so it asks you to
   // type the business name — the same guard the API enforces. This exists mainly
   // to clear up near-duplicates (two records for one business), which is exactly
