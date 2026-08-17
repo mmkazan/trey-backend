@@ -24,3 +24,15 @@
 # programmed tags keep working even if this rule misbehaves again.
 /t/:id   /.netlify/functions/tap?locationId=:id      200
 /q/:id   /.netlify/functions/tap-qr?locationId=:id   200
+
+# The login-free inbox as ONE opaque token: /i/<32 hex key><locationId>
+#
+# Added 17 Aug so the activation WhatsApp can offer a BUTTON rather than pasting
+# a naked URL into the message body. A WhatsApp URL-button variable has to be a
+# plain suffix on a fixed base, and the long form carries two query parameters
+# (`loc` and `k`), which Meta rejects. Same single-token shape approve.js and
+# google-post.js already use.
+#
+# The long /.netlify/functions/inbox?loc=…&k=… form still works, so every link
+# already sent keeps working and nothing has to be reissued.
+/i/:t    /.netlify/functions/inbox?r=:t              200

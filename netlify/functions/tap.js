@@ -122,6 +122,17 @@ function inboxUrl(locationId) {
   return `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(locationId)}&k=${reportKey(locationId)}`;
 }
 
+// The same link as ONE opaque token, for the /i/:t rewrite.
+//
+// A WhatsApp URL-button variable must be a plain suffix on a fixed base; it
+// cannot carry `?loc=…&k=…`. That is the only reason the activation template
+// pasted a naked URL into the message body instead of offering a button. The key
+// is a fixed 32 hex characters, so `<key><locationId>` splits unambiguously —
+// the shape approve.js and google-post.js already use.
+function inboxToken(locationId) {
+  return `${reportKey(locationId)}${encodeURIComponent(locationId)}`;
+}
+
 // A small fetch with a hard timeout, so a hanging Twilio or Resend can't leave
 // the owner staring at a spinner at the exact moment they're meant to be delighted.
 async function fetchWithTimeout(url, opts) {
@@ -139,7 +150,7 @@ function activationCopy(client, locationId) {
   const biz = (client && client.businessName) || "your business";
   const hw = client && client.hardware === "keyfob" ? "key fob" : "stand";
   const days = trialDaysFor(client);
-  return { first, biz, hw, days, inbox: inboxUrl(locationId) };
+  return { first, biz, hw, days, inbox: inboxUrl(locationId), inboxTok: inboxToken(locationId) };
 }
 
 /**
@@ -161,7 +172,7 @@ async function whatsAppActivated(client, locationId) {
   if (!client || !client.phone) return "whatsapp: no phone";
   if (client.nudgesOptOut === true) return "whatsapp: opted out";
 
-  const { first, biz, hw, days, inbox } = activationCopy(client, locationId);
+  const { first, biz, hw, days, inbox, inboxTok } = activationCopy(client, locationId);
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
   const params = messagingServiceSid
     ? { To: `whatsapp:${toE164(client.phone)}`, MessagingServiceSid: messagingServiceSid }
@@ -173,10 +184,13 @@ async function whatsAppActivated(client, locationId) {
   const contentSid = process.env.TWILIO_ACTIVATED_CONTENT_SID;
   if (contentSid) {
     params.ContentSid = contentSid;
+    // {{3}} is the BUTTON SUFFIX, not a URL — the template's button is
+    // https://trey.today/i/{{3}} and Meta rejects a variable containing a query
+    // string on a base ending in a bare `?`. See inboxToken() above.
     params.ContentVariables = JSON.stringify({
       1: String(first || biz).slice(0, 60),
       2: String(days),
-      3: inbox.slice(0, 300),
+      3: inboxTok.slice(0, 300),
     });
   } else {
     params.Body =

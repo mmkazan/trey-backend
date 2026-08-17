@@ -305,9 +305,38 @@ function noticePage(statusCode, title, message) {
   return r;
 }
 
-exports.handler = async (event) => {
+// One opaque token instead of two query parameters: `<32 hex key><locationId>`.
+//
+// WHY. A WhatsApp URL-button variable must be a plain SUFFIX appended to a fixed
+// base — it cannot contain `?loc=…&k=…`, and a variable carrying a query string
+// on a URL ending in a bare `?` is a standard Meta rejection. That is the only
+// reason the activation template used to paste a naked URL into the message body
+// instead of offering a button.
+//
+// The key is a fixed 32 hex characters (link-keys.js KEY_LEN), so the split is
+// unambiguous and needs no separator. Exactly the pattern approve.js already uses
+// for `?r=<sig><reviewId>` and google-post.js for `?r=<sig><postId>`.
+//
+// The old two-parameter form still works, so every link already sent by email,
+// WhatsApp or the admin panel keeps working. Nothing has to be reissued.
+function readLink(event) {
   const params = event.queryStringParameters || {};
-  const loc = params.loc;
+  if (params.loc) return { loc: params.loc, k: params.k, params };
+
+  // Belt and braces, the same as tap.js: read the token straight from the path
+  // as well as from the rewrite's query string. On 15 Aug a `_redirects` rule
+  // fired but did not substitute into the destination QUERY STRING, and every
+  // NFC tag and QR minted from the admin panel was dead on arrival. If the
+  // rewrite misbehaves again, this still resolves.
+  const raw = String(
+    params.r || (String(event.path || "").match(/\/i\/([^/?#]+)/) || [])[1] || ""
+  );
+  if (!raw) return { loc: "", k: "", params };
+  return { loc: raw.slice(32), k: raw.slice(0, 32), params };
+}
+
+exports.handler = async (event) => {
+  const { loc, k, params } = readLink(event);
   if (!loc) return noticePage(400, "Inbox unavailable", "This link is missing a location.");
 
   // Admin: mint the signed inbox link.
@@ -320,7 +349,14 @@ exports.handler = async (event) => {
     if (!process.env.TREY_REPORT_SECRET) return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "TREY_REPORT_SECRET not set" }) };
     const key = linkKey("inbox", loc);
     const base = process.env.URL || "https://treyv1.netlify.app";
-    return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ loc, key, url: `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(loc)}&k=${key}` }) };
+    // `shortUrl` is the one to use anywhere length matters — a WhatsApp button,
+    // a printed card. `url` stays for anything already reading it.
+    return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      loc, key,
+      url: `${base}/.netlify/functions/inbox?loc=${encodeURIComponent(loc)}&k=${key}`,
+      token: `${key}${loc}`,
+      shortUrl: `${base}/i/${key}${encodeURIComponent(loc)}`,
+    }) };
   }
 
   if (!process.env.TREY_REPORT_SECRET) return noticePage(500, "Inbox unavailable", "This isn't set up yet. Please try again later.");

@@ -97,4 +97,102 @@ exports.run = function (t) {
     t.throws(() => lk.linkKey("report", LOC),
       "minting throws rather than producing a dead link");
   });
+
+  // === The /i/:token short link ===========================================
+  //
+  // ADDED 17 Aug. The activation WhatsApp used to paste a naked inbox URL into
+  // the message body because a WhatsApp URL-BUTTON variable must be a plain
+  // suffix on a fixed base — it cannot carry `?loc=…&k=…`. So the inbox link is
+  // now expressible as one opaque token, `<32 hex key><locationId>`, behind the
+  // /i/:t rewrite. This is an AUTH path, so it gets the same treatment as the
+  // rest of this file: the split must be exact, and every malformed shape must
+  // fail closed rather than resolve to something.
+  {
+    const fs = require("fs");
+    const src = fs.readFileSync(path.join(FN, "inbox.js"), "utf8");
+
+    // Lift readLink() out and run it for real, rather than pattern-matching it.
+    const start = src.indexOf("function readLink(");
+    let readLinkSrc = "";
+    if (start >= 0) {
+      let i = src.indexOf("{", start), depth = 0;
+      for (let j = i; j < src.length; j++) {
+        if (src[j] === "{") depth++;
+        else if (src[j] === "}") { depth--; if (depth === 0) { readLinkSrc = src.slice(start, j + 1); break; } }
+      }
+    }
+    t.ok(!!readLinkSrc, "inbox.js has a readLink() that resolves both link forms");
+    // If readLink is missing, report that ONCE and carry on. Letting the eval
+    // throw would abort the suite and take the ten assertions below with it —
+    // the _redirects rule and tap.js's variable are checked down there, and a
+    // run that silently stops testing them is how a regression net rots.
+    const readLink = readLinkSrc
+      ? eval("(function(){ " + readLinkSrc + " return readLink; })()")
+      : null;
+
+    if (readLink) withSecret("test-secret-value", () => {
+      const key = lk.linkKey("inbox", LOC);
+      const token = key + LOC;
+
+      // --- the short form ---------------------------------------------------
+      const short = readLink({ queryStringParameters: { r: token } });
+      t.eq(short.loc, LOC, "the token's tail is the locationId");
+      t.eq(short.k, key, "the token's first 32 chars are the key");
+      t.ok(lk.linkValid("inbox", short.loc, short.k),
+        "a token built from linkKey verifies once split — the round trip closes");
+
+      // --- the long form still works ---------------------------------------
+      // Every link already sent by email, WhatsApp or the admin panel uses it.
+      const long = readLink({ queryStringParameters: { loc: LOC, k: key } });
+      t.eq(long.loc, LOC, "the two-parameter form still resolves");
+      t.eq(long.k, key, "…with its key");
+
+      // --- the path fallback -----------------------------------------------
+      // On 15 Aug a _redirects rule fired but did not substitute into the
+      // destination QUERY STRING, and every NFC tag minted from admin was dead.
+      // Reading the token off the path too means a repeat is survivable.
+      const viaPath = readLink({ queryStringParameters: {}, path: "/i/" + token });
+      t.eq(viaPath.loc, LOC, "the token is also read straight from the request path");
+      t.eq(viaPath.k, key, "…key included, if the rewrite drops the query string");
+
+      // --- everything malformed must fail CLOSED ---------------------------
+      t.eq(readLink({ queryStringParameters: {} }).loc, "",
+        "no token and no loc resolves to nothing, which the handler 400s");
+      t.eq(readLink({ queryStringParameters: { r: "" } }).loc, "",
+        "an empty token resolves to nothing");
+      // A token shorter than the key must NOT yield an empty key that then gets
+      // compared against something — it must yield no location at all.
+      t.eq(readLink({ queryStringParameters: { r: "abc" } }).loc, "",
+        "a token shorter than the key yields no location");
+      const truncated = readLink({ queryStringParameters: { r: key } });
+      t.eq(truncated.loc, "", "a token that is ONLY a key has no location to open");
+
+      // A tampered key must not validate, however well-formed the token looks.
+      const forged = readLink({ queryStringParameters: { r: "0".repeat(32) + LOC } });
+      t.eq(forged.loc, LOC, "a forged token still parses…");
+      t.ok(!lk.linkValid("inbox", forged.loc, forged.k), "…but does not validate");
+
+      // Cross-purpose still blocked through the new door — the C2 fix must hold
+      // for the short form exactly as it does for the long one.
+      const billingTok = lk.linkKey("billing", LOC) + LOC;
+      const viaBilling = readLink({ queryStringParameters: { r: billingTok } });
+      t.ok(!lk.linkValid("inbox", viaBilling.loc, viaBilling.k),
+        "a billing key packed into an inbox token does not open the inbox");
+    });
+
+    // --- the rewrite itself ------------------------------------------------
+    const redirects = fs.readFileSync(path.join(__dirname, "..", "_redirects"), "utf8");
+    t.ok(/^\/i\/:t\s+\/\.netlify\/functions\/inbox\?r=:t\s+200/m.test(redirects),
+      "_redirects maps /i/:t to inbox with a NAMED placeholder, not :splat");
+    t.ok(!/\/i\/\*/.test(redirects),
+      "…not the splat form, which silently failed to substitute into a query string");
+
+    // --- and tap.js sends the token, not the URL ---------------------------
+    const tap = fs.readFileSync(path.join(FN, "tap.js"), "utf8");
+    t.ok(/function inboxToken\(/.test(tap), "tap.js can mint the single-token form");
+    t.ok(/3: inboxTok/.test(tap),
+      "the activation template's {{3}} is the button SUFFIX, not a full URL");
+    t.ok(/inbox: inboxUrl\(locationId\)/.test(tap),
+      "…while the email keeps the long URL, which has no button constraint");
+  }
 };

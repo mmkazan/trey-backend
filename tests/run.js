@@ -38,23 +38,41 @@ const files = fs.readdirSync(__dirname)
 
 console.log(`\nTrey test suite — ${files.length} files\n${"=".repeat(46)}`);
 
-for (const f of files) {
-  const before = passed + failed;
-  process.stdout.write(`\n${f}\n`);
-  try {
-    require(path.join(__dirname, f)).run(t);
-  } catch (e) {
-    failed++; failures.push(`${f} threw: ${e.message}`);
-    console.log(`  ✗ SUITE THREW: ${e.message}`);
+// `run(t)` MAY return a promise and it is awaited if it does.
+//
+// It used not to be. A suite that needed `await` — daily-digest.test.js has to,
+// because the function under test is an ESM Netlify v2 module and can only be
+// reached from CommonJS through a dynamic import — would have its assertions
+// land AFTER the totals were printed and after the exit code was decided. The
+// suite would look like it passed with zero assertions, which is the worst
+// possible failure for a test runner. `await undefined` is a no-op, so the nine
+// synchronous suites are unaffected.
+async function main() {
+  for (const f of files) {
+    const before = passed + failed;
+    process.stdout.write(`\n${f}\n`);
+    try {
+      await require(path.join(__dirname, f)).run(t);
+    } catch (e) {
+      failed++; failures.push(`${f} threw: ${e.message}`);
+      console.log(`  ✗ SUITE THREW: ${e.message}`);
+    }
+    console.log(`  ${passed + failed - before} assertions`);
   }
-  console.log(`  ${passed + failed - before} assertions`);
+
+  console.log(`\n${"=".repeat(46)}`);
+  console.log(`${passed} passed, ${failed} failed`);
+  if (failed) {
+    console.log("\nFailures:");
+    failures.forEach((f) => console.log(`  - ${f}`));
+    process.exit(1);
+  }
+  console.log("");
 }
 
-console.log(`\n${"=".repeat(46)}`);
-console.log(`${passed} passed, ${failed} failed`);
-if (failed) {
-  console.log("\nFailures:");
-  failures.forEach((f) => console.log(`  - ${f}`));
+// An unhandled rejection inside a suite must fail the run, not print a warning
+// and exit 0 — a green build on a crashed suite is how a regression net rots.
+main().catch((e) => {
+  console.error(`\nTest runner failed: ${e && e.stack ? e.stack : e}`);
   process.exit(1);
-}
-console.log("");
+});
