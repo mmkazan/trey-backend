@@ -44,7 +44,7 @@ const {
   iso, ts, renderEmail,
   sectionNewCustomers, sectionActivations, sectionTrialsEnding, sectionTaps,
   sectionReviews, sectionAwaitingApproval, sectionDelivery, sectionSchedulers,
-  sectionWalks, sectionBilling,
+  sectionWalks, sectionBilling, sectionComeBacks,
 } = digest;
 
 export const config = { schedule: "0 7 * * *" };
@@ -170,6 +170,11 @@ export default async () => {
   const tapsOk = tapsRead !== null;
   const tapTotals = tapsRead || {};
 
+  // Leads, for the come-back reminders. Same guard as everything else: if the
+  // store cannot be read the section is named as unreadable in the email rather
+  // than silently reporting "no callbacks today".
+  const leads = (await guard("Leads", async () => getMany("leads", await listKeys("leads")))) || [];
+
   const statuses = (await guard("Message statuses", async () => getMany("messagestatus", await listKeys("messagestatus")))) || [];
   const runlogKeys = (await guard("Run log", async () => listKeys("runlog"))) || [];
   const walks = (await guard("Trey Go", async () => getMany("walks", await listKeys("walks")))) || [];
@@ -180,6 +185,7 @@ export default async () => {
     guard("New signups", () => sectionNewCustomers(clients, from, now)),
     guard("Activations", () => sectionActivations(clients, from, now)),
     guard("Trials ending", () => sectionTrialsEnding(clients, now)),
+    guard("Come backs", () => sectionComeBacks(leads, now)),
     guard("Replies unapproved", () => sectionAwaitingApproval(reviews, now)),
     guard("Delivery failures", () => sectionDelivery(statuses, from, now)),
     guard("Schedulers", () => sectionSchedulers(runlogKeys, now)),

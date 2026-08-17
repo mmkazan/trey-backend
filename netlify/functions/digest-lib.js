@@ -250,6 +250,58 @@ function renderEmail({ from, to, sections, notes, firstRun }) {
 }
 
 
+// Doors you promised to go back to.
+//
+// "Come back" is the most common outcome of a cold knock — the owner wasn't in —
+// and it is the one door you most need to find again. The status recorded the
+// intent and nothing recorded WHEN, so the promise lived in your head.
+//
+// Overdue ones come first and never age out of the list: a door you meant to
+// revisit three weeks ago is not less important than today's, it is more. That
+// is the opposite of how a notification usually behaves, and it is deliberate —
+// this is a to-do list, not a feed.
+//
+// `now` is passed in so the whole thing is testable without touching the clock.
+async function sectionComeBacks(leads, now) {
+  const due = [];
+  for (const row of leads || []) {
+    const l = (row && row.value) || {};
+    if ((l.outreachStatus || "") !== "Come back") continue;
+    const t = ts(l.comeBackAt);
+    if (!Number.isFinite(t)) continue;      // no date set — nothing to be due
+    // Anything up to the end of today counts as due. Comparing against the
+    // exact minute would hide a 9am callback from a 7am digest, which is the
+    // one it most needs to tell you about.
+    const endOfToday = new Date(now);
+    endOfToday.setHours(23, 59, 59, 999);
+    if (t > endOfToday.getTime()) continue;
+    due.push({ l, t });
+  }
+  if (!due.length) return null;
+
+  due.sort((a, b) => a.t - b.t);            // most overdue first
+  const startOf = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const lines = due.map(({ l, t }) => {
+    const days = Math.round((startOf(t) - startOf(now)) / 86400000);
+    const when = days < 0
+      ? (days === -1 ? "since yesterday" : Math.abs(days) + " days overdue")
+      : "today";
+    const at = new Date(t);
+    const hhmm = String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+    const where = l.address ? " — " + esc(l.address) : "";
+    return "<b>" + esc(l.businessName || l.id || "(unnamed lead)") + "</b> · " +
+           esc(when) + " · " + esc(hhmm) + esc(where);
+  });
+
+  const overdue = due.filter((d) => startOf(d.t) < startOf(now)).length;
+  const title = "Come back today (" + due.length + ")" +
+    (overdue ? " — " + overdue + " overdue" : "");
+  // Always an alert. A door you said you would return to is a promise you made
+  // to a person, and it belongs at the top of the email with the other things
+  // that need you, not in the activity list underneath.
+  return { title: title, lines: lines, alert: true };
+}
+
 // What to persist as the next baseline.
 //
 // THE BUG THIS EXISTS TO PREVENT. The taps read is wrapped in a guard like every
@@ -272,7 +324,7 @@ module.exports = {
   iso, esc, ts, inWindow,
   sectionNewCustomers, sectionActivations, sectionTrialsEnding, sectionTaps,
   sectionReviews, sectionAwaitingApproval, sectionDelivery, sectionSchedulers,
-  sectionWalks, sectionBilling,
+  sectionWalks, sectionBilling, sectionComeBacks,
   renderEmail,
   EXPECTED_SCHEDULERS, MAX_ROWS_PER_SECTION,
 };

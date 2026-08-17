@@ -120,4 +120,50 @@ exports.run = function (t) {
   t.ok(!/reputationStrong/.test(allSrc), "the write-only reputationStrong flag is gone");
   t.ok(!/generative-ai/.test(read("package.json")),
     "the unused @google/generative-ai dependency is gone");
+
+  // === comeBackAt — stored, not trusted ===================================
+  //
+  // Same reasoning as outreachStatus, which became stored XSS because a CSV cell
+  // was persisted verbatim and later rendered into a class attribute. A value
+  // with exactly one legal shape has no business being stored as free text —
+  // and this one is rendered into an admin page AND into an email.
+  {
+    const fs2 = require("fs");
+    const src2 = fs2.readFileSync(require("path").join(FN, "leads.js"), "utf8");
+    const m = src2.match(/const COME_BACK_MAX_YEARS[\s\S]*?\n\}/);
+    t.ok(!!m, "leads.js has an isoOrEmpty() normaliser for comeBackAt");
+    const isoOrEmpty = eval("(function(){" + m[0] + "; return isoOrEmpty;})()");
+
+    t.eq(isoOrEmpty("2026-08-19T09:30:00.000Z"), "2026-08-19T09:30:00.000Z",
+      "a full ISO instant survives unchanged");
+    // Everything unparseable CLEARS rather than persisting as text that only
+    // looks like a date — the digest compares it as a date and would skip it
+    // forever while the UI showed something.
+    for (const junk of ["", "   ", "not a date", "sometime next week", null, undefined, {}, []]) {
+      t.eq(isoOrEmpty(junk), "", `isoOrEmpty(${JSON.stringify(junk)}) clears`);
+    }
+    // A mistyped year is a typo, not a plan. Better dropped than hidden in a
+    // list nobody scrolls to in 2029.
+    t.eq(isoOrEmpty("2099-01-01T00:00:00.000Z"), "", "a date years out is rejected as a typo");
+    t.ok(isoOrEmpty(new Date(Date.now() + 30 * 86400000).toISOString()) !== "",
+      "…but a month ahead is perfectly reasonable");
+
+    // Clearing must be POSSIBLE. incomingClean strips empty values, so reading
+    // comeBackAt from there would make a cancelled callback permanent — it would
+    // haunt the digest forever. This is the same trap legalStatus documents.
+    t.ok(/comeBackAt:\s*\(!isBulk && "comeBackAt" in raw\)/.test(src2),
+      "comeBackAt is read from `raw`, so an empty value can clear it");
+    t.ok(/isoOrEmpty\(raw\.comeBackAt\)/.test(src2), "…and is normalised on the way in");
+    // A bulk CSV import must not be able to set callback dates on 300 leads.
+    t.ok(/comeBackAt[\s\S]{0,120}existing\.comeBackAt \|\| ""/.test(src2),
+      "a bulk import leaves an existing come-back date alone");
+
+    // The timezone trap: this function runs on UTC, so the BROWSER must convert.
+    for (const page of ["leads.html", "go.html"]) {
+      const html = fs2.readFileSync(require("path").join(FN, "..", "..", page), "utf8");
+      if (!/comeBackAt/.test(html)) continue;
+      t.ok(/new Date\([^)]*\)\.toISOString\(\)/.test(html),
+        `${page} converts the local datetime to a real instant before sending`);
+    }
+  }
 };

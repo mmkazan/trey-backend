@@ -73,6 +73,25 @@
   .score{flex:0 0 auto;text-align:center;min-width:62px;}
   .score b{display:block;font-size:20px;line-height:1.1;letter-spacing:-.5px;}
   .score span{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;}
+  /* Stop number on a planned-walk card. Same disc, same colour and the same
+     readable-text rule as the pin on the map above it and the stop card on the
+     desk — one door is one colour and one number across all three surfaces.
+     Only rendered in PLAN_MODE; an ordinary search result has no stop number
+     and inventing one would imply an order that does not exist. */
+  .plann{flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;
+       justify-content:center;font-weight:800;font-size:14px;border:2px solid #fff;
+       box-shadow:0 1px 4px rgba(15,23,42,.35);margin-top:1px;}
+  /* Come-back date. Orange like the pill it belongs to; red once it has passed.
+     Sized for a thumb on a pavement, not a mouse at a desk. */
+  .cbrow{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:8px 0 0;
+       background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:9px 11px;}
+  .cbrow.overdue{background:#fef2f2;border-color:#fecaca;}
+  .cbrow input{font-size:14px;padding:9px 10px;border:1px solid var(--border);border-radius:9px;background:#fff;}
+  .cblab{font-size:11.5px;font-weight:800;color:#9a3412;text-transform:uppercase;letter-spacing:.04em;}
+  .cbrow.overdue .cblab{color:#b91c1c;}
+  .cbwhen{font-size:13px;font-weight:700;color:#9a3412;}
+  .cbrow.overdue .cbwhen{color:#b91c1c;}
+  .cbwhen.muted{font-weight:400;color:var(--muted);}
   .knock b,.knock span{color:#047857;}
   .look b,.look span{color:#b45309;}
   /* #94a3b8 was 2.56:1 on the white card — unreadable outdoors. Same grey as
@@ -790,6 +809,10 @@ var TIER_COLOURS={"1":"#047857","2":"#b45309","3":"#64748b"};
 var STATUS_COLOURS={"New":"#64748b","Come back":"#c2410c","Contacted":"#2563eb",
   "On trial":"#a16207","Converted":"#15803d","Lost":"#dc2626"};
 var ME_COLOUR="#4338ca";
+// Route furniture — the line between doors. Neutral, because a route spans
+// doors of three different tiers and cannot carry a tier colour itself, and
+// because indigo already means "already yours". Identical to leads.html.
+var ROUTE_COLOUR="#0f172a";
 
 // Derby city centre. Only ever seen for the half-second before the first
 // fitBounds, and only if the map opens with nothing on it.
@@ -943,7 +966,7 @@ function drawMap(view,list){
       .map(function(l){ return [l.lat,l.lng]; });
     if(HERE) legs.unshift([HERE.lat,HERE.lng]);
     if(legs.length>1){
-      L.polyline(legs,{color:"#4338ca",weight:3,opacity:.65,dashArray:"6,6"}).addTo(GPINS);
+      L.polyline(legs,{color:ROUTE_COLOUR,weight:3,opacity:.7,dashArray:"6,6"}).addTo(GPINS);
     }
   }
 
@@ -1090,6 +1113,19 @@ async function setStatus(i,st){
     businessName:l.businessName,status:st});
   if(MINE[l.placeId]) MINE[l.placeId].outreachStatus=st;
   else MINE[l.placeId]={placeId:l.placeId,businessName:l.businessName,outreachStatus:st};
+  // "Come back" is the most common outcome of a knock, and THIS is where the
+  // promise is actually made — standing on the doorstep, not at the desk that
+  // evening. Choosing it seeds 9am tomorrow so the date is never simply absent;
+  // moving off it clears the date, because a callback you no longer intend to
+  // make must not keep turning up in the morning email.
+  if(st==="Come back" && !MINE[l.placeId].comeBackAt){
+    var seeded=defaultComeBack();
+    MINE[l.placeId].comeBackAt=seeded;
+    await sendOrQueue(LEADS_API,{lead:{placeId:l.placeId,comeBackAt:seeded}});
+  } else if(st!=="Come back" && MINE[l.placeId].comeBackAt){
+    MINE[l.placeId].comeBackAt="";
+    await sendOrQueue(LEADS_API,{lead:{placeId:l.placeId,comeBackAt:""}});
+  }
   if(COLOUR_BY==="status") render(POOL,RADIUS,LABEL);
   loadWalk();
 }
@@ -1101,7 +1137,53 @@ function statusPills(l,i){
   return '<div class="pills" id="st'+i+'">'+STATUSES.map(function(s){
     return '<button data-s="'+esc(s)+'" class="'+statusCls(s)+(s===cur?" on":"")+
       '" onclick="setStatus('+i+',\''+s+'\')">'+esc(s)+'</button>';
-  }).join("")+'</div>';
+  }).join("")+'</div>'+comeBackRow(l,i);
+}
+
+// 9am tomorrow as a real instant. Built in the BROWSER because only the browser
+// knows the timezone — leads.js runs on UTC and would put a Derby 9am an hour
+// out all summer.
+function defaultComeBack(){
+  var d=new Date(); d.setDate(d.getDate()+1); d.setHours(9,0,0,0);
+  return d.toISOString();
+}
+// An instant -> the "YYYY-MM-DDTHH:MM" a datetime-local input wants, in LOCAL
+// time. toISOString() would render UTC and show the wrong hour in the box.
+function toLocalInput(iso){
+  var t=Date.parse(iso||""); if(!isFinite(t)) return "";
+  var d=new Date(t), p=function(n){ return String(n).padStart(2,"0"); };
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes());
+}
+function comeBackLabel(iso){
+  var t=Date.parse(iso||""); if(!isFinite(t)) return null;
+  var due=new Date(t), startOf=function(d){ var x=new Date(d); x.setHours(0,0,0,0); return x.getTime(); };
+  var days=Math.round((startOf(due)-startOf(new Date()))/86400000);
+  var hhmm=String(due.getHours()).padStart(2,"0")+":"+String(due.getMinutes()).padStart(2,"0");
+  if(days<0) return {text:(days===-1?"yesterday":Math.abs(days)+" days ago")+" \u00b7 "+hhmm, overdue:true};
+  if(days===0) return {text:"today \u00b7 "+hhmm, overdue:due.getTime()<Date.now()};
+  if(days===1) return {text:"tomorrow \u00b7 "+hhmm, overdue:false};
+  return {text:"in "+days+" days \u00b7 "+hhmm, overdue:false};
+}
+// Only for "Come back". Six statuses each carrying an empty date box is noise.
+function comeBackRow(l,i){
+  if(!l.placeId) return "";
+  var saved=MINE[l.placeId];
+  if(!saved || saved.outreachStatus!=="Come back") return "";
+  var lab=comeBackLabel(saved.comeBackAt);
+  return '<div class="cbrow'+(lab&&lab.overdue?" overdue":"")+'">'+
+    '<span class="cblab">Come back</span>'+
+    '<input type="datetime-local" id="cb'+i+'" value="'+esc(toLocalInput(saved.comeBackAt))+'" onchange="saveComeBack('+i+')" />'+
+    (lab?'<span class="cbwhen">'+esc(lab.text)+'</span>':'<span class="cbwhen muted">no date set</span>')+
+    '</div>';
+}
+async function saveComeBack(i){
+  var l=POOL[i]; if(!l||!l.placeId) return;
+  var el=document.getElementById("cb"+i); if(!el) return;
+  // "" clears — leads.js reads this key from the raw body so that is possible.
+  var iso=el.value ? new Date(el.value).toISOString() : "";
+  if(MINE[l.placeId]) MINE[l.placeId].comeBackAt=iso;
+  await sendOrQueue(LEADS_API,{lead:{placeId:l.placeId,comeBackAt:iso}});
+  render(POOL,RADIUS,LABEL);
 }
 
 // Tap a dot, get the card. The map answers "which way", the card answers "why".
@@ -1149,8 +1231,16 @@ function render(list,radius,label){
   if(!view.length){ out.innerHTML='<div class="msg">Nothing in that band here. Try <b>All</b>, or a wider radius.</div>'; return; }
   out.innerHTML=view.map(function(l,i){
     var idx=POOL.indexOf(l);
+    // Colour the stop number exactly as its pin is coloured — same expression
+    // drawMap() uses — so the "3" you read on the card is the "3" you look for
+    // on the map. textOn() keeps the digit readable whatever that colour is.
+    var pc = COLOUR_BY==="status"?statusColour(l):bandColour(l.field.band);
     return '<div class="card" id="c'+idx+'">'+
       '<div class="row">'+
+        (PLAN_MODE
+          ? '<span class="plann" style="background:'+pc+';color:'+textOn(pc)+'">'+
+            esc(l.planN||i+1)+'</span>'
+          : '')+
         '<div style="flex:1;min-width:0;">'+
           '<div class="name">'+esc(l.businessName)+pecr(l,idx)+savedChip(l)+'</div>'+
           '<div class="cat">'+esc(l.category||"—")+'<span id="dist'+idx+'">'+(l.metresAway!=null?' · '+l.metresAway+'m away':'')+'</span></div>'+

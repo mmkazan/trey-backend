@@ -138,6 +138,21 @@ exports.run = function (t) {
   t.eq(tiersLeads, { "1": "#047857", "2": "#b45309", "3": "#64748b" },
     "tier 1 is green, tier 2 amber, tier 3 grey");
 
+  // Route furniture: the line between doors. Not a tier colour — a route spans
+  // three tiers — and deliberately NOT indigo, which the legend uses for
+  // "already yours". Asserted identical so one walk looks like one walk on both
+  // screens, the same way the tier palette is.
+  const routeLeads = (leads.match(/ROUTE_COLOUR\s*=\s*"(#[0-9a-f]{6})"/i) || [])[1];
+  const routeGo = (go.match(/ROUTE_COLOUR\s*=\s*"(#[0-9a-f]{6})"/i) || [])[1];
+  t.ok(!!routeLeads && !!routeGo, "both maps declare a route colour");
+  t.eq(routeLeads, routeGo, "the route line is the same colour on the desk and the phone");
+  t.ok(routeLeads !== (leads.match(/MINE_COLOUR\s*=\s*"(#[0-9a-f]{6})"/i) || [])[1],
+    "the route is NOT the 'already yours' indigo it used to be drawn in");
+  for (const [name, src] of Object.entries(pages)) {
+    t.ok(/polyline\([^)]*ROUTE_COLOUR/.test(src.replace(/\n/g, " ")),
+      `${name} draws the route with ROUTE_COLOUR, not a literal`);
+  }
+
   const statusLeads = eval("(" + (leads.match(/STATUS_COLOURS\s*=\s*(\{[^}]*\})/) || [])[1] + ")");
   const statusGo = eval("(" + (go.match(/STATUS_COLOURS\s*=\s*(\{[^}]*\})/) || [])[1] + ")");
   t.eq(statusLeads, statusGo, "the status colours are byte-identical in leads.html and go.html");

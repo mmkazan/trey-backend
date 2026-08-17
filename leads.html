@@ -78,6 +78,18 @@
   .opphint{background:#f0fdf4;border:1px solid #dcfce7;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#14532d;margin:10px 0;line-height:1.45;}
   .checkline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none;}
   .checkline input{width:auto;margin:0;}
+  /* The come-back date. Orange like the "Come back" pill it belongs to, and it
+     turns red once the date has passed — an overdue callback is the one thing
+     on this card that needs you today. */
+  .cbrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 2px;
+       background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:8px 11px;}
+  .cbrow.overdue{background:#fef2f2;border-color:#fecaca;}
+  .cbrow input{width:auto;font-size:13px;padding:6px 9px;}
+  .cblab{font-size:12px;font-weight:800;color:#9a3412;letter-spacing:.02em;}
+  .cbrow.overdue .cblab{color:#b91c1c;}
+  .cbwhen{font-size:12.5px;font-weight:700;color:#9a3412;}
+  .cbrow.overdue .cbwhen{color:#b91c1c;}
+  .cbwhen.muted{font-weight:400;color:var(--muted);}
   .reasons{font-size:12px;color:var(--muted);margin:6px 0 12px;}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
   .statusbtns{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0;}
@@ -612,7 +624,66 @@
   // ---------- actions ----------
   async function post(payload){ const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,...payload})}); if(r.status===403){logout();return;} return r; }
   async function cycleStatus(i){ const l=LEADS[i]; const idx=STATUSES.indexOf(l.outreachStatus); const next=STATUSES[(idx+1)%STATUSES.length]; await post({lead:{id:l.id,outreachStatus:next}}); loadLeads(); }
-  async function setStatusTo(i,s){ await post({lead:{id:LEADS[i].id,outreachStatus:s}}); loadLeads(); }
+  // Setting the status to "Come back" WITHOUT a date is the state this feature
+  // exists to remove, so choosing it seeds a default of 9am tomorrow rather than
+  // leaving an empty box. You can change it; you just can't accidentally leave
+  // it blank. Moving OFF "Come back" clears the date — a callback you no longer
+  // intend to make must not keep turning up in the morning email.
+  async function setStatusTo(i,s){
+    const patch={id:LEADS[i].id,outreachStatus:s};
+    if(s==="Come back" && !LEADS[i].comeBackAt) patch.comeBackAt=defaultComeBack();
+    if(s!=="Come back" && LEADS[i].comeBackAt) patch.comeBackAt="";
+    await post({lead:patch}); loadLeads();
+  }
+
+  // 9am tomorrow, as a real instant. Built in the BROWSER because only the
+  // browser knows the timezone — leads.js runs on UTC and would put a Derby
+  // 9am an hour out all summer.
+  function defaultComeBack(){
+    const d=new Date(); d.setDate(d.getDate()+1); d.setHours(9,0,0,0);
+    return d.toISOString();
+  }
+  // An instant -> the "YYYY-MM-DDTHH:MM" a datetime-local input expects, in
+  // LOCAL time. toISOString() would render it as UTC and show the wrong hour in
+  // the box you are about to read.
+  function toLocalInput(iso){
+    const t=Date.parse(iso||""); if(!Number.isFinite(t)) return "";
+    const d=new Date(t), p=n=>String(n).padStart(2,"0");
+    return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes());
+  }
+  // How a come-back date reads on the card: "tomorrow 09:00", "in 3 days",
+  // "2 days ago" in red. A raw timestamp makes you do arithmetic at a moment
+  // when you are trying to decide who to visit.
+  function comeBackLabel(iso){
+    const t=Date.parse(iso||""); if(!Number.isFinite(t)) return "";
+    const now=new Date(), due=new Date(t);
+    const startOf=d=>{const x=new Date(d); x.setHours(0,0,0,0); return x.getTime();};
+    const days=Math.round((startOf(due)-startOf(now))/86400000);
+    const hhmm=String(due.getHours()).padStart(2,"0")+":"+String(due.getMinutes()).padStart(2,"0");
+    if(days<0) return {text:(days===-1?"yesterday":Math.abs(days)+" days ago")+" · "+hhmm, overdue:true};
+    if(days===0) return {text:"today · "+hhmm, overdue:due.getTime()<Date.now()};
+    if(days===1) return {text:"tomorrow · "+hhmm, overdue:false};
+    return {text:"in "+days+" days · "+hhmm, overdue:false};
+  }
+  // Only shown for "Come back" — every other status has no date to hold, and a
+  // permanently visible empty date box on six statuses is noise.
+  function comeBackRow(l,i){
+    if((l.outreachStatus||"")!=="Come back") return "";
+    const lab=comeBackLabel(l.comeBackAt);
+    return '<div class="cbrow'+(lab&&lab.overdue?' overdue':'')+'">'+
+      '<span class="cblab">Come back</span>'+
+      '<input type="datetime-local" id="cb_'+i+'" value="'+esc(toLocalInput(l.comeBackAt))+'" onchange="saveComeBack('+i+')" />'+
+      (lab?'<span class="cbwhen">'+esc(lab.text)+'</span>':'<span class="cbwhen muted">no date set</span>')+
+      '</div>';
+  }
+
+  async function saveComeBack(i){
+    const el=document.getElementById("cb_"+i); if(!el) return;
+    // "" clears. leads.js reads this key from the raw body precisely so that
+    // clearing is possible — see isoOrEmpty() there.
+    const iso=el.value ? new Date(el.value).toISOString() : "";
+    await post({lead:{id:LEADS[i].id,comeBackAt:iso}}); loadLeads();
+  }
   async function saveLead(i){ const l=LEADS[i]; const g=id=>document.getElementById(id+"_"+i).value.trim();
     await post({lead:{id:l.id,businessType:g("bt"),contactName:g("cn"),phone:g("ph"),email:g("em"),notes:g("nt")}}); loadLeads(); }
   async function delLead(i){ await post({delete:LEADS[i].id}); loadLeads(); }
@@ -724,6 +795,9 @@
   const STATUS_COLOURS = { "New":"#64748b", "Come back":"#c2410c", "Contacted":"#2563eb",
     "On trial":"#a16207", "Converted":"#15803d", "Lost":"#dc2626" };
   const MINE_COLOUR = "#4338ca";   // already a customer — not a door to knock on
+  // Not a door: the route line and the start marker. Neutral on purpose, and
+  // identical in go.html so one walk looks like one walk on both screens.
+  const ROUTE_COLOUR = "#0f172a";
   const LOST_COLOUR = "#cbd5e1";
 
   // Derby city centre. Only ever seen for the half-second before the first
@@ -1068,7 +1142,15 @@
     LROUTE.clearLayers();
     const line = [[start.lat, start.lng]].concat(plan.order.map(s => [s.lat, s.lng]));
     if (plan.order.length) {
-      L.polyline(line, { color: MINE_COLOUR, weight: 4, opacity: .8, dashArray: "6 6" }).addTo(LROUTE);
+      // ROUTE FURNITURE IS NEUTRAL. The line used to be MINE_COLOUR — the
+      // legend's "already yours" indigo — so a planned walk was drawn in the
+      // one colour that means "not a door to knock on". It cannot be tier
+      // coloured either: a route spans doors of three different tiers.
+      //
+      // So the rule is: every COLOURED disc is a door and its colour is its
+      // tier; the things that are not doors — the route line and the start
+      // marker — are the same neutral slate. go.html uses the identical value.
+      L.polyline(line, { color: ROUTE_COLOUR, weight: 4, opacity: .75, dashArray: "6 6" }).addTo(LROUTE);
       L.marker([start.lat, start.lng], { icon: discIcon("#0f172a", "S"), title: "Start — the map centre" }).addTo(LROUTE);
       plan.order.forEach(function (s) {
         // zIndexOffset lifts the numbered stops above the plain tier markers,
@@ -1421,6 +1503,7 @@
         (l.scoreReasons?'<div class="reasons">'+esc(l.scoreReasons)+'</div>':'')+
         (hasData?'<div class="tshint"><b>Trey Score '+ts.total+'/100</b> · '+esc(ts.band)+' — ≈'+(100-ts.total)+' points Trey can add (mostly activity + profile). This is your outreach hook.</div>':'')+
         '<div class="statusbtns">'+STATUSES.map(s=>'<button class="pill '+clsStatus(s)+(l.outreachStatus===s?' active':'')+'" onclick="setStatusTo('+i+',\''+s+'\')">'+s+'</button>').join("")+'</div>'+
+        comeBackRow(l,i)+
         '<div class="grid2" style="margin-top:8px;">'+
           '<div><label>Legal status <span style="font-weight:400;color:#64748b;">&mdash; decides if you may message them</span></label>'+
             '<select id="ls_'+i+'"><option value="">Unknown (restricted)</option>'+

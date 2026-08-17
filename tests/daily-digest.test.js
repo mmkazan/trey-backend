@@ -18,6 +18,12 @@ const T = require(path.join(ROOT, "netlify", "functions", "digest-lib.js"));
 
 exports.run = function (t) {
   const src = fs.readFileSync(SRC, "utf8");
+  // Each block below builds a promise chain; they are awaited TOGETHER at the
+  // end. The come-back tests were originally appended after the first block's
+  // `return`, so run() handed back before reaching them and 30 assertions
+  // silently never executed — the suite still said 785 passed. A test that
+  // does not run looks exactly like a test that passes.
+  let mainChain = Promise.resolve(), comeBackChain = Promise.resolve();
 
   // === Source-level guarantees ============================================
   t.ok(/export const config = \{ schedule: "0 7 \* \* \*" \}/.test(src),
@@ -67,7 +73,7 @@ exports.run = function (t) {
       { key: "loc5", value: { businessName: "Broken Date", createdAt: "yesterday-ish" } },
     ];
 
-    return Promise.all([
+    mainChain = Promise.all([
       T.sectionNewCustomers(clients, from, now),
       T.sectionActivations(clients, from, now),
       T.sectionTrialsEnding(clients, now),
@@ -224,4 +230,67 @@ exports.run = function (t) {
       });
     });
   }
+
+  // === Come-back reminders ================================================
+  //
+  // "Come back" is the most common outcome of a cold knock and the one door you
+  // most need to find again. The status recorded the intent; nothing recorded
+  // WHEN, so the promise lived in Matthew's head.
+  {
+    const DAY = 24 * 3600_000;
+    const now = Date.parse("2026-08-19T07:00:00Z");
+    const lead = (name, status, when, extra) => ({
+      key: name, value: Object.assign({ businessName: name, outreachStatus: status, comeBackAt: when }, extra || {}),
+    });
+
+    const leads = [
+      lead("Overdue Barber", "Come back", new Date(now - 3 * DAY).toISOString()),
+      lead("Yesterday Cafe", "Come back", new Date(now - 1 * DAY).toISOString()),
+      lead("Today Florist",  "Come back", new Date(now + 3600_000).toISOString()),
+      lead("Next Week Deli", "Come back", new Date(now + 7 * DAY).toISOString()),
+      lead("No Date Garage", "Come back", ""),
+      lead("Contacted Shop", "Contacted", new Date(now - DAY).toISOString()),
+      lead("Junk Date Inn",  "Come back", "sometime next week"),
+    ];
+
+    comeBackChain = T.sectionComeBacks(leads, now).then((sec) => {
+      t.ok(!!sec, "doors due back produce a section");
+      t.ok(sec.alert === true, "…and it is an alert — it is a promise made to a person");
+      t.eq(sec.lines.length, 3, "only overdue and due-today are listed");
+
+      const body = JSON.stringify(sec);
+      t.ok(/Overdue Barber/.test(body), "an overdue callback is listed");
+      t.ok(/Today Florist/.test(body), "one due later today is listed");
+      // The 09:00 callback must appear in the 07:00 digest. Comparing against the
+      // exact minute would hide the very door the email exists to remind about.
+      t.ok(/today/.test(body), "…described as due today, not omitted for being hours away");
+      t.ok(!/Next Week Deli/.test(body), "a callback next week is not chased yet");
+      t.ok(!/No Date Garage/.test(body), "a 'Come back' with no date has nothing to be due");
+      t.ok(!/Contacted Shop/.test(body), "a lead on another status is not a callback");
+      t.ok(!/Junk Date Inn/.test(body), "an unparseable date is skipped, not treated as now");
+
+      // Most overdue first. A to-do list, not a feed — the oldest promise is the
+      // most broken one, so it must not sink to the bottom.
+      t.ok(sec.lines[0].indexOf("Overdue Barber") > -1, "the most overdue door is first");
+      t.ok(sec.lines[1].indexOf("Yesterday Cafe") > -1, "…then yesterday's");
+      t.ok(/3 days overdue/.test(sec.lines[0]), "how late it is, in words");
+      t.ok(/since yesterday/.test(sec.lines[1]), "yesterday reads as yesterday, not '1 days'");
+      t.ok(/2 overdue/.test(sec.title), "the heading counts the overdue ones");
+
+      // Hostile input: business names come from Apify and a public form.
+      return T.sectionComeBacks(
+        [lead("<script>alert(1)</script>", "Come back", new Date(now - DAY).toISOString())], now
+      ).then((nasty) => {
+        t.ok(!/<script>/.test(JSON.stringify(nasty)), "a hostile business name is escaped");
+        return T.sectionComeBacks([], now).then((none) => {
+          t.eq(none, null, "no callbacks means no section at all");
+          return T.sectionComeBacks(null, now).then((nul) => {
+            t.eq(nul, null, "a missing leads store is survivable");
+          });
+        });
+      });
+    });
+  }
+
+  return Promise.all([mainChain, comeBackChain]);
 };

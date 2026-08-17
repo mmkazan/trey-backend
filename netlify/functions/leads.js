@@ -198,6 +198,40 @@ function inferLegalStatus(lead) {
 // STATUSES in leads.html and go.html.
 const OUTREACH_STATUSES = ["New", "Come back", "Contacted", "On trial", "Converted", "Lost"];
 
+// A timestamp, normalised, or "". Never throws, never guesses.
+//
+// The browser's <input type="datetime-local"> hands back "2026-08-19T09:30" —
+// no zone, no seconds — while a CSV or a later API client could send anything.
+// Storing whatever arrived would leave the digest comparing strings of three
+// different shapes, so everything is parsed once, here, and written back as a
+// real ISO instant. Unparseable input becomes "" (cleared) rather than being
+// persisted as text that only LOOKS like a date.
+//
+// TIMEZONE: THE CLIENT CONVERTS, NOT THIS FUNCTION.
+//
+// <input type="datetime-local"> yields a bare "2026-08-19T09:30" with no zone.
+// Date.parse reads that as LOCAL time — and this code runs in a Netlify function
+// on UTC, so a 9:30 typed in Derby in August would be stored as 09:30Z, which is
+// 10:30 back in Derby. An hour wrong, all summer, and invisible until someone
+// knocked on a door an hour late.
+//
+// So leads.html and go.html convert with `new Date(value).toISOString()` in the
+// BROWSER, where the zone is actually known, and send a full instant. This
+// function stays tolerant of a bare string because it cannot control every
+// future caller — but a bare string is a bug at the caller, not here.
+const COME_BACK_MAX_YEARS = 2;
+function isoOrEmpty(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return "";
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return "";
+  // A callback two years out is a typo (a mistyped year), not a plan. Better to
+  // drop it than to hide a door in a list nobody will scroll to in 2028.
+  const maxAhead = Date.now() + COME_BACK_MAX_YEARS * 365 * 24 * 3600 * 1000;
+  if (t > maxAhead) return "";
+  return new Date(t).toISOString();
+}
+
 function outreachPermissions(lead, suppressedTails) {
   const tail = String((lead && lead.phone) || "").replace(/\D/g, "").slice(-9);
   const suppressed = tail.length === 9 && suppressedTails && suppressedTails.has(tail);
@@ -506,6 +540,22 @@ exports.handler = async (event) => {
         tpsStatus: (!isBulk && "tpsStatus" in raw)
           ? (String(raw.tpsStatus || "") || "unchecked")
           : (existing.tpsStatus || "unchecked"),
+        // WHEN to come back. "Come back" is the most common outcome of a cold
+        // knock — the owner wasn't in — and the one door you most need to find
+        // again. The status recorded the intent and then forgot the date.
+        //
+        // Read from `raw`, not `incomingClean`, for the same reason legalStatus
+        // is: incomingClean strips empty values, so clearing a date would be
+        // impossible and a cancelled callback would haunt the digest forever.
+        //
+        // Validated, for the same reason outreachStatus is. It is rendered into
+        // an admin page and into an email, and a value with exactly one legal
+        // shape has no business being stored as free text. Anything unparseable
+        // is dropped rather than persisted — and normalising to a real ISO
+        // string means the digest can compare it without guessing a format.
+        comeBackAt: (!isBulk && "comeBackAt" in raw)
+          ? isoOrEmpty(raw.comeBackAt)
+          : (existing.comeBackAt || ""),
         createdAt: existing.createdAt || now,
         updatedAt: now,
       };
