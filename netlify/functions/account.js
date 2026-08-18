@@ -98,6 +98,7 @@ function shell(title, inner) {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     body: `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
 <style>
   *{box-sizing:border-box}
@@ -255,13 +256,21 @@ exports.handler = async (event) => {
     // Same normalisation signup.js applies on write.
     if (typeof patch.phone === "string" && patch.phone) patch.phone = toE164(patch.phone);
 
-    const record = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    // Re-read immediately before the write and merge onto the FRESHEST copy, not
+    // the one read at the top of the handler. A stripe-webhook status write (or a
+    // tap activation stamping trialStartedAt) can land while the owner fills in
+    // this form; taking the protected fields from `fresh` preserves it, where
+    // taking them from the stale `existing` would silently revert it. The owner
+    // still cannot edit protected fields — they are overwritten from `fresh`.
+    // (2026-08-18 security review, H2.)
+    const fresh = (await clientsStore.get(loc, { type: "json" })) || existing;
+    const record = { ...fresh, ...patch, updatedAt: new Date().toISOString() };
     // Belt-and-braces: never let this path touch protected fields.
     for (const guarded of ["locationId", "placeId", "googleAccountId", "subscriptionStatus", "trialStartsOnTap", "trialStartedAt", "standMode", "initialGoogleRating", "initialReviewCount", "token"]) {
-      record[guarded] = existing[guarded];
+      record[guarded] = fresh[guarded];
       if (record[guarded] === undefined) delete record[guarded];
     }
-    record.locationId = existing.locationId || loc;
+    record.locationId = fresh.locationId || loc;
     await clientsStore.setJSON(loc, record);
     return formPage(loc, k, record, { saved: true });
   }

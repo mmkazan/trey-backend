@@ -258,6 +258,7 @@ function shell(title, inner) {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     body: `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
 <style>
   *{box-sizing:border-box}

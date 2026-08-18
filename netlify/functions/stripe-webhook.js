@@ -28,6 +28,7 @@
 
 const crypto = require("crypto");
 const { getStore } = require("@netlify/blobs");
+const { shouldApplyEvent } = require("./stripe-ordering");
 
 // When does the current paid period end? (unix seconds, 0 if unknown)
 //
@@ -127,7 +128,7 @@ async function locationForCustomer(customerId) {
   }
 }
 
-async function setStatus(locationId, status, extra) {
+async function setStatus(locationId, status, extra, eventCreated) {
   if (!locationId || !status) return false;
   const clients = blobsStore("clients");
   const client = await clients.get(locationId, { type: "json" });
@@ -135,13 +136,32 @@ async function setStatus(locationId, status, extra) {
     console.error(`[stripe-webhook] no client for locationId ${locationId}`);
     return false;
   }
+
+  // --- ORDERING GUARD --------------------------------------------------------
+  // Stripe does NOT guarantee delivery order and retries failed deliveries for
+  // hours or days. Without this guard a redelivered older `invoice.paid` could
+  // land AFTER `subscription.deleted` and flip a cancelled account back to
+  // "active" — and a cancelled subscription emits no further events, so nothing
+  // would ever correct it (the customer keeps Trey for free). The mirror case:
+  // a late `payment_failed` pausing a paying customer.
+  //
+  // The decision is in shouldApplyEvent() — pure and unit-tested for the exact
+  // interleavings above.
+  const evAt = Number(eventCreated) || 0;
+  const prevAt = Number(client.subscriptionEventAt) || 0;
   const before = client.subscriptionStatus || "";
+  if (!shouldApplyEvent(client, status, eventCreated)) {
+    console.log(`[stripe-webhook] ${locationId}: skipping stale/ordering-blocked event (status="${status}", created ${evAt}, applied ${prevAt}) — keeping "${before || "(none)"}"`);
+    return false;
+  }
+
   await clients.setJSON(locationId, {
     ...client,
     ...(extra || {}),
     subscriptionStatus: status,
     subscriptionUpdatedAt: new Date().toISOString(),
     subscriptionUpdatedBy: "stripe-webhook",
+    ...(evAt ? { subscriptionEventAt: evAt } : {}),
   });
   console.log(`[stripe-webhook] ${locationId}: ${before || "(none)"} -> ${status}`);
   return true;
@@ -183,6 +203,9 @@ exports.handler = async (event) => {
   const type = stripeEvent.type || "";
   const id = stripeEvent.id || "";
   const obj = (stripeEvent.data && stripeEvent.data.object) || {};
+  // Stripe's own creation time for this event (unix seconds) — the clock the
+  // ordering guard in setStatus() uses to reject stale, out-of-order deliveries.
+  const eventCreated = Number(stripeEvent.created) || 0;
 
   // --- Idempotency -----------------------------------------------------------
   // Stripe retries on timeouts and can deliver duplicates. Processing
@@ -233,7 +256,7 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
           // admin.html checks hardwareOnly BEFORE subscriptionStatus when it
           // renders the status pill — a stale flag would keep showing "hardware".
           hardwareOnly: false,
-        });
+        }, eventCreated);
         break;
       }
 
@@ -267,7 +290,7 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
           stripeSubscriptionId: obj.id || undefined,
           cancelAtPeriodEnd: ended ? false : obj.cancel_at_period_end === true,
           currentPeriodEnd: periodEndOf(obj) || undefined,
-        });
+        }, eventCreated);
         break;
       }
 
@@ -281,7 +304,7 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
           console.warn(`[stripe-webhook] payment_failed: no locationId for customer ${customerId}`);
           break;
         }
-        await setStatus(locationId, "paused", { lastPaymentFailedAt: new Date().toISOString() });
+        await setStatus(locationId, "paused", { lastPaymentFailedAt: new Date().toISOString() }, eventCreated);
         break;
       }
 
@@ -291,7 +314,7 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
         const customerId = obj.customer || "";
         const locationId = await locationForCustomer(customerId);
         if (!locationId) break;
-        await setStatus(locationId, "active", { lastPaymentAt: new Date().toISOString() });
+        await setStatus(locationId, "active", { lastPaymentAt: new Date().toISOString() }, eventCreated);
         break;
       }
 
@@ -317,3 +340,5 @@ suggestion: "Match this to a client by email, then set subscriptionStatus manual
 
 module.exports.verifySignature = verifySignature;
 module.exports.mapStatus = mapStatus;
+module.exports.shouldApplyEvent = shouldApplyEvent;
+module.exports.setStatus = setStatus;

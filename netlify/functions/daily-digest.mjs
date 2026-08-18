@@ -143,7 +143,12 @@ export default async () => {
 
   const now = Date.now();
   const firstRun = !state || !Number.isFinite(ts(state.finishedAt));
-  const from = firstRun ? now - FIRST_RUN_WINDOW_MS : ts(state.finishedAt);
+  // Start where the LAST run's window ENDED (its `now`, stored as windowTo), not
+  // at finishedAt — finishedAt is minutes later, after the sends, so using it
+  // would skip everything that happened during the run. Fall back to finishedAt
+  // for a state written before windowTo existed. (2026-08-18 security review, M4.)
+  const prevEnd = state && state.windowTo != null ? state.windowTo : (state && state.finishedAt);
+  const from = firstRun ? now - FIRST_RUN_WINDOW_MS : ts(prevEnd);
   const baseline = (state && state.tapTotals) || null;
 
   // --- read once, share between sections -----------------------------------
@@ -220,7 +225,7 @@ export default async () => {
   const finishedAt = new Date().toISOString();
   if (sendResult.sent) {
     try {
-      await cfg.setJSON("daily-digest:state", digest.nextSnapshot(state, tapTotals, tapsOk, finishedAt));
+      await cfg.setJSON("daily-digest:state", digest.nextSnapshot(state, tapTotals, tapsOk, finishedAt, iso(now)));
     } catch (e) {
       console.error("[daily-digest] state write failed:", e.message);
     }

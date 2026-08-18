@@ -241,38 +241,13 @@ exports.handler = async (event) => {
   // already happened, and repeating them would consume the tap twice and count
   // the same review twice in the stats the customer's report is built from.
   const isTap = source.startsWith("Trey Tappy");
-  if (!priorRecord && tapToConsume) {
-    await tapsStore.setJSON(locationId, { ...tapToConsume, processed: true });
-  }
-
-  if (!priorRecord) {
-    const stats = (await statsStore.get(locationId, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
-    if (isTap) stats.tapReviews += 1;
-    else stats.organicReviews += 1;
-    await statsStore.setJSON(locationId, stats);
-  }
-
-  // Period buckets (this week Mon-Sun + this month) for the reports. Wrapped so
-  // a tally hiccup never blocks the reply + WhatsApp alert below.
   const now = new Date();
   const monthKey = now.toISOString().slice(0, 7); // YYYY-MM
-  if (!priorRecord) try {
-    const reviewTallyStore = blobsStore("reviewtally");
-    const periodKeys = [`${locationId}:week:${weekKey(now)}`, `${locationId}:${monthKey}`];
-    for (const pKey of periodKeys) {
-      const bucket = (await reviewTallyStore.get(pKey, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
-      if (isTap) bucket.tapReviews += 1;
-      else bucket.organicReviews += 1;
-      await reviewTallyStore.setJSON(pKey, bucket);
-    }
-  } catch (err) {
-    console.error("Review tally error:", err);
-  }
 
-  // Save the pending approval (looked up by approve.js) and the permanent
-  // review record (used by the monthly report page). The record key is stored
-  // on the pending record so approve.js can write finalReply to the SAME month
-  // bucket even if approval happens after a month boundary.
+  // Save the pending approval (looked up by approve.js) and the permanent review
+  // record (used by the monthly report page). The record key is stored on the
+  // pending record so approve.js can write finalReply to the SAME month bucket
+  // even if approval happens after a month boundary.
   const recordKey = priorRecord ? priorRecord.recordKey : `review:${locationId}:${monthKey}:${reviewId}`;
   const reviewRecord = priorRecord ? { ...priorRecord } : {
     reviewId,
@@ -292,9 +267,46 @@ exports.handler = async (event) => {
     alertSentAt: null,
   };
 
+  // COMMIT ORDER (2026-08-18 security review, M5/M7). The pending record is the
+  // idempotency anchor — the guard at the top of this handler resends-only when
+  // it finds a record with no alertSentAt. It MUST be written BEFORE the tap is
+  // consumed and the counters are incremented. Previously it was written last:
+  // if the function died after consuming the tap (processed:true) but before
+  // writing the record, the 15-minute retry found no priorRecord, saw the tap
+  // already processed, re-derived source as "Organic", and re-incremented the
+  // counters — double-counting the review and permanently flipping its
+  // attribution in the customer's report. Writing the anchor first means a crash
+  // anywhere below re-enters the resend-only path: at worst one review is
+  // under-counted by one, and the tap-vs-organic attribution is never corrupted.
   if (!priorRecord) {
     await reviewsStore.setJSON(`pending:${reviewId}`, reviewRecord);
     await reviewsStore.setJSON(recordKey, reviewRecord);
+  }
+
+  if (!priorRecord && tapToConsume) {
+    await tapsStore.setJSON(locationId, { ...tapToConsume, processed: true });
+  }
+
+  if (!priorRecord) {
+    const stats = (await statsStore.get(locationId, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
+    if (isTap) stats.tapReviews += 1;
+    else stats.organicReviews += 1;
+    await statsStore.setJSON(locationId, stats);
+  }
+
+  // Period buckets (this week Mon-Sun + this month) for the reports. Wrapped so
+  // a tally hiccup never blocks the reply + WhatsApp alert below.
+  if (!priorRecord) try {
+    const reviewTallyStore = blobsStore("reviewtally");
+    const periodKeys = [`${locationId}:week:${weekKey(now)}`, `${locationId}:${monthKey}`];
+    for (const pKey of periodKeys) {
+      const bucket = (await reviewTallyStore.get(pKey, { type: "json" })) || { tapReviews: 0, organicReviews: 0 };
+      if (isTap) bucket.tapReviews += 1;
+      else bucket.organicReviews += 1;
+      await reviewTallyStore.setJSON(pKey, bucket);
+    }
+  } catch (err) {
+    console.error("Review tally error:", err);
   }
 
   // 6. Send the WhatsApp alert via Twilio — short message, link only.

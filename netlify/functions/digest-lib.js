@@ -397,9 +397,16 @@ async function sectionComeBacks(leads, now) {
 // So the snapshot only advances when the taps read actually succeeded. When it
 // did not, the previous baseline is carried forward: the next delta then spans
 // two days, which is the honest answer, and matches what a missed run does.
-function nextSnapshot(prevState, tapTotals, tapsOk, finishedAt) {
+function nextSnapshot(prevState, tapTotals, tapsOk, finishedAt, windowTo) {
   const carried = (prevState && prevState.tapTotals) || null;
-  return { finishedAt, tapTotals: tapsOk ? tapTotals : carried };
+  // windowTo is the UPPER BOUND of the window this run reported (the `now`
+  // captured before the reads), NOT finishedAt. finishedAt is minutes later,
+  // after the sends. Tomorrow's window must start where today's ENDED, or every
+  // event timestamped between `now` and finishedAt (a review, signup, delivery
+  // failure, Stripe event during the up-to-8-minute run) falls into neither
+  // window and is silently never reported. (2026-08-18 security review, M4.)
+  // Fall back to finishedAt only for a state written before this field existed.
+  return { finishedAt, windowTo: windowTo || finishedAt, tapTotals: tapsOk ? tapTotals : carried };
 }
 
 module.exports = {

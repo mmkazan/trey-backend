@@ -757,7 +757,12 @@ exports.handler = async (event) => {
     }
     if (notStarted && client) {
       try {
-        await clientsStore.setJSON(locationId, { ...client, trialStartedAt: new Date().toISOString() });
+        // Re-read before writing so a Stripe checkout webhook that landed since
+        // this request started (writing subscriptionStatus:"active" plus the
+        // stripeCustomerId/subscriptionId link) is not reverted by spreading the
+        // stale `client`. We own only trialStartedAt here. (2026-08-18 review, H2.)
+        const fresh = (await clientsStore.get(locationId, { type: "json" })) || client;
+        await clientsStore.setJSON(locationId, { ...fresh, trialStartedAt: new Date().toISOString() });
       } catch (e) {
         console.error("Activation write failed:", e);
         // Don't tell the owner they're live when the write failed — ask them to retry.

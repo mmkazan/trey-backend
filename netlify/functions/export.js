@@ -1,5 +1,6 @@
 const { getStore } = require("@netlify/blobs");
 const { adminIdentity, can, unauthorized, forbidden } = require("./admin-auth.js");
+const { csvCell: csvLibCell } = require("./csv-lib.js");
 
 /**
  * TAKE A COPY OF EVERYTHING, so a bad day is an inconvenience and not the end.
@@ -104,11 +105,10 @@ async function dumpStore(name, deadline) {
 // order mark — "£25" arrives as "Â£25". The BOM is what stops that.
 const BOM = "﻿";
 
+// CSV cell encoding + formula-injection defence now lives in csv-lib.js so it
+// can be unit-tested without @netlify/blobs (2026-08-18 security review, M3).
 function csvCell(v) {
-  if (v === null || v === undefined) return "";
-  if (typeof v === "object") return JSON.stringify(v);   // flattened, and lossy — see the header comment
-  const s = String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return csvLibCell(v);
 }
 
 // Columns worth seeing first. Everything else follows alphabetically, so a field

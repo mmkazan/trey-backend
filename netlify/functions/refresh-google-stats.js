@@ -93,12 +93,20 @@ exports.handler = async (event) => {
     if (!client || !client.placeId) continue;
     try {
       const r = await fetchGooglePlace(client.placeId);
+      // Re-read immediately before the write. This runs @monthly at 00:00 UTC on
+      // the 1st — the renewal-invoice hour — so the slow Places call above can
+      // straddle a stripe-webhook write to THIS client's subscriptionStatus. We
+      // only own three fields; spreading the record we read seconds ago would
+      // silently revert whatever the webhook just wrote (a cancelled account back
+      // to active, or vice versa). Merge onto the freshest copy and own only ours.
+      // (2026-08-18 security review, H2.)
+      const fresh = (await clientsStore.get(client.locationId, { type: "json" })) || client;
       // Don't clobber a known-good rating/count with null if Places returns a
       // 200 that's missing those fields (e.g. a temporarily delisted place).
       const updated = {
-        ...client,
-        googleRating: r.rating ?? client.googleRating,
-        reviewCount: r.reviewCount ?? client.reviewCount,
+        ...fresh,
+        googleRating: r.rating ?? fresh.googleRating,
+        reviewCount: r.reviewCount ?? fresh.reviewCount,
         lastGoogleSync: new Date().toISOString(),
       };
       await clientsStore.setJSON(client.locationId, updated);

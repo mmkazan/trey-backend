@@ -210,6 +210,7 @@ function shell(title, inner, statusCode = 200) {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     body: `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
 <style>
   *{box-sizing:border-box}
@@ -315,11 +316,18 @@ exports.handler = async (event) => {
     // Record it for display. The webhook stays the source of truth for
     // subscriptionStatus — it flips to "cancelled" only when the period actually
     // ends, which is what the terms promise.
+    //
+    // Re-read before writing: the Stripe call above can take up to 8s, and a
+    // renewal `invoice.paid`/`payment_failed` webhook can write this client's
+    // subscriptionStatus in that window. We own only the three billing-display
+    // fields; spreading the stale `client` would revert the webhook's status.
+    // (2026-08-18 security review, H2.)
     try {
+      const fresh = (await clientsStore.get(loc, { type: "json" })) || client;
       await clientsStore.setJSON(loc, {
-        ...client,
+        ...fresh,
         cancelAtPeriodEnd: action === "cancel",
-        currentPeriodEnd: periodEndOf(sub) || client.currentPeriodEnd || "",
+        currentPeriodEnd: periodEndOf(sub) || fresh.currentPeriodEnd || "",
         cancelRequestedAt: action === "cancel" ? new Date().toISOString() : "",
       });
     } catch (e) {
@@ -375,8 +383,12 @@ exports.handler = async (event) => {
   const nextEnd = livePeriodEnd || storedEnd;
   if (client.cancelAtPeriodEnd !== liveCancelling || storedEnd !== nextEnd) {
     try {
+      // Re-read before writing — same reason as the POST path: the Stripe fetch
+      // this reconcile is based on can overlap a webhook status write, and we own
+      // only cancelAtPeriodEnd/currentPeriodEnd here. (2026-08-18 review, H2.)
+      const fresh = (await clientsStore.get(loc, { type: "json" })) || client;
       await clientsStore.setJSON(loc, {
-        ...client,
+        ...fresh,
         cancelAtPeriodEnd: liveCancelling,
         currentPeriodEnd: nextEnd || "",
       });

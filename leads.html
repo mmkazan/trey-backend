@@ -1652,7 +1652,10 @@
     // different key, and you get two records for one business. That is exactly
     // what produced 106 duplicates on 17 Aug.
     const cols=[["Place ID","placeId"],["Tier","tier"],["Score","score"],["Business Name","businessName"],["Category","category"],["Primary Email","email"],["Phone","phone"],["Google Rating","rating"],["Total Reviews","reviewCount"],["Owner Response Rate","ownerResponseRate"],["Recent Unanswered Poor Reviews","recentUnanswered"],["Key Sales Hook / Review Sample","hook"],["Score Reasons","scoreReasons"],["Flag","flag"],["Direct Review URL","reviewUrl"],["Website","website"],["Address","address"],["Outreach Status","outreachStatus"]];
-    const q=v=>{ v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+    // CSV/formula-injection guard (2026-08-18 review, M3): a cell starting = + - @
+    // (or tab/CR) runs as a spreadsheet formula. Lead names/hooks/addresses come
+    // from imported/Apify data, so prefix a quote — but leave plain numbers alone.
+    const q=v=>{ v=(v==null?"":String(v)); if(/^[=+\-@\t\r]/.test(v)&&!/^-?\d+(\.\d+)?$/.test(v))v="'"+v; return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
     const lines=[cols.map(c=>c[0]).join(",")];
     LEADS.forEach(l=>lines.push(cols.map(c=>{ let v=l[c[1]]; if(c[1]==="phone"&&v)v="'"+v; return q(v); }).join(",")));
     const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8;"});
