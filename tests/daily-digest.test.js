@@ -188,6 +188,34 @@ exports.run = function (t) {
             { "fetch-reviews": { ok: true } }, now);
           t.eq(okRun, null, "a successful last run is silent");
 
+          // A run that COMPLETED but failed everything it touched. This is what
+          // Google-approval day looks like if the API is not enabled yet: the
+          // token works, every per-client reviews call 403s, the run writes
+          // ok:true, and it would have read as perfectly healthy.
+          const allFailed = await T.sectionSchedulers(
+            ["fetch-reviews:2026-08-17T06:45:00.000Z", "geo-purge:2026-08-17T03:00:00.000Z",
+             "weekly-report-send:2026-08-11T08:00:00.000Z"],
+            { "fetch-reviews": { ok: true, processed: 4, failed: 4 } }, now);
+          t.ok(!!allFailed, "a run that finished but failed every item is reported");
+          t.ok(allFailed.alert === true, "…as an alert");
+          t.ok(/everything it tried/.test(JSON.stringify(allFailed)),
+            "…and says it was everything, not just some");
+          const someFailed = await T.sectionSchedulers(
+            ["fetch-reviews:2026-08-17T06:45:00.000Z", "geo-purge:2026-08-17T03:00:00.000Z",
+             "weekly-report-send:2026-08-11T08:00:00.000Z"],
+            { "fetch-reviews": { ok: true, processed: 10, failed: 2 } }, now);
+          // The count is wrapped in <b>, so match around the markup rather than
+          // through it.
+          t.ok(/2<\/b> items failed of 10/.test(JSON.stringify(someFailed).replace(/\\"/g, '"')),
+            "a partial failure reports the proportion rather than crying wolf");
+          t.ok(!/everything it tried/.test(JSON.stringify(someFailed)),
+            "…and does not overstate a partial failure as a total one");
+          const cleanRun = await T.sectionSchedulers(
+            ["fetch-reviews:2026-08-17T06:45:00.000Z", "geo-purge:2026-08-17T03:00:00.000Z",
+             "weekly-report-send:2026-08-11T08:00:00.000Z"],
+            { "fetch-reviews": { ok: true, processed: 10, failed: 0 } }, now);
+          t.eq(cleanRun, null, "a run with nothing failed stays silent");
+
           // latestRunKeys picks the newest key per scheduler, so the caller
           // fetches three records rather than every run log ever written.
           const picked = T.latestRunKeys([

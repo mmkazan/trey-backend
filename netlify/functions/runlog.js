@@ -18,9 +18,14 @@
 // already paid for that mistake once: eight copies of toE164 drifted apart and
 // four of them were missing the fix that mattered.
 
-const { getStore } = require("@netlify/blobs");
-
+// The blobs import is DEFERRED into the function that needs it, not taken at
+// module load. @netlify/blobs only exists inside the Netlify runtime, and a
+// top-level require would make this whole file impossible to require from
+// tests/ — which would leave the retention rule below, the one piece of logic
+// here that can silently destroy evidence, untested. Same reason digest-lib.js
+// is a separate file from daily-digest.mjs.
 function store() {
+  const { getStore } = require("@netlify/blobs");
   return getStore({ name: "runlog", siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_BLOBS_TOKEN });
 }
 
@@ -82,4 +87,50 @@ async function recordSkipped(fn, note, startedAt) {
   });
 }
 
-module.exports = { recordRun, recordFailure, recordSkipped };
+/**
+ * RETENTION. Decide which run-log keys to delete.
+ *
+ * Pure and exported so it can be tested, because choosing wrongly here silently
+ * destroys the evidence trail the daily digest depends on — and it would look
+ * exactly like the bug it was built to catch.
+ *
+ * A key is `<fn>:<ISO finishedAt>`.
+ *
+ * Two rules:
+ *   1. Delete records older than `maxAgeDays`.
+ *   2. NEVER delete the newest record for a function, however old.
+ *
+ * Rule 2 is not tidiness. photo-refresh-send runs QUARTERLY, so its last run can
+ * legitimately be 90 days old. Purging on age alone would delete it, the digest
+ * would then report "no run ever recorded", and a fix for a monitoring gap would
+ * have manufactured one. It costs one record per function.
+ *
+ * Anything whose suffix is not a date is left alone: `geo-purge:cursor` and
+ * `fetch-reviews:cursor` live in this store and are NOT run records. Deleting a
+ * cursor would reset a sweep to the start of the store and starve its tail.
+ */
+function planPurge(keys, now, maxAgeDays) {
+  const days = Number(maxAgeDays) > 0 ? Number(maxAgeDays) : 30;
+  const cutoff = now - days * 86400000;
+  const parsed = [];
+  const unparsable = [];
+
+  for (const k of keys || []) {
+    const key = String(k);
+    const i = key.indexOf(":");
+    if (i <= 0) { unparsable.push(key); continue; }
+    const t = Date.parse(key.slice(i + 1));
+    if (!Number.isFinite(t)) { unparsable.push(key); continue; }
+    parsed.push({ key, fn: key.slice(0, i), t });
+  }
+
+  const newestOf = {};
+  for (const r of parsed) if (!newestOf[r.fn] || r.t > newestOf[r.fn].t) newestOf[r.fn] = r;
+  const keptNewest = Object.values(newestOf).map((r) => r.key);
+  const keep = new Set(keptNewest);
+
+  const doomed = parsed.filter((r) => r.t < cutoff && !keep.has(r.key)).map((r) => r.key);
+  return { doomed, keptNewest, unparsable };
+}
+
+module.exports = { recordRun, recordFailure, recordSkipped, planPurge, DEFAULT_MAX_AGE_DAYS: 30 };

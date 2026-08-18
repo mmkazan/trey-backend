@@ -218,6 +218,22 @@ async function sectionSchedulers(runlogKeys, latest, now) {
       anyProblem = true;
       continue;
     }
+    // A run that COMPLETED but failed every item it touched.
+    //
+    // The state that matters on Google-approval day: once the refresh token is
+    // fixed, fetch-reviews will get past the token step and start calling the
+    // reviews API per client. If the Business Profile API is not approved yet,
+    // every one of those calls 403s — the run finishes, writes ok:true, and
+    // would have looked perfectly healthy here while collecting nothing.
+    if (rec && rec.ok !== false && Number(rec.failed) > 0) {
+      const done = Number(rec.processed) || 0;
+      const all = done > 0 && Number(rec.failed) >= done;
+      lines.push(`<b>${esc(s.name)}</b> — last run finished but <b>${esc(rec.failed)}</b> ` +
+                 `item${Number(rec.failed) === 1 ? "" : "s"} failed` +
+                 (all ? " — that is <b>everything it tried</b>" : ` of ${esc(done)}`));
+      anyProblem = true;
+      continue;
+    }
     // Two intervals of slack, so one skipped tick is not a false alarm.
     const overdueBy = now - newest - s.everyHours * 2 * 3600_000;
     if (overdueBy > 0) {
