@@ -146,10 +146,10 @@ exports.run = function (t) {
             "fetch-reviews:2026-08-17T06:45:00.000Z",
             "geo-purge:2026-08-17T03:00:00.000Z",
             "weekly-report-send:2026-08-11T08:00:00.000Z",
-          ], now),
-          T.sectionSchedulers(["fetch-reviews:2026-08-14T06:45:00.000Z"], now),
-          T.sectionSchedulers([], now),
-        ]).then(([bad, clean, healthy, stalled, none]) => {
+          ], {}, now),
+          T.sectionSchedulers(["fetch-reviews:2026-08-14T06:45:00.000Z"], {}, now),
+          T.sectionSchedulers([], {}, now),
+        ]).then(async ([bad, clean, healthy, stalled, none]) => {
           t.eq(bad.lines.length, 2, "only failed and undelivered messages are reported");
           t.ok(bad.alert === true, "an undelivered WhatsApp is an alert");
           t.ok(/24-hour window/.test(JSON.stringify(bad)),
@@ -158,10 +158,76 @@ exports.run = function (t) {
           t.eq(clean, null, "a day where everything delivered produces no section");
 
           t.eq(healthy, null, "schedulers that ran on time produce no section");
+
+          // === A scheduler that runs perfectly and FAILS every time ==========
+          //
+          // The state the old check could not see, found by the first real
+          // digest on 18 Aug: fetch-reviews was firing every 15 minutes and
+          // returning early on a Google token error, on a path that wrote no run
+          // log at all. The email said "no run ever recorded", which sent us
+          // looking for a scheduling problem that did not exist.
+          const failing = await T.sectionSchedulers(
+            ["fetch-reviews:2026-08-17T06:45:00.000Z",
+             "geo-purge:2026-08-17T03:00:00.000Z",
+             "weekly-report-send:2026-08-11T08:00:00.000Z"],
+            { "fetch-reviews": { ok: false, reason: "google-token", detail: "invalid_grant" } },
+            now);
+          t.ok(!!failing, "a scheduler whose last run FAILED is reported…");
+          t.ok(failing.alert === true, "…as an alert");
+          t.ok(/last run <b>failed<\/b>/.test(JSON.stringify(failing)),
+            "…saying the run failed rather than that it never happened");
+          t.ok(/google-token/.test(JSON.stringify(failing)), "…with the reason");
+          t.ok(/invalid_grant/.test(JSON.stringify(failing)), "…and the detail, so it is actionable");
+          t.ok(!/geo-purge/.test(JSON.stringify(failing)), "a healthy scheduler is not dragged in");
+
+          // ok:true, or no record at all, is not a failure.
+          const okRun = await T.sectionSchedulers(
+            ["fetch-reviews:2026-08-17T06:45:00.000Z",
+             "geo-purge:2026-08-17T03:00:00.000Z",
+             "weekly-report-send:2026-08-11T08:00:00.000Z"],
+            { "fetch-reviews": { ok: true } }, now);
+          t.eq(okRun, null, "a successful last run is silent");
+
+          // latestRunKeys picks the newest key per scheduler, so the caller
+          // fetches three records rather than every run log ever written.
+          const picked = T.latestRunKeys([
+            "fetch-reviews:2026-08-16T06:00:00.000Z",
+            "fetch-reviews:2026-08-17T06:45:00.000Z",
+            "fetch-reviews:2026-08-15T06:00:00.000Z",
+            "geo-purge:2026-08-17T03:00:00.000Z",
+            "daily-digest:2026-08-18T07:00:00.000Z",
+          ]);
+          t.eq(picked["fetch-reviews"], "fetch-reviews:2026-08-17T06:45:00.000Z",
+            "latestRunKeys picks the most recent key, not the last listed");
+          t.eq(picked["geo-purge"], "geo-purge:2026-08-17T03:00:00.000Z", "…for each scheduler");
+          t.ok(!("daily-digest" in picked), "…and ignores schedulers it was not asked about");
+          t.eq(Object.keys(T.latestRunKeys([])).length, 0, "an empty run log picks nothing");
+          t.eq(Object.keys(T.latestRunKeys(null)).length, 0, "a missing run log is survivable");
           t.ok(!!stalled && stalled.alert === true, "a scheduler that stopped firing is an alert");
           t.ok(/fetch-reviews/.test(JSON.stringify(stalled)), "…and it is named");
           t.ok(!!none && /no run ever recorded/.test(JSON.stringify(none)),
             "never having run is reported differently from being late");
+          // …but only for a job frequent enough that absence MEANS something.
+          // A monthly job with no record may simply not be due yet, or may
+          // pre-date the run log. Four red lines a morning for healthy jobs is
+          // how a reader learns to skip the red box.
+          t.ok(!/monthly-report-send|google-post-send|photo-refresh-send|monthly-google-sync/
+            .test(JSON.stringify(none)),
+            "a monthly job with no record is NOT alarmed about — absence is not evidence");
+          t.ok(/fetch-reviews|geo-purge/.test(JSON.stringify(none)),
+            "…while a job that should run at least daily still is");
+          // A monthly job that ACTUALLY fails still surfaces immediately, which
+          // is the case that matters.
+          const monthlyBroke = await T.sectionSchedulers(
+            ["monthly-google-sync:2026-08-01T09:00:00.000Z",
+             "fetch-reviews:2026-08-17T06:45:00.000Z",
+             "geo-purge:2026-08-17T03:00:00.000Z",
+             "weekly-report-send:2026-08-11T08:00:00.000Z"],
+            { "monthly-google-sync": { ok: false, reason: "refresh-failed", detail: "HTTP 502" } },
+            now);
+          t.ok(!!monthlyBroke && /monthly-google-sync/.test(JSON.stringify(monthlyBroke)),
+            "a monthly job whose last run FAILED is reported the next morning");
+          t.ok(/refresh-failed/.test(JSON.stringify(monthlyBroke)), "…with its reason");
 
           // === Reviews and stale approvals ================================
           const reviews = [

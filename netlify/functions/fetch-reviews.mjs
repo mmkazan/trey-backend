@@ -26,6 +26,8 @@
 // URL, NETLIFY_SITE_ID, NETLIFY_BLOBS_TOKEN.
 
 import { getStore } from "@netlify/blobs";
+import runlogMod from "./runlog.js";
+const { recordFailure } = runlogMod;
 
 export const config = { schedule: "*/15 * * * *" };
 
@@ -117,9 +119,28 @@ export default async () => {
   const START = Date.now();
   const DEADLINE = START + TIME_BUDGET_MS;
 
+  // A FAILED RUN MUST LEAVE A TRACE.
+  //
+  // Found 18 Aug by the daily digest, on its first ever send: "fetch-reviews —
+  // no run ever recorded". Not a false alarm — this function has FOUR exits, and
+  // until now the two FAILURE ones returned without writing a run log while both
+  // success paths wrote one. So a function scheduled every 15 minutes could fail
+  // 96 times a day, forever, and be indistinguishable from one that had simply
+  // never been deployed. The one system built to notice was blind to it.
+  //
+  // The failure records below carry `ok:false` and a reason, so the digest can
+  // say "last run failed: google token" instead of "no run ever recorded" — the
+  // difference between a question and an answer.
+  // Shared with every other scheduler — see runlog.js. This was a local copy
+  // for a few hours on 18 Aug; three more functions then turned out to need
+  // the same thing, which is how eight copies of toE164 started.
+  const failRun = (reason, detail) =>
+    recordFailure("fetch-reviews", reason, detail, new Date(START).toISOString());
+
   for (const v of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"]) {
     if (!process.env[v]) {
       console.error(`[fetch-reviews] ${v} is not set — cannot poll Google.`);
+      await failRun("missing-credentials", `${v} is not set`);
       return new Response("missing google creds", { status: 500 });
     }
   }
@@ -131,6 +152,7 @@ export default async () => {
     accessToken = await googleAccessToken();
   } catch (e) {
     console.error("[fetch-reviews] Google token failed:", e.message);
+    await failRun("google-token", e.message);
     return new Response("token failed", { status: 502 });
   }
 
@@ -152,7 +174,7 @@ export default async () => {
       fn: "fetch-reviews",
       startedAt: new Date(START).toISOString(), finishedAt: new Date().toISOString(),
       processed: 0, sent: 0, failed: 0, skipped: 0, remaining: 0,
-      timedOut: false, listFailed: true, failedLocationIds: [],
+      ok: false, reason: "client-list", timedOut: false, listFailed: true, failedLocationIds: [],
     });
     return new Response("no clients");
   }

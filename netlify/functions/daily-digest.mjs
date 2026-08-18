@@ -44,7 +44,7 @@ const {
   iso, ts, renderEmail,
   sectionNewCustomers, sectionActivations, sectionTrialsEnding, sectionTaps,
   sectionReviews, sectionAwaitingApproval, sectionDelivery, sectionSchedulers,
-  sectionWalks, sectionBilling, sectionComeBacks,
+  sectionWalks, sectionBilling, sectionComeBacks, latestRunKeys,
 } = digest;
 
 export const config = { schedule: "0 7 * * *" };
@@ -176,7 +176,20 @@ export default async () => {
   const leads = (await guard("Leads", async () => getMany("leads", await listKeys("leads")))) || [];
 
   const statuses = (await guard("Message statuses", async () => getMany("messagestatus", await listKeys("messagestatus")))) || [];
+  // Keys are cheap; records are not — fetch-reviews alone writes 96 a day. So:
+  // list the keys, work out the newest one per scheduler, and fetch only those
+  // few. Reading every run log ever written to answer "did the last one work"
+  // would be the sequential-reads defect this codebase keeps finding.
   const runlogKeys = (await guard("Run log", async () => listKeys("runlog"))) || [];
+  const latestRuns = (await guard("Scheduler outcomes", async () => {
+    const wanted = latestRunKeys(runlogKeys);
+    const rows = await getMany("runlog", Object.values(wanted));
+    const byKey = {};
+    for (const r of rows) byKey[r.key] = r.value;
+    const out = {};
+    for (const [name, key] of Object.entries(wanted)) out[name] = byKey[key] || null;
+    return out;
+  })) || {};
   const walks = (await guard("Trey Go", async () => getMany("walks", await listKeys("walks")))) || [];
   const stripeEvents = (await guard("Stripe events", async () => getMany("stripeevents", await listKeys("stripeevents")))) || [];
 
@@ -188,7 +201,7 @@ export default async () => {
     guard("Come backs", () => sectionComeBacks(leads, now)),
     guard("Replies unapproved", () => sectionAwaitingApproval(reviews, now)),
     guard("Delivery failures", () => sectionDelivery(statuses, from, now)),
-    guard("Schedulers", () => sectionSchedulers(runlogKeys, now)),
+    guard("Schedulers", () => sectionSchedulers(runlogKeys, latestRuns, now)),
     guard("New reviews", () => sectionReviews(reviews, from, now, nameOf)),
     guard("Tap counts", () => sectionTaps(tapTotals, baseline, nameOf)),
     guard("Trey Go activity", () => sectionWalks(walks, from, now)),

@@ -13,14 +13,24 @@
 // Caps so one runaway store cannot produce a 5MB email.
 const MAX_ROWS_PER_SECTION = 40;
 
-// Every scheduler that should have left a runlog entry recently, with how often
-// it runs. A scheduler that stops firing leaves no trace anywhere else in the
-// product — that is the failure this exists to catch. Two intervals of slack, so
-// one skipped tick is not a false alarm.
+// EVERY scheduled function, with how often it runs.
+//
+// This was three entries until 18 Aug, because a two-intervals-of-slack rule is
+// useless on a monthly job — it would take two months of silence to complain.
+// Now that a run recording `ok:false` is reported IMMEDIATELY regardless of
+// recency, the monthly and quarterly jobs are worth watching: their failures
+// surface the next morning, and their staleness surfaces eventually.
+//
+// A name here that never appears in the run log reads as "no run ever recorded",
+// so adding one commits its function to recording every exit. See runlog.js.
 const EXPECTED_SCHEDULERS = [
   { name: "fetch-reviews", everyHours: 1 },
   { name: "geo-purge", everyHours: 24 },
   { name: "weekly-report-send", everyHours: 24 * 7 },
+  { name: "monthly-report-send", everyHours: 24 * 31 },
+  { name: "monthly-google-sync", everyHours: 24 * 31 },
+  { name: "google-post-send", everyHours: 24 * 31 },
+  { name: "photo-refresh-send", everyHours: 24 * 93 },
 ];
 
 const iso = (d) => new Date(d).toISOString();
@@ -152,33 +162,90 @@ async function sectionDelivery(statuses, from, to) {
 }
 
 // A scheduler that stops firing leaves no trace anywhere else in the product.
-async function sectionSchedulers(runlogKeys, now) {
+//
+// `latest` maps scheduler name -> its most recent run RECORD (or null). Reading
+// the record, not just the key, is what lets this distinguish three states that
+// need three different responses:
+//
+//   never ran        -> it may never have deployed, or it dies before it logs
+//   ran and FAILED   -> it is running fine and the work is failing. Actionable.
+//   ran too long ago -> it has stopped firing
+//
+// On 18 Aug the first digest reported "fetch-reviews — no run ever recorded".
+// True, and useless: fetch-reviews was in fact running every 15 minutes and
+// returning early on a Google token error, on a path that wrote no run log at
+// all. "No run ever recorded" sent us looking for a scheduling problem that did
+// not exist. A failed run that says so is worth ten that stay quiet.
+async function sectionSchedulers(runlogKeys, latest, now) {
   const lines = [];
-  let anyLate = false;
+  let anyProblem = false;
   for (const s of EXPECTED_SCHEDULERS) {
     const prefix = `${s.name}:`;
-    let latest = 0;
+    let newest = 0;
     for (const k of runlogKeys) {
       if (!k.startsWith(prefix)) continue;
       const t = ts(k.slice(prefix.length));
-      if (Number.isFinite(t) && t > latest) latest = t;
+      if (Number.isFinite(t) && t > newest) newest = t;
     }
-    if (!latest) {
-      // Never logged is not the same as late. geo-purge only shipped on 17 Aug,
-      // and a function that has genuinely never run should say exactly that.
-      lines.push(`<b>${esc(s.name)}</b> — no run ever recorded`);
-      anyLate = true;
+    const rec = (latest && latest[s.name]) || null;
+
+    if (!newest) {
+      // "NEVER RAN" IS ONLY EVIDENCE FOR A FREQUENT JOB.
+      //
+      // A job that runs monthly and has no record may simply not be due yet, or
+      // may pre-date the run log existing. We cannot tell those from a genuine
+      // failure without knowing when it deployed — and four red lines every
+      // morning for jobs that are fine is how a reader learns to skip the red
+      // box, which costs more than the check is worth.
+      //
+      // So: absence of a record only alarms for something that should have run
+      // at least daily. A monthly job that is actually broken still surfaces the
+      // moment it runs and records ok:false, which is the case that matters.
+      if (s.everyHours <= 24) {
+        lines.push(`<b>${esc(s.name)}</b> — no run ever recorded`);
+        anyProblem = true;
+      }
       continue;
     }
-    // Two intervals of slack, so a single skipped tick is not a false alarm.
-    const overdueBy = now - latest - s.everyHours * 2 * 3600_000;
+    // It ran. Did the run WORK? A scheduler firing perfectly on time while every
+    // run fails is the worst of the three states and the old check called it fine.
+    if (rec && rec.ok === false) {
+      const why = rec.reason ? ` (${esc(rec.reason)})` : "";
+      const detail = rec.detail ? ` — ${esc(String(rec.detail).slice(0, 120))}` : "";
+      const hrs = Math.floor((now - newest) / 3600_000);
+      lines.push(`<b>${esc(s.name)}</b> — last run <b>failed</b>${why}${detail}` +
+                 (hrs > 0 ? ` · ${hrs}h ago` : " · just now"));
+      anyProblem = true;
+      continue;
+    }
+    // Two intervals of slack, so one skipped tick is not a false alarm.
+    const overdueBy = now - newest - s.everyHours * 2 * 3600_000;
     if (overdueBy > 0) {
-      const hrs = Math.floor((now - latest) / 3600_000);
+      const hrs = Math.floor((now - newest) / 3600_000);
       lines.push(`<b>${esc(s.name)}</b> — last ran ${hrs}h ago`);
-      anyLate = true;
+      anyProblem = true;
     }
   }
-  return anyLate ? { title: "Schedulers overdue", lines, alert: true } : null;
+  return anyProblem ? { title: "Schedulers", lines, alert: true } : null;
+}
+
+// The most recent run-log key for each expected scheduler, so the caller can
+// fetch just those few records instead of every run log ever written.
+// fetch-reviews alone writes 96 a day; reading them all to answer "did the last
+// one work" would be the sequential-reads defect this codebase keeps finding.
+function latestRunKeys(runlogKeys) {
+  const out = {};
+  for (const s of EXPECTED_SCHEDULERS) {
+    const prefix = `${s.name}:`;
+    let best = null, bestT = 0;
+    for (const k of runlogKeys || []) {
+      if (!k.startsWith(prefix)) continue;
+      const t = ts(k.slice(prefix.length));
+      if (Number.isFinite(t) && t > bestT) { bestT = t; best = k; }
+    }
+    if (best) out[s.name] = best;
+  }
+  return out;
 }
 
 async function sectionWalks(walks, from, to) {
@@ -324,7 +391,7 @@ module.exports = {
   iso, esc, ts, inWindow,
   sectionNewCustomers, sectionActivations, sectionTrialsEnding, sectionTaps,
   sectionReviews, sectionAwaitingApproval, sectionDelivery, sectionSchedulers,
-  sectionWalks, sectionBilling, sectionComeBacks,
+  sectionWalks, sectionBilling, sectionComeBacks, latestRunKeys,
   renderEmail,
   EXPECTED_SCHEDULERS, MAX_ROWS_PER_SECTION,
 };

@@ -20,6 +20,10 @@
 
 import { getStore } from "@netlify/blobs";
 import phoneMod from "./phone.js";
+import retryMod from "./retry.js";
+const { withRetry } = retryMod;
+import runlogMod from "./runlog.js";
+const { recordFailure, recordSkipped } = runlogMod;
 const { toE164 } = phoneMod;
 
 // Normalise a stored phone number to E.164 for Twilio.
@@ -131,6 +135,9 @@ export default async () => {
   const contentSid = process.env.TWILIO_PHOTO_CONTENT_SID;
   if (!contentSid) {
     console.log("[photo-refresh-send] TWILIO_PHOTO_CONTENT_SID not set — nothing sent (feature not configured yet).");
+    // Not a failure — the nudge is not switched on. Recorded so the digest does
+    // not report a job that never ran.
+    await recordSkipped("photo-refresh-send", "TWILIO_PHOTO_CONTENT_SID not set");
     return new Response("not configured");
   }
 
@@ -191,7 +198,16 @@ export default async () => {
     });
 
     try {
-      await sendWhatsApp(params);
+      // Retry transient failures (429, 5xx, network) with backoff; give up at
+      // once on a 4xx Twilio has already judged, and never sleep past the run
+      // deadline. Before this, one blip lost the whole period for this client:
+      // the marker below embeds the period, so the next run looks for a
+      // different key and never comes back. See retry.js.
+      await withRetry(() => sendWhatsApp(params), {
+        deadline: DEADLINE,
+        onRetry: (err, attempt, wait) => console.warn(
+          `[photo-refresh-send] ${loc} attempt ${attempt} failed (${err.message}) — retrying in ${wait}ms`),
+      });
       try { await sentStore.setJSON(`photo:${loc}:${qKey}`, { at: new Date().toISOString() }); }
       catch (e) { console.error(`[photo-refresh-send] ${loc} sent but marker failed:`, e.message); }
       // Phase 2: open a 21-day window so photos they reply with get uploaded.
@@ -210,7 +226,13 @@ export default async () => {
     } catch (err) {
       summary.failed++;
       noteFailure(loc);
-      console.error(`[photo-refresh-send] ${loc} failed:`, err.message);
+      // Say WHY it stopped. "failed" alone cannot tell a number Twilio
+      // rejected from a run that ran out of time — one needs a human, the
+      // other will fix itself next period.
+      const why = err.gaveUpEarly === "permanent" ? "rejected by Twilio, not retried"
+        : err.gaveUpEarly === "deadline" ? "out of time before a retry could finish"
+        : `after ${err.attempts || 1} attempts`;
+      console.error(`[photo-refresh-send] ${loc} failed (${why}):`, err.message);
     }
   }
 

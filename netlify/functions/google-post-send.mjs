@@ -18,6 +18,10 @@
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
 import phoneMod from "./phone.js";
+import retryMod from "./retry.js";
+const { withRetry } = retryMod;
+import runlogMod from "./runlog.js";
+const { recordFailure, recordSkipped } = runlogMod;
 const { toE164 } = phoneMod;
 
 // Normalise a stored phone number to E.164 for Twilio.
@@ -155,6 +159,10 @@ export default async () => {
   const contentSid = process.env.TWILIO_POST_CONTENT_SID;
   if (!contentSid) {
     console.log("[google-post-send] TWILIO_POST_CONTENT_SID not set — nothing sent (feature not configured yet).");
+    // Recorded, but NOT as a failure: the nudge simply is not switched on yet.
+    // Alarming daily about a deliberately-off feature trains you to ignore red
+    // boxes. Recording it stops the digest claiming the job never ran.
+    await recordSkipped("google-post-send", "TWILIO_POST_CONTENT_SID not set");
     return new Response("not configured");
   }
   // Hard stop, not a warning: signPost() would sign with "" and google-post.js
@@ -163,6 +171,10 @@ export default async () => {
   // even after the secret is set later.
   if (!process.env.TREY_REPORT_SECRET) {
     console.error("[google-post-send] TREY_REPORT_SECRET not set — nothing sent (approve links would be dead).");
+    // This one IS a failure. The feature is on and running it would send real
+    // WhatsApps whose Approve button lands on "Link not valid" — permanently,
+    // because those signatures stay dead even once the secret is set.
+    await recordFailure("google-post-send", "misconfigured", "TREY_REPORT_SECRET is not set");
     return new Response("not configured");
   }
 
@@ -245,14 +257,29 @@ export default async () => {
     });
 
     try {
-      await sendWhatsApp(params);
+      // Retry transient failures (429, 5xx, network) with backoff; give up at
+      // once on a 4xx Twilio has already judged, and never sleep past the run
+      // deadline. Before this, one blip lost the whole period for this client:
+      // the marker below embeds the period, so the next run looks for a
+      // different key and never comes back. See retry.js.
+      await withRetry(() => sendWhatsApp(params), {
+        deadline: DEADLINE,
+        onRetry: (err, attempt, wait) => console.warn(
+          `[google-post-send] ${loc} attempt ${attempt} failed (${err.message}) — retrying in ${wait}ms`),
+      });
       try { await sentStore.setJSON(`post:${loc}:${mKey}`, { at: new Date().toISOString() }); }
       catch (e) { console.error(`[google-post-send] ${loc} sent but marker failed:`, e.message); }
       summary.sent++;
     } catch (err) {
       summary.failed++;
       noteFailure(loc);
-      console.error(`[google-post-send] ${loc} failed:`, err.message);
+      // Say WHY it stopped. "failed" alone cannot tell a number Twilio
+      // rejected from a run that ran out of time — one needs a human, the
+      // other will fix itself next period.
+      const why = err.gaveUpEarly === "permanent" ? "rejected by Twilio, not retried"
+        : err.gaveUpEarly === "deadline" ? "out of time before a retry could finish"
+        : `after ${err.attempts || 1} attempts`;
+      console.error(`[google-post-send] ${loc} failed (${why}):`, err.message);
     }
   }
 
