@@ -223,6 +223,12 @@ const CODE_LEN = 8;
 // email, and the fix should not need a code deploy next time.
 const RESEND_FROM = process.env.RESEND_FROM || "Trey <hello@trey.today>";
 const RESEND_REPLY_TO = process.env.RESEND_REPLY_TO || "info@trey.today";
+// Where the "you have a new signup" heads-up goes. Every self-serve signup is
+// written needsReview:true and needs Matthew to finish it (add the Google
+// account/Place ID before it can go live), so he needs to know a customer has
+// landed rather than waiting for the next morning's daily digest. Env-overridable
+// so the destination can change without a deploy. (2026-08-19.)
+const ADMIN_ALERT_TO = process.env.ADMIN_ALERT_EMAIL || "info@trey.today";
 const EMAIL_TIMEOUT_MS = 5000;
 const KEY_LEN = 32;
 
@@ -334,6 +340,111 @@ Trey — more Google reviews, without the chasing`;
     return true;
   } catch (e) {
     console.error("[signup] welcome email failed:", e && e.message);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Tell Matthew a new customer has signed up. Same three protections as the
+ * welcome email — a missing key, a slow Resend or a bad address must never
+ * touch the signup itself, which is already saved by the time this runs.
+ *
+ * Goes to ADMIN_ALERT_TO (info@trey.today by default). This is the heads-up that
+ * lets him step in and finish a signup while it's fresh, instead of finding out
+ * from the next daily digest. A WhatsApp version can layer on later once there's
+ * an approved template — email is the reliable channel that works today.
+ *
+ * reply_to is set to the CUSTOMER's address, so hitting reply goes straight to
+ * them, not to the inbox this alert came from.
+ */
+async function sendAdminSignupAlert(record) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    console.warn("[signup] RESEND_API_KEY not set — no admin signup alert sent.");
+    return false;
+  }
+  if (!record) return false;
+
+  const biz = record.businessName || "(no business name)";
+  const name = [record.contactFirstName, record.contactSurname].filter(Boolean).join(" ").trim() || "(no name given)";
+  const phone = record.phone || record.phoneRaw || "(none)";
+  const phoneRaw = record.phoneRaw && record.phoneRaw !== record.phone ? record.phoneRaw : "";
+  const email = record.email || "(none)";
+  const hw = record.hardware === "keyfob" ? "key fob" : "tap stand";
+  const days = record.trialDays === REFERRED_TRIAL_DAYS ? "30" : "14";
+  const referred = record.referredBy ? `Yes — referred by ${record.referredBy}` : "No";
+  const addr = record.companyAddress || "(none given)";
+  const gUrl = record.googleReviewUrl || "";
+  const adminUrl = (process.env.URL || "https://trey.today") + "/admin.html";
+
+  // What still needs doing before this customer can go live. The whole point of
+  // the alert is the to-do, not the announcement.
+  const todo = [
+    "Add their Google account / Place ID and confirm the review link (this signup is flagged needs-review).",
+    gUrl ? `They gave a Google review URL — check it: ${gUrl}` : "They did NOT give a Google review URL — you'll need to find/confirm it.",
+    `Post their ${hw} and set the dispatch date (that's what starts the ${days}-day trial on first tap).`,
+  ];
+
+  const text =
+`New Trey signup — someone needs setting up.
+
+Business:  ${biz}
+Contact:   ${name}
+Phone:     ${phone}${phoneRaw ? ` (as typed: ${phoneRaw})` : ""}
+Email:     ${email}
+Hardware:  ${hw}
+Trial:     ${days} days
+Referred:  ${referred}
+Address:   ${addr}
+Record ID: ${record.locationId || "(unknown)"}
+
+To finish them off:
+${todo.map((t, i) => `${i + 1}. ${t}`).join("\n")}
+
+Open the admin panel: ${adminUrl}`;
+
+  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;max-width:560px">
+<p style="font-size:17px;margin:0 0 4px"><b>New Trey signup</b> — someone needs setting up.</p>
+<table style="border-collapse:collapse;margin:10px 0 4px">
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Business</td><td><b>${escapeHtml(biz)}</b></td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Contact</td><td>${escapeHtml(name)}</td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Phone</td><td>${escapeHtml(phone)}${phoneRaw ? ` <span style="color:#94a3b8">(as typed: ${escapeHtml(phoneRaw)})</span>` : ""}</td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Email</td><td><a href="mailto:${escapeHtml(email)}" style="color:#4338ca">${escapeHtml(email)}</a></td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Hardware</td><td>${escapeHtml(hw)}</td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Trial</td><td>${escapeHtml(days)} days</td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Referred</td><td>${escapeHtml(referred)}</td></tr>
+  <tr><td style="color:#64748b;padding:2px 14px 2px 0">Address</td><td>${escapeHtml(addr)}</td></tr>
+</table>
+<p style="margin:14px 0 4px"><b>To finish them off:</b></p>
+<ol style="padding-left:20px;margin:0 0 12px">${todo.map((tt) => `<li>${escapeHtml(tt)}</li>`).join("")}</ol>
+<p><a href="${escapeHtml(adminUrl)}" style="display:inline-block;background:#4338ca;color:#fff;text-decoration:none;padding:10px 18px;border-radius:10px;font-weight:700">Open the admin panel</a></p>
+</div>`;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), EMAIL_TIMEOUT_MS);
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: [ADMIN_ALERT_TO],
+        // Reply goes to the customer, not to the alert's own inbox.
+        reply_to: record.email || RESEND_REPLY_TO,
+        subject: `New Trey signup — ${biz}`,
+        text, html,
+      }),
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) {
+      console.error(`[signup] admin alert Resend ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error("[signup] admin signup alert failed:", e && e.message);
     return false;
   } finally {
     clearTimeout(timer);
@@ -534,6 +645,10 @@ exports.handler = async (event) => {
     await sendWelcomeEmail(record);
   }
 
+  // Heads-up to Matthew — every new record, whether or not the customer's welcome
+  // email was suppressed (a duplicate is still a record he has to reconcile). Same
+  // never-throws contract as the welcome email: the signup is already saved.
+  await sendAdminSignupAlert(record);
 
   return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ success: true, businessName }) };
 };
