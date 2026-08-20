@@ -461,6 +461,52 @@
       <div id="detailStatus" style="font-size:13px;margin-top:10px;min-height:18px;"></div>
     </div>
 
+    <div class="card" id="manualReviewCard">
+      <div class="card-header">
+        <h2>Log a review by hand</h2>
+        <span class="muted-link" onclick="mrToggle()" id="mrToggleLink">Open</span>
+      </div>
+      <div id="mrBody" style="display:none;">
+        <div class="muted" style="font-size:12.5px;line-height:1.55;margin-bottom:6px;color:#64748b;">
+          Feeds a review through the <b>real</b> pipeline &mdash; Gemini drafts the reply and the
+          client's WhatsApp gets the genuine approve message. That makes it the demo, and the only
+          way to put a review in an inbox until the Google API is approved.
+          <b>Every id starts <code>manual-</code></b> &mdash; delete them from the reviews store
+          before Google syncing goes live, or they'll appear twice.
+        </div>
+        <div class="grid">
+          <div>
+            <label>Client *</label>
+            <select id="mr_loc" onfocus="mrPopulateClients()">
+              <option value="">Choose a client&hellip;</option>
+            </select>
+          </div>
+          <div>
+            <label>Star rating *</label>
+            <select id="mr_rating">
+              <option value="5">&#9733;&#9733;&#9733;&#9733;&#9733; &mdash; 5</option>
+              <option value="4">&#9733;&#9733;&#9733;&#9733; &mdash; 4</option>
+              <option value="3">&#9733;&#9733;&#9733; &mdash; 3</option>
+              <option value="2">&#9733;&#9733; &mdash; 2</option>
+              <option value="1">&#9733; &mdash; 1</option>
+            </select>
+          </div>
+          <div>
+            <label>Reviewer name *</label>
+            <input id="mr_name" placeholder="e.g. Sarah M." maxlength="100" />
+          </div>
+        </div>
+        <div style="margin-top:6px;">
+          <label>Review text <span class="muted" style="font-weight:400;text-transform:none;">&mdash; leave empty for a star-only review</span></label>
+          <textarea id="mr_comment" rows="3" maxlength="4000" placeholder="What the customer wrote &mdash; or nothing at all" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
+        </div>
+        <div class="actions">
+          <button class="btn-primary" id="mrSubmitBtn" onclick="mrSubmit()">Log review</button>
+        </div>
+        <div id="mrStatus" style="font-size:13px;margin-top:10px;min-height:18px;"></div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-header">
         <h2>All clients</h2>
@@ -886,6 +932,77 @@
       const t = document.createElement("textarea"); t.value = url; document.body.appendChild(t); t.select();
       try { document.execCommand("copy"); done(); } catch (e) {}
       t.remove();
+    }
+  }
+
+  // ---- Log a review by hand (demo / pre-Google-approval) --------------------
+  // Feeds review-webhook, so the REAL pipeline runs: Gemini drafts, the real
+  // WhatsApp lands, the real approve page opens. Collapsed by default -- it's
+  // a demo tool, not a daily one. Ids are manual-YYYYMMDD-xx; delete them from
+  // the reviews store before Google syncing goes live.
+  function mrToggle() {
+    const b = document.getElementById("mrBody");
+    const open = b.style.display === "none";
+    b.style.display = open ? "block" : "none";
+    document.getElementById("mrToggleLink").textContent = open ? "Close" : "Open";
+    if (open) mrPopulateClients();
+  }
+
+  // Fills from clientsCache on demand -- no hook into the load flow needed,
+  // and the list is always as fresh as the page's own table.
+  function mrPopulateClients() {
+    const sel = document.getElementById("mr_loc");
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Choose a client\u2026</option>' +
+      (clientsCache || []).map(function (c) {
+        return '<option value="' + esc(c.locationId) + '">' +
+          esc(c.businessName || c.locationId) + "</option>";
+      }).join("");
+    if (cur) sel.value = cur;
+  }
+
+  function mrStatus(msg, type) {
+    const el = document.getElementById("mrStatus");
+    el.textContent = msg;
+    el.className = type || "";
+  }
+
+  async function mrSubmit() {
+    const loc = document.getElementById("mr_loc").value;
+    const name = document.getElementById("mr_name").value.trim();
+    const rating = document.getElementById("mr_rating").value;
+    const comment = document.getElementById("mr_comment").value;
+    if (!loc) { mrStatus("Choose a client first.", "error"); return; }
+    if (!name) { mrStatus("The reviewer needs a name.", "error"); return; }
+
+    const btn = document.getElementById("mrSubmitBtn");
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = "Logging\u2026";
+    mrStatus("", "");
+    try {
+      const res = await fetch("/.netlify/functions/manual-review", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ locationId: loc, reviewerName: name, rating: rating, comment: comment }),
+      });
+      if (res.status === 403) { logout(); return; }
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        const detail = data.errors ? data.errors.join("; ")
+          : data.webhookStatus ? ("review-webhook said " + data.webhookStatus + (data.webhookBody ? " \u2014 " + data.webhookBody : ""))
+          : (data.error || ("HTTP " + res.status));
+        throw new Error(detail);
+      }
+      mrStatus("Logged as " + data.reviewId + " \u2014 draft + WhatsApp are on their way. " +
+        "Remember: delete manual- ids before Google sync goes live.", "success");
+      document.getElementById("mr_name").value = "";
+      document.getElementById("mr_comment").value = "";
+    } catch (err) {
+      mrStatus("Couldn't log it: " + err.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = was;
     }
   }
 
